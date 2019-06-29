@@ -4,8 +4,9 @@
 # Except these:
 
 !.gitignore
-!.md
-!.py
+!*.md
+!*.py
 
 # Even if they are in subdirectories
 
+!*/
