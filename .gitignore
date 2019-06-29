@@ -1,0 +1,12 @@
+# Ignore everything
+*
+
+# Except these:
+
+!.gitignore
+!.md
+!.py
+
+# Even if they are in subdirectories
+
+!*/
