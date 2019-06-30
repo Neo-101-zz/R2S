@@ -1,5 +1,5 @@
-#!/usr/bin/python
-#encoding:utf-8
+# !usr/bin/env python
+
 import os
 import os.path
 import gzip
@@ -75,7 +75,7 @@ def convert_10(wspd, height):
 
 
 if __name__ == '__main__':
-    """write all ndbc infomation into csv"""
+    """write all ndbc infomation into ./information/year/info.csv"""
     # for year in year_list:
     #     print('in: '+ year)
     #     files = os.listdir('./information/'+year)

@@ -1,5 +1,6 @@
-#!/usr/bin/python
-#encoding:utf-8
+# !/usr/bin/env python
+
+"""Download Continuous Wind data and buoy station information."""
 
 import urllib
 import urllib.request
@@ -17,10 +18,22 @@ station_page = 'http://www.ndbc.noaa.gov/station_page.php'
 
 
 def Schedule(a,b,c):
-    """
-        a:已经下载的数据块
-        b:数据块的大小
-        c:远程文件的大小
+    """Schedule parameters for download.
+
+    Parameters
+    ----------
+    a : ?
+        Data block that has been downloaded.
+    b : ?
+        Size of data block.
+    c : ?
+        Size of remote file.
+
+    Returns
+    -------
+    None
+        Nothing returned by this function.
+
     """
     per = 100.0 * a * b / c
     if per > 100 :
@@ -28,8 +41,20 @@ def Schedule(a,b,c):
     print('%.2f%%' % per)
 
 
-# get station id according to the year
 def get_station(year):
+    """Get stations' id in specified year.
+
+    Parameters
+    ----------
+    year : str
+        String of year represented by 4 digits.
+
+    Returns
+    -------
+    station_list : list of str
+        List of stations' id in specified year.
+
+    """
     request = urllib.request.Request(url_base)
     response = urllib.request.urlopen(request)
     content = response.read().decode('utf-8')
@@ -42,8 +67,28 @@ def get_station(year):
             station_list.append(id)
     return station_list
 
-# get station information
 def get_information(station, year):
+    """Download station information.
+
+    Parameters
+    ----------
+    station : str
+        Station's id.
+    year : str
+        Specified year.
+
+    Returns
+    -------
+    bool or str : 
+        'error' if fail getting html.  True if information is got.  
+        False if information is too less.
+
+    Notes
+    -----
+    The parameter `year` may be unnecessary because it is not differed
+    according to the year.
+
+    """
     print('get_information'+station+year)
     filename = './information/'+year+'/'+station+'information.txt'
     if os.path.exists(filename):
@@ -66,6 +111,21 @@ def get_information(station, year):
         return True
 
 def get_data(station, year):
+    """Download Continuous Wind data of specified station and year.
+
+    Parameters
+    ----------
+    station : str
+        Station id.
+    year : str
+        Specified year.
+
+    Returns
+    -------
+    None
+        Nothing returned by this function.
+
+    """
     print('get_data'+station+year)
     local_path = './data/'+year+'/'+station+'c'+year+'.txt.gz'
     if os.path.exists(local_path):
@@ -73,8 +133,8 @@ def get_data(station, year):
     down_url = url_base + station+'c'+year+'.txt.gz'
     urllib.request.urlretrieve(down_url, local_path, Schedule)
 
-# write data and information
 def write_information(filename, data):
+    """Write data by function open() with 'a' mode."""
     with open(filename, 'a') as f:
         f.write(data)
 
