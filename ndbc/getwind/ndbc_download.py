@@ -1,6 +1,6 @@
 # !/usr/bin/env python
 
-"""Download Continuous Wind data and buoy station information.
+"""Download NDBC Continuous Wind data and station information.
 
 Features
 --------
@@ -39,13 +39,13 @@ download cwind data :
     station's id as txt.gz files.
 """
 
-import urllib
 import urllib.request
 import re
 import requests
 import os
 import time
 import pickle
+import progressbar
 
 from bs4 import BeautifulSoup
 
@@ -53,44 +53,47 @@ import ndbc_conf
 
 # Global variables
 pbar = None
-downloaded = 0
+format_custom_text = None
 
-url_base = 'http://www.ndbc.noaa.gov/data/historical/cwind/'
-station_page = 'http://www.ndbc.noaa.gov/station_page.php'
-
-def show_progress(block_num, block_size, total_size): 
-    global pbar 
-    if pbar is None: 
-    pbar = progressbar.ProgressBar(maxval=total_size) 
-    downloaded = block_num * block_size 
-    if downloaded < total_size: 
-    pbar.update(downloaded) 
-    else: 
-    pbar.finish() 
-    pbar = None 
-    urllib.request.urlretrieve(model_url, model_file, show_progress)
-
-def show_progress(count, block_size, total_size):
-    if pbar is None:
-        pbar = ProgressBar(maxval=total_size)
-
-    downloaded += block_size
-    pbar.update(block_size)
-    if downloaded == total_size:
-        pbar.finish()
-        pbar = None
-        downloaded = 0
-
-def Schedule(a,b,c):
-    """Schedule parameters for download.
+def set_format_custom_text(len):
+    """Customize format text's length.
 
     Parameters
     ----------
-    a : ?
+    len : int
+        Length of format text.
+
+    Returns
+    -------
+    None
+        Nothing returned by this function.
+
+    """
+    global format_custom_text
+    format_custom_text = progressbar.FormatCustomText(
+        '%(f)-' + str(len) +'s ',
+        dict(
+            f='',
+        ),
+    )
+
+def sizeof_fmt(num, suffix='B'):
+    for unit in ['','K','M','G','T','P','E','Z']:
+        if abs(num) < 1024.0:
+            return "%3.1f %s%s" % (num, unit, suffix)
+        num /= 1024.0
+    return "%.1f %s%s" % (num, 'Y', suffix)
+
+def show_progress(block_num, block_size, total_size):
+    """Show progress of downloading data with progress bar.
+
+    Parameters
+    ----------
+    block_num : int
         Data block that has been downloaded.
-    b : ?
+    block_size : int
         Size of data block.
-    c : ?
+    total_size : int
         Size of remote file.
 
     Returns
@@ -99,12 +102,28 @@ def Schedule(a,b,c):
         Nothing returned by this function.
 
     """
-    per = 100.0 * a * b / c
-    if per > 100 :
-        per = 100
-    # print('%.2f%%' % per)
+    global pbar
+    global format_custom_text
 
-def get_station(year):
+    if pbar is None:
+        pbar = progressbar.bar.ProgressBar(
+            maxval=total_size,
+            widgets=[
+                format_custom_text,
+                '  | %-8s  ' % sizeof_fmt(total_size),
+                progressbar.Bar(marker=u'\u2588', fill='.',
+                                left='| ', right= ' |'),
+                progressbar.Percentage(),
+            ])
+
+    downloaded = block_num * block_size
+    if downloaded < total_size:
+        pbar.update(downloaded)
+    else:
+        pbar.finish()
+        pbar = None
+
+def get_station(year, url):
     """Get stations' id in specified year.
 
     Parameters
@@ -118,7 +137,7 @@ def get_station(year):
         Set of stations' id in specified year.
 
     """
-    request = urllib.request.Request(url_base)
+    request = urllib.request.Request(url)
     response = urllib.request.urlopen(request)
     content = response.read().decode('utf-8')
     result = re.findall(re.compile(r'<a href="(.*?).txt.gz">'), content)
@@ -130,7 +149,7 @@ def get_station(year):
             stations.add(id)
     return stations
 
-def get_information(station, save_dir):
+def get_information(station, url, save_dir):
     """Download station information.
 
     Parameters
@@ -154,8 +173,7 @@ def get_information(station, save_dir):
     payload = dict()
     payload['station'] = str.lower(station)
     try:
-        html = requests.get(station_page, params=payload, verify=True)
-        print (html)
+        html = requests.get(url, params=payload, verify=True)
     except:
         return 'error'
     page = BeautifulSoup(html.text, features='lxml')
@@ -167,10 +185,10 @@ def get_information(station, save_dir):
     else:
         # write_information(filename, information[1].text.replace('\xa0'*8, '\n\n'))
         write_information(filename, information[1].text)
-        print('Get information of '+station)
+        print(station)
         return True
 
-def get_data(station, year, save_dir):
+def get_data(station, year, save_dir, url):
     """Download Continuous Wind data of specified station and year.
 
     Parameters
@@ -189,11 +207,13 @@ def get_data(station, year, save_dir):
 
     """
     file_name = '{0}c{1}.txt.gz'.format(station, year)
-    print('Get data: ' + file_name)
     local_path = '{0}{1}'.format(save_dir, file_name)
     if os.path.exists(local_path):
         return True
-    down_url = '{0}{1}'.format(url_base, file_name)
+    down_url = '{0}{1}'.format(url, file_name)
+    
+    global format_custom_text
+    format_custom_text.update_mapping(f=file_name)
     urllib.request.urlretrieve(down_url, local_path, show_progress)
 
 def write_information(path, data):
@@ -230,6 +250,8 @@ def save_relation(path, var):
                 rel[key].update(var[key])
             else:
                 rel[key] = var[key]
+    else:
+        rel = var
 
     with open(path, 'wb') as fw:
         pickle.dump(rel, fw)
@@ -298,15 +320,15 @@ def station_filter(input):
 
 def main():
     confs = ndbc_conf.configure()
-    years = year_filter(input('Input target year: '))
-    stations = station_filter(input('Input target station(s) id: '))
+    years = year_filter(input('\nInput target year(s): '))
+    stations = station_filter(input('\nInput target station(s) id: '))
     # key: station, value: year
     station_year = dict()
     # key: year, value: station
     year_station = dict()
     # Collect stations at least appeared once in the year list
     for year in years:
-        stns = get_station(year)
+        stns = get_station(year, confs['url_base'])
         year_station[year] = stns
         stations.update(stns)
         for stn in stns:
@@ -317,19 +339,25 @@ def main():
     save_relation(confs['var_dir'] + 'year_station.pkl', year_station)
     save_relation(confs['var_dir'] + 'station_year.pkl', station_year)
     # Download all stations' information into single directory
+    print('\nDownloading Station Information')
     for stn in stations:
-        result = get_information(stn, confs['station_dir'])
+        result = get_information(stn, confs['station_page'], confs['station_dir'])
         i = 1
         while result == 'error' and i <= confs['retry_times']:
             print('reconnect: %d' % i)
-            result = get_information(stn, confs['station_dir'])
+            result = get_information(stn, confs['station_page'], confs['station_dir'])
             i += 1
         if result == 'error':
-            print('Fail downloading station {0}\'s information.'.format(stn))
+            print('Fail downloading station'
+                  +' {0}\'s information.'.format(stn))
     # Download Continuous Wind data
+    print('\nDownloading Continuous Wind Data')
+    set_format_custom_text(confs['data_name_len'])
     for year in years:
         for stn in year_station[year]:
-            get_data(stn, year, confs['cwind_dir'])
+            get_data(stn, year, confs['cwind_dir'], confs['url_base'])
+
+    print('\n')
 
 if __name__ == '__main__':
     main()
