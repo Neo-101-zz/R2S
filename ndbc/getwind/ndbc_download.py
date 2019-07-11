@@ -123,13 +123,17 @@ def show_progress(block_num, block_size, total_size):
         pbar.finish()
         pbar = None
 
-def get_station(year, url):
+def get_station_in_a_year(year, url, candidate_stations=None):
     """Get stations' id in specified year.
 
     Parameters
     ----------
     year : str
         String of year represented by 4 digits.
+    url : str
+        Url of Continuous Wind data directory.
+    candidate_stations : set, optional
+        Stations which possibly emerged in the `year`.
 
     Returns
     -------
@@ -146,7 +150,11 @@ def get_station(year, url):
         id = r[0:5]
         date = r[6:10]
         if date == year:
-            stations.add(id)
+            if not candidate_stations:
+                stations.add(id)
+            else:
+                if id in candidate_stations:
+                    stations.add(id)
     return stations
 
 def get_information(station, url, save_dir):
@@ -326,26 +334,56 @@ def main():
     station_year = dict()
     # key: year, value: station
     year_station = dict()
-    # Collect stations at least appeared once in the year list
-    for year in years:
-        stns = get_station(year, confs['url_base'])
-        year_station[year] = stns
-        stations.update(stns)
-        for stn in stns:
-            if not stn in station_year:
-                station_year[stn] = set()
-            station_year[stn].add(year)
+    # year is specified but station is not
+    if years and not stations:
+        # Collect stations' id according to years
+        for year in years:
+            stns = get_station_in_a_year(year, confs['url_base'])
+            year_station[year] = stns
+            stations.update(stns)
+            for stn in stns:
+                if not stn in station_year:
+                    station_year[stn] = set()
+                station_year[stn].add(year)
+    # station is specified but year is not
+    elif not stations and years:
+        # Collect years according to stations' id
+        for stn in stations:
+            yrs = get_year_of_a_station(stn, confs['url_base'])
+            station_year[stn] = yrs
+            years.update(yrs)
+            for yr in yrs:
+                if not yr in year_station:
+                    year_station[yr] = set()
+                year_station[yr].add(stn)
+    # both year and station is specified
+    elif years and stations:
+        # No need to update years and stations
+        for year in years:
+            stns = get_station_in_a_year(year, confs['url_base'],
+                                         candidate_stations=stations)
+            year_station[year] = stns
+            for stn in stations:
+                if not stn in station_year:
+                    station_year[stn] = set()
+                station_year[stn].add(year)
+    else:
+        print('\nAt least one of year(s) and station(s) '
+              + 'should be specified.\n')
+        return
     # Save two dicts which store the relation between stations and year
     save_relation(confs['var_dir'] + 'year_station.pkl', year_station)
     save_relation(confs['var_dir'] + 'station_year.pkl', station_year)
     # Download all stations' information into single directory
     print('\nDownloading Station Information')
     for stn in stations:
-        result = get_information(stn, confs['station_page'], confs['station_dir'])
+        result = get_information(stn, confs['station_page'],
+                                 confs['station_dir'])
         i = 1
         while result == 'error' and i <= confs['retry_times']:
             print('reconnect: %d' % i)
-            result = get_information(stn, confs['station_page'], confs['station_dir'])
+            result = get_information(stn, confs['station_page'],
+                                     confs['station_dir'])
             i += 1
         if result == 'error':
             print('Fail downloading station'
