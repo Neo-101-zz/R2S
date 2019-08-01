@@ -45,15 +45,45 @@ import requests
 import os
 import time
 import pickle
-import progressbar
+import signal
+import sys
 
 from bs4 import BeautifulSoup
+import progressbar
 
 import ndbc_conf
 
 # Global variables
 pbar = None
 format_custom_text = None
+current_download_file = None
+
+def handler(signum, frame):
+    """Handle forcing quit which may be made by pressing Control + C and
+    sending SIGINT which will interupt this application.
+
+    Parameters
+    ----------
+    signum : int
+        Signal number which is sent to this application.
+    frame : ?
+        Current stack frame.
+
+    Returns
+    -------
+    None
+        Nothing returned by this function.
+
+    """
+    # Remove file that is downloaded currently in case forcing quit
+    # makes this file uncomplete
+    os.remove(current_download_file)
+
+    # Print log
+    print('\nForce quit on %s.\n' % signum)
+
+    # Force quit
+    sys.exit(1)
 
 def set_format_custom_text(len):
     """Customize format text's length.
@@ -138,24 +168,63 @@ def get_station_in_a_year(year, url, candidate_stations=None):
     Returns
     -------
     stations : set of str
-        Set of stations' id in specified year.
+        Set of stations' id in a specified year.
 
     """
-    request = urllib.request.Request(url)
-    response = urllib.request.urlopen(request)
-    content = response.read().decode('utf-8')
-    result = re.findall(re.compile(r'<a href="(.*?).txt.gz">'), content)
+    page = requests.get(url)
+    data = page.text
+    soup = BeautifulSoup(data, features='lxml')
     stations = set()
-    for r in result:
-        id = r[0:5]
-        date = r[6:10]
-        if date == year:
-            if not candidate_stations:
+    suffix = 'c%s.txt.gz' % year
+    anchors = soup.find_all('a')
+
+    if not candidate_stations:
+        for link in anchors:
+            href = link.get('href')
+            if href.endswith(suffix):
+                id = href[0:5]
                 stations.add(id)
-            else:
-                if id in candidate_stations:
-                    stations.add(id)
+    else:
+        for link in anchors:
+            href = link.get('href')
+            id = href[0:5]
+            if href.endswith(suffix) and id in candidate_stations:
+                stations.add(id)
+
     return stations
+
+
+def get_year_of_a_station(station, url):
+    """Get years when the data of specified station existed.
+
+    Parameters
+    ----------
+    station : str
+        String of station id.
+    url : str
+        Url of Continuous Wind data directory.
+
+    Returns
+    -------
+    years : set of str
+        Set of years of a specified station.
+
+    """
+    page = requests.get(url)
+    data = page.text
+    soup = BeautifulSoup(data, features='lxml')
+    years = set()
+    prefix = station
+    suffix = '.txt.gz'
+    anchors = soup.find_all('a')
+
+    for link in anchors:
+        href = link.get('href')
+        if href.startswith(prefix) and href.endswith(suffix):
+            year = href[6:10]
+            years.add(year)
+
+    return years
 
 def get_information(station, url, save_dir):
     """Download station information.
@@ -216,6 +285,8 @@ def get_data(station, year, save_dir, url):
     """
     file_name = '{0}c{1}.txt.gz'.format(station, year)
     local_path = '{0}{1}'.format(save_dir, file_name)
+    global current_download_file
+    current_download_file = local_path
     if os.path.exists(local_path):
         return True
     down_url = '{0}{1}'.format(url, file_name)
@@ -319,7 +390,8 @@ def station_filter(input):
         return set()
     # single input
     if not input.count(' '):
-        res = set(input)
+        res = set()
+        res.add(input)
     # multi input
     else:
         res = set(input.replace('  ', ' ').split(' '))
@@ -328,8 +400,10 @@ def station_filter(input):
 
 def main():
     confs = ndbc_conf.configure()
-    years = year_filter(input('\nInput target year(s): '))
-    stations = station_filter(input('\nInput target station(s) id: '))
+    print(confs['input_year_prompt'], end='')
+    years = year_filter(input())
+    print(confs['input_station_prompt'], end='')
+    stations = station_filter(input())
     # key: station, value: year
     station_year = dict()
     # key: year, value: station
@@ -346,7 +420,7 @@ def main():
                     station_year[stn] = set()
                 station_year[stn].add(year)
     # station is specified but year is not
-    elif not stations and years:
+    elif not years and stations:
         # Collect years according to stations' id
         for stn in stations:
             yrs = get_year_of_a_station(stn, confs['url_base'])
@@ -398,4 +472,7 @@ def main():
     print('\n')
 
 if __name__ == '__main__':
+    signal.signal(signal.SIGINT, handler)
+    signal.signal(signal.SIGHUP, handler)
+    signal.signal(signal.SIGTERM, handler)
     main()
