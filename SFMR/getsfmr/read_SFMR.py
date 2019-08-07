@@ -10,6 +10,8 @@ import pickle
 
 from netCDF4 import Dataset
 
+import conf_SFMR
+
 class ReadNetcdf:
 
     def __init__(self, *args, **kwargs):
@@ -28,14 +30,14 @@ class ReadNetcdf:
 
         self.filename = args[0]
         self.dataset = Dataset(self.filename)
-        print ('Dataset read successfully.')
-        print ('Dataset format: ', self.dataset.file_format)
-        print ()
+        print('Read ' + str(self.filename) + ' dataset successfully.')
+        print('Dataset format: ', self.dataset.file_format)
+        print()
 
         self.type = kwargs.get('type')
         self.time = kwargs.get('time')
 
-        self._print_dataset_info(**kwargs)
+        # self._print_dataset_info(**kwargs)
         # self._create_date_objects()
         # self._create_product_objects(**kwargs)
 
@@ -249,7 +251,7 @@ class ReadNetcdf:
     #         return
     #
     #     self.timevar = getattr(self.dataset.variables[var], 'coordinates').split()[0]
-    #     if 'time' not in self.timevar: print ('ReadNetcdf could not find time coordinate')
+    #     if 'time' not in self.timevar: print('ReadNetcdf could not find time coordinate')
     #
     #     year = self.dates[self.timevar][0].year
     #     month = self.dates[self.timevar][0].month
@@ -302,7 +304,7 @@ class ReadNetcdf:
         if prefix == None: prefix = 'hours since '
 
         m = re.search(prefix + '(\d+)-(\d+)-(\d+).*', datestring)
-        if m == None: print ('ReadNetcdf expects time units of the form: hours since y-m-d ...')
+        if m == None: print('ReadNetcdf expects time units of the form: hours since y-m-d ...')
 
         return int(m.group(1)), int(m.group(2)), int(m.group(3))
 
@@ -317,21 +319,26 @@ class ReadNetcdf:
     # Function for printing information:
 
     def _print_dataset_info(self, **kwargs):
-        """ Print a list of important dataset and provenance information."""
+        """ Print a list of important dataset and provenance
+        information.
 
+        """
         if kwargs.get('summary'):
-            print ('Dataset summary:')
-            print (self.dataset)
-            print ('Variables in dataset:')
+            print('Dataset summary:')
+            print(self.dataset)
+            print('Variables in dataset:')
             for var in self.dataset.variables:
-                print (var, self.dataset.variables[var])
+                print(var, self.dataset.variables[var])
 
-        attrib_list = ['title', 'institution', 'project', 'creator_url', 'creator_email', 'summary']
+        attrib_list = ['title', 'institution', 'project',
+                       'creator_url', 'creator_email', 'summary']
         for attrib in attrib_list:
             if hasattr(self.dataset, attrib):
-                print (attrib.title() + ': ' + getattr(self.dataset, attrib))
+                print(attrib.title() 
+                      + ': '
+                      + getattr(self.dataset, attrib))
             else:
-                print ('Cannot find: ' + attrib.title())
+                print('Cannot find: ' + attrib.title())
         print()
 
     def cut(self, lats, lons):
@@ -342,6 +349,7 @@ class ReadNetcdf:
         lat_indices = []
         lon_indices = []
 
+        # CCMP: Cross-Calibrated Multi-Platform
         if self.type == 'ccmp':
             index = 0
             for i in self.dataset.variables['latitude']:
@@ -426,47 +434,82 @@ class ReadNetcdf:
                         lon_index = lon_index + 1
                     lat_index = lat_index + 1
 
-base_dir = '/Users/zhangdongxiang/PycharmProjects/data4all/SFMR/'
-years = ['2011', '2014', '2015', '2016']
-for year in years:
-    cur_dir = base_dir + year
-    files = os.listdir(cur_dir)
-    files.sort()
-    for file in files:
-        if file == '.DS_Store':
-            continue
-        suffix = file[-13:-3]
-        data = ReadNetcdf(cur_dir +'/'+ file)
-        wspd = []
-        wdir = []
-        lat = []
-        lon = []
-        time = []
-        for i in range(len(data.dataset.variables['FLAG'])):
-            if data.dataset.variables['FLAG'][i] == 0:
-                wspd.append(data.dataset.variables['SWS'][i])
-                wdir.append(data.dataset.variables['FDIR'][i])
-                lat.append(data.dataset.variables['LAT'][i])
-                l = data.dataset.variables['LON'][i]
-                if l < 0:
-                    l += 360
-                lon.append(l)
-                t = str(int(data.dataset.variables['TIME'][i]))
-                s = int(t[-2:])
-                min = t[-4:-2]
-                if min == '':
-                    m = 0
-                else:
-                    m = int(min)
-                hour = t[-6:-4]
-                if hour == '':
-                    h = 0
-                else:
-                    h = int(hour)
-                if s >= 30:
-                    m += 1
-                time.append(h*60 + m)
-                # print(time)
-        pickle_file = open('/Users/zhangdongxiang/PycharmProjects/data4all/SFMR/pickle/'+suffix+'.pkl', 'wb')
-        pickle.dump({'wspd': wspd, 'lat': lat, 'lon': lon, 'time': time}, pickle_file)
-        pickle_file.close()
+def main():
+    confs = conf_SFMR.configure()
+    with open(confs['var_dir'] + 'hurr_year.pkl', 'rb') as fr:
+        hurr_year = pickle.load(fr)
+    data_root_dir = confs['hurr_dir']
+    all_file_suffix = []
+    for hurr in hurr_year.keys():
+        year = hurr_year[hurr]
+        print('\nProcessing hurricane ' + hurr + ' in ' + year + '\n')
+        data_spec_dir = data_root_dir + year + '/' + hurr + '/'
+        files = os.listdir(data_spec_dir)
+        for file in files:
+            if not file.endswith('.nc'):
+                files.remove(file)
+        files.sort()
+
+        # Test if there exists files with same suffix
+        file_suffix = [f[-13:-3] for f in files]
+        all_file_suffix = all_file_suffix + file_suffix
+        l = all_file_suffix
+        duplicates = set([x for x in l if l.count(x) > 1])
+        if len(duplicates):
+            print('Find duplicated suffix of files:')
+            print(duplicates)
+            exit(0)
+
+        os.makedirs(confs['pickle_dir'], exist_ok=True)
+
+        for file in files:
+            pickle_name = file[-13:-3] + '_' + hurr + '.pkl'
+            print('Processing ' + pickle_name)
+            data = ReadNetcdf(data_spec_dir + file)
+            wspd = []
+            lat = []
+            lon = []
+            time = []
+            precise_time = []
+            # FLAG: validity flag, 0 if data is valid
+            for i in range(len(data.dataset.variables['FLAG'])):
+                if data.dataset.variables['FLAG'][i] == 0:
+                    # SWS: SFMR wind speed
+                    wspd.append(data.dataset.variables['SWS'][i])
+                    # FDIR: Flt. lvl. wind direction
+                    lat.append(data.dataset.variables['LAT'][i])
+                    l = data.dataset.variables['LON'][i]
+                    if l < 0:
+                        l += 360
+                    lon.append(l)
+                    t = str(int(data.dataset.variables['TIME'][i]))
+                    precise_time.append(t)
+                    s = int(t[-2:])
+                    min = t[-4:-2]
+                    # Is it possible that minute string is empty ?
+                    if min == '':
+                        m = 0
+                    else:
+                        m = int(min)
+                    hour = t[-6:-4]
+                    # Is it possible that hourstring is empty ?
+                    if hour == '':
+                        h = 0
+                    else:
+                        h = int(hour)
+                    # Round seconds to minutes
+                    if s >= 30:
+                        m += 1
+                    time.append(h * 60 + m)
+                    # print(time)
+            pickle_file = open(confs['pickle_dir'] + pickle_name, 'wb')
+            pickle.dump({'wspd': wspd,
+                         'lat': lat,
+                         'lon': lon,
+                         'time': time,
+                         'precise_time': precise_time},
+                        pickle_file)
+            pickle_file.close()
+
+if __name__ == '__main__':
+    main()

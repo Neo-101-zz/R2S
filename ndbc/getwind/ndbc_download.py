@@ -78,10 +78,8 @@ def handler(signum, frame):
     # Remove file that is downloaded currently in case forcing quit
     # makes this file uncomplete
     os.remove(current_download_file)
-
     # Print log
     print('\nForce quit on %s.\n' % signum)
-
     # Force quit
     sys.exit(1)
 
@@ -108,6 +106,23 @@ def set_format_custom_text(len):
     )
 
 def sizeof_fmt(num, suffix='B'):
+    """Convert size of file from B to unit which let size value
+    less than 1024.
+
+    Parameters
+    ----------
+    num : float
+        File size in bit.
+    suffix : str, optional
+        Character(s) after value of file size after convertion.  
+        Default value is 'B'.
+
+    Returns
+    -------
+    str
+        File size after convertion.
+
+    """
     for unit in ['','K','M','G','T','P','E','Z']:
         if abs(num) < 1024.0:
             return "%3.1f %s%s" % (num, unit, suffix)
@@ -283,6 +298,7 @@ def get_data(station, year, save_dir, url):
         Nothing returned by this function.
 
     """
+    os.makedirs(save_dir, exist_ok=True)
     file_name = '{0}c{1}.txt.gz'.format(station, year)
     local_path = '{0}{1}'.format(save_dir, file_name)
     global current_download_file
@@ -370,7 +386,6 @@ def year_filter(input):
             res.update(temp)
 
     return res
-
 
 def station_filter(input):
     """Filter the inputted station id.

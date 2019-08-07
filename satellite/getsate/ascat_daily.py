@@ -1,3 +1,5 @@
+# !/usr/bin/env python
+
 from bytemaps import sys
 from bytemaps import Dataset
 from bytemaps import Verify
@@ -6,7 +8,6 @@ from bytemaps import get_data
 from bytemaps import ibits
 from bytemaps import is_bad
 from bytemaps import where
-
 
 class ASCATDaily(Dataset):
     """ Read daily ASCAT bytemaps. """
@@ -23,7 +24,7 @@ class ASCATDaily(Dataset):
         """
         Required arguments:
             filename = name of data file to be read (string)
-                
+
         Optional arguments:
             missing = fill value for missing data,
                       default is the value used in verify file
@@ -38,7 +39,7 @@ class ASCATDaily(Dataset):
         return ['coordinates','long_name','units','valid_min','valid_max']
 
     def _coordinates(self):
-        return ('orbit_segment','variable','latitude','longitude')                
+        return ('orbit_segment','variable','latitude','longitude')
 
     def _shape(self):
         return (2,5,720,1440)
@@ -164,7 +165,7 @@ class DailyVerify(Verify):
         self.ilat2 = 278        
         self.iasc = 2
         self.variables = ['mingmt','windspd','winddir','scatflag','radrain','sos']
-        self.startline = 16                
+        self.startline = 16
         self.columns = {'mingmt' : 3,
                         'windspd' : 4,
                         'winddir' : 5,
@@ -186,13 +187,14 @@ if __name__ == '__main__':
     """ Automated testing. """
 
     ascat = ASCATDaily('ascat_20071027_v02.1.gz',missing=-999.)
-    if not ascat.variables: sys.exit('file not found')
-    
+    if not ascat.variables:
+        sys.exit('file not found')
+
     # verify daily:
     verify = DailyVerify(ascat)
-    if verify.success: print('successful verification for daily')
-    else: sys.exit('verification failed for daily')
-    print('')
+    if verify.success:
+        print('successful verification for daily\n')
+    else:
+        sys.exit('verification failed for daily\n')
 
-    print('all tests completed successfully')
-    print ('')
+    print('all tests completed successfully\n')
