@@ -6,7 +6,7 @@ def configure():
     confs = {}
 
     rss_data_url = 'http://data.remss.com/'
-    data_root_dir = '../sate_data/'
+    data_root_dir = '../data/satel/'
     confs['data_name_len'] = 26
     confs['spec_confs'] = []
 
@@ -14,7 +14,14 @@ def configure():
     ascat['name'] = 'ascat'
     ascat['data_dir'] = data_root_dir + 'ascat/'
     ascat['file_suffix'] = '_v02.1.gz'
-    ascat['missing_dates'] = []
+    ascat['missing_dates'] = [
+        date(2007, 4, 21), date(2007, 4, 22), date(2007, 4, 23),
+        date(2007, 4, 24), date(2007, 9, 18), date(2008, 1, 17),
+        date(2008, 3, 20), date(2011, 5, 15)
+    ]
+    ascat['missing_dates_file'] = (data_root_dir 
+                                   + 'ascat_missing_dates.pkl')
+    ascat['missing_value'] = -999.0
     ascat['data_url'] = rss_data_url + 'ascat/metopa/bmaps_v02.1/'
     confs['spec_confs'].append(ascat)
 
@@ -34,7 +41,10 @@ def configure():
     windsat['name'] = 'wsat'
     windsat['data_dir'] = data_root_dir + 'windsat/'
     windsat['file_suffix'] = 'v7.0.1.gz'
-    windsat['missing_dates'] = []
+    windsat['missing_dates'] = [
+        date(2004, 1, 28), date(2004, 1, 30), date(2004, 3, 1),
+        date(2004, 3, 2), date(2004, 3, 3), date(2004, 4, 30)
+    ]
     windsat['data_url'] = rss_data_url + 'windsat/bmaps_v07.0.1/'
     confs['spec_confs'].append(windsat)
 

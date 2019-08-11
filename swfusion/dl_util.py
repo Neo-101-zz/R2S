@@ -4,13 +4,14 @@ import os
 import signal
 import sys
 from urllib import request
+import requests
 
 import progressbar
 
 # Global variables
 pbar = None
 format_custom_text = None
-current_download_file = None
+current_file = None
 
 def arrange_signal():
     """Arrange handler for several signal.
@@ -49,7 +50,7 @@ def handler(signum, frame):
     """
     # Remove file that is downloaded currently in case forcing quit
     # makes this file uncomplete
-    os.remove(current_download_file)
+    os.remove(current_file)
     # Print log
     print('\nForce quit on %s.\n' % signum)
     # Force quit
@@ -140,6 +141,26 @@ def show_progress(block_num, block_size, total_size):
         pbar.finish()
         pbar = None
 
+def url_exists(url):
+    """Check if url exists.
+
+    Parameters
+    ----------
+    url : str
+        Complete url of file.
+
+    Returns
+    -------
+    Bool
+        True if url exists, otherwise False.
+
+    """
+    req = requests.get(url)
+    if req.status_code == 200:
+        return True
+    else:
+        return False
+
 def download(url, path):
     """Download file by its url.
 
@@ -158,9 +179,13 @@ def download(url, path):
     """
     if os.path.exists(path):
         return
+    req = requests.get(url)
+    if req.status_code != 200:
+        print('File doesn\'t exist: ' + url)
+        return
 
-    global current_download_file
-    current_download_file = path
+    global current_file
+    current_file = path
 
     global format_custom_text
     file_name = path.split('/')[-1]

@@ -1,52 +1,10 @@
-import numpy as np
+# !/usr/bin/env python
+
 import math
 import re
-from datetime import date
-from datetime import timedelta
 
 from netCDF4 import Dataset
-
-import xlrd
-import itertools
-import csv
-
-def open_excel(file= 'file.xls'):
-    try:
-        data = xlrd.open_workbook(file)
-        return data
-    except Exception as e:
-        print(str(e))
-
-def convert_10(wspd, height):
-    if wspd <= 7:
-        z0 = 0.0023
-    else:
-        z0 = 0.022
-    kz = math.log(10/z0) / math.log(height/z0)
-    con_wspd = wspd * kz
-    return con_wspd
-
-
-
-def excel_table_bygname(file= u'/Users/zhangdongxiang/PycharmProjects/data4all/SAR/data/Buoy/Buoy_data.xls',colnameindex=0,by_name=u'R1_Matchups'):
-     data = open_excel(file)
-     table = data.sheet_by_name(by_name) #获得表格
-     nrows = table.nrows  # 拿到总共行数
-     colnames = table.row_values(colnameindex)
-     # print(colnames)
-     colnames_dict = {k: v for k, v in itertools.zip_longest(colnames, range(len(colnames)))}
-     match_info_list = []
-     for rownum in range(2, nrows):
-         match_info = {}
-         match_info['SAR'] = table.cell(rownum, colnames_dict['SAR_Name']).value
-         match_info['lat'] = table.cell(rownum, colnames_dict['lat']).value
-         match_info['lon'] = table.cell(rownum, colnames_dict['lon']).value
-         height = table.cell(rownum, colnames_dict['Ht_B']).value
-         wspd = table.cell(rownum, colnames_dict['Ws_B']).value
-         match_info['wspd'] = convert_10(wspd, height)
-         match_info['buoy'] = table.cell(rownum, colnames_dict['B_id']).value
-         match_info_list.append(match_info)
-     return match_info_list
+import numpy as np
 
 class ReadNetcdf:
 
@@ -66,14 +24,14 @@ class ReadNetcdf:
 
         self.filename = args[0]
         self.dataset = Dataset(self.filename)
-        print ('Dataset read successfully.')
-        print ('Dataset format: ', self.dataset.file_format)
-        print ()
+        print('Read ' + str(self.filename) + ' dataset successfully.')
+        print('Dataset format: ', self.dataset.file_format)
+        print()
 
         self.type = kwargs.get('type')
         self.time = kwargs.get('time')
 
-        self._print_dataset_info(**kwargs)
+        # self._print_dataset_info(**kwargs)
         # self._create_date_objects()
         # self._create_product_objects(**kwargs)
 
@@ -287,7 +245,7 @@ class ReadNetcdf:
     #         return
     #
     #     self.timevar = getattr(self.dataset.variables[var], 'coordinates').split()[0]
-    #     if 'time' not in self.timevar: print ('ReadNetcdf could not find time coordinate')
+    #     if 'time' not in self.timevar: print('ReadNetcdf could not find time coordinate')
     #
     #     year = self.dates[self.timevar][0].year
     #     month = self.dates[self.timevar][0].month
@@ -340,7 +298,7 @@ class ReadNetcdf:
         if prefix == None: prefix = 'hours since '
 
         m = re.search(prefix + '(\d+)-(\d+)-(\d+).*', datestring)
-        if m == None: print ('ReadNetcdf expects time units of the form: hours since y-m-d ...')
+        if m == None: print('ReadNetcdf expects time units of the form: hours since y-m-d ...')
 
         return int(m.group(1)), int(m.group(2)), int(m.group(3))
 
@@ -355,21 +313,26 @@ class ReadNetcdf:
     # Function for printing information:
 
     def _print_dataset_info(self, **kwargs):
-        """ Print a list of important dataset and provenance information."""
+        """ Print a list of important dataset and provenance
+        information.
 
+        """
         if kwargs.get('summary'):
-            print ('Dataset summary:')
-            print (self.dataset)
-            print ('Variables in dataset:')
+            print('Dataset summary:')
+            print(self.dataset)
+            print('Variables in dataset:')
             for var in self.dataset.variables:
-                print (var, self.dataset.variables[var])
+                print(var, self.dataset.variables[var])
 
-        attrib_list = ['title', 'institution', 'project', 'creator_url', 'creator_email', 'summary']
+        attrib_list = ['title', 'institution', 'project',
+                       'creator_url', 'creator_email', 'summary']
         for attrib in attrib_list:
             if hasattr(self.dataset, attrib):
-                print (attrib.title() + ': ' + getattr(self.dataset, attrib))
+                print(attrib.title() 
+                      + ': '
+                      + getattr(self.dataset, attrib))
             else:
-                print ('Cannot find: ' + attrib.title())
+                print('Cannot find: ' + attrib.title())
         print()
 
     def cut(self, lats, lons):
@@ -380,124 +343,87 @@ class ReadNetcdf:
         lat_indices = []
         lon_indices = []
 
-        index = 0
-        for i in self.dataset.variables['latitude']:
-            if i >=lats[0] and i <= lats[1]:
-                self.cut_latitude.append(i)
-                lat_indices.append(index)
-            index = index + 1
-        index = 0
-        for i in self.dataset.variables['longitude']:
-            if i >=lons[0] and i <= lons[1]:
-                self.cut_longitude.append(i)
-                lon_indices.append(index)
-            index = index + 1
+        # CCMP: Cross-Calibrated Multi-Platform
+        if self.type == 'ccmp':
+            index = 0
+            for i in self.dataset.variables['latitude']:
+                if i >=lats[0] and i <= lats[1]:
+                    self.cut_latitude.append(i)
+                    lat_indices.append(index)
+                index = index + 1
+            index = 0
+            for i in self.dataset.variables['longitude']:
+                if i >=lons[0] and i <= lons[1]:
+                    self.cut_longitude.append(i)
+                    lon_indices.append(index)
+                index = index + 1
 
-        self.cut_wspd = np.zeros((len(lat_indices), len(lon_indices)))
-        self.cut_wdir = np.zeros((len(lat_indices), len(lon_indices)))
+            self.cut_uwnd = np.zeros((len(lat_indices), len(lon_indices)))
+            self.cut_vwnd = np.zeros((len(lat_indices), len(lon_indices)))
+            self.cut_wspd = np.zeros((len(lat_indices), len(lon_indices)))
+            self.cut_wdir = np.zeros((len(lat_indices), len(lon_indices)))
 
-        # temp_uwnd = np.array(np.squeeze(self.dataset.variables['uwnd'], axis=0))
-        # temp_vwnd = np.array(np.squeeze(self.dataset.variables['vwnd'], axis=0))
+            temp_uwnd = np.array(np.squeeze(self.dataset.variables['uwnd'], axis=0))
+            temp_vwnd = np.array(np.squeeze(self.dataset.variables['vwnd'], axis=0))
 
-        lat_index = 0
-        for i in lat_indices:
-            lon_index = 0
-            for j in lon_indices:
-                # self.cut_uwnd[lat_index][lon_index] = temp_uwnd[i][j]
-                # self.cut_vwnd[lat_index][lon_index] = temp_vwnd[i][j]
-                self.cut_wspd[lat_index][lon_index] = math.sqrt(temp_uwnd[i][j]**2 + temp_vwnd[i][j]**2)
-                self.cut_wdir[lat_index][lon_index] = math.atan(temp_vwnd[i][j]/temp_uwnd[i][j])*180/math.pi
-                if self.cut_wdir[lat_index][lon_index] < 0:
-                    self.cut_wdir[lat_index][lon_index] = self.cut_wdir[lat_index][lon_index] + 360
-                lon_index = lon_index + 1
-            lat_index = lat_index + 1
+            lat_index = 0
+            for i in lat_indices:
+                lon_index = 0
+                for j in lon_indices:
+                    self.cut_uwnd[lat_index][lon_index] = temp_uwnd[i][j]
+                    self.cut_vwnd[lat_index][lon_index] = temp_vwnd[i][j]
+                    self.cut_wspd[lat_index][lon_index] = math.sqrt(temp_uwnd[i][j]**2 + temp_vwnd[i][j]**2)
+                    self.cut_wdir[lat_index][lon_index] = math.atan(temp_vwnd[i][j]/temp_uwnd[i][j])*180/math.pi
+                    if self.cut_wdir[lat_index][lon_index] < 0:
+                        self.cut_wdir[lat_index][lon_index] = self.cut_wdir[lat_index][lon_index] + 360
+                    lon_index = lon_index + 1
+                lat_index = lat_index + 1
 
-base_dir = '/Users/zhangdongxiang/PycharmProjects/data4all/SAR/data/SAR Wind/Radarsat_1_CbandHH/'
+        elif re.search(self.type, 'icoads'):
+            index = 0
+            for i in self.dataset.variables['lat'][::-1]:
+                if i >= lats[0] and i <= lats[1]:
+                    self.cut_latitude.append(i)
+                    lat_indices.append(index)
+                index = index + 1
+            index = 0
+            for i in self.dataset.variables['lon']:
+                if i >= lons[0] and i <= lons[1]:
+                    self.cut_longitude.append(i)
+                    lon_indices.append(index)
+                index = index + 1
+            if self.type == 'icoads-wspd':
+                self.cut_wspd = np.zeros((len(lat_indices), len(lon_indices)))
+                temp_wspd = np.array(self.dataset.variables['wspd'][572+self.time])
 
+                lat_index = 0
+                for i in lat_indices:
+                    lon_index = 0
+                    for j in lon_indices:
+                        self.cut_wspd[lat_index][lon_index] = temp_wspd[i][j]
+                        lon_index = lon_index + 1
+                    lat_index = lat_index + 1
 
+            elif self.type == 'icoads-u':
+                self.cut_uwnd = np.zeros((len(lat_indices), len(lon_indices)))
+                temp_uwnd = np.array(self.dataset.variables['uwnd'][572+self.time])
 
+                lat_index = 0
+                for i in lat_indices:
+                    lon_index = 0
+                    for j in lon_indices:
+                        self.cut_uwnd[lat_index][lon_index] = temp_uwnd[i][j]
+                        lon_index = lon_index + 1
+                    lat_index = lat_index + 1
 
+            elif self.type == 'icoads-v':
+                self.cut_vwnd = np.zeros((len(lat_indices), len(lon_indices)))
+                temp_vwnd = np.array(self.dataset.variables['vwnd'][572+self.time])
 
-
-
-
-
-
-
-"""find the ndbc point"""
-# def main():
-#     info_list = excel_table_bygname()
-#     content = ['SAR', 'buoy', 'min_i', 'min_j', 'wspd', 'ndbc_wspd', 'diff']
-#     csvFile = open('/Users/zhangdongxiang/PycharmProjects/data4all/SAR/match2.csv', 'a', newline='')
-#     writer = csv.writer(csvFile)
-#     writer.writerow(content)
-#     csvFile.close()
-#     for info in info_list:
-#         filename = info['SAR']
-#         dataset1 = ReadNetcdf(base_dir + filename)
-#         shape = dataset1.dataset.variables['wind_speed'].shape
-#         lat = info['lat']
-#         lon = info['lon'] + 360.0
-#         ndbc_wspd = info['wspd']
-#         buoy = info['buoy']
-#         min = 99
-#         min_i = 0
-#         min_j = 0
-#         for i in range(shape[0]):
-#             for j in range(shape[1]):
-#                 if (abs(dataset1.dataset.variables['lat'][i][j] - lat)**2 + abs(dataset1.dataset.variables['lon'][i][j] - lon)**2) < min:
-#                     min = abs(dataset1.dataset.variables['lat'][i][j] - lat)**2 + abs(dataset1.dataset.variables['lon'][i][j] - lon)**2
-#                     # print('bingo!  min: ', min)
-#                     min_i = i
-#                     min_j = j
-#         wspd = dataset1.dataset.variables['wind_speed'][min_i][min_j]
-#         # wdir = dataset1.dataset.variables['wind_dir'][min_i][min_j]
-#         wspd_diff = wspd - ndbc_wspd
-#         # wdir_diff = wdir - ndbc_wdir
-#         content = [filename, buoy, min_i, min_j, wspd, ndbc_wspd, wspd_diff]
-#         csvFile = open('/Users/zhangdongxiang/PycharmProjects/data4all/SAR/match2.csv', 'a', newline='')
-#         writer = csv.writer(csvFile)
-#         writer.writerow(content)
-#         csvFile.close()
-#         # print('min_i: ', min_i)
-#         # print('min_j: ', min_j)
-#         # print('diff in wspd: ', wspd_diff)
-#     # print('diff in wdir: ', wdir_diff)
-
-def main():
-    info_list = excel_table_bygname()
-    for info in info_list:
-        filename = info['SAR']
-        dataset1 = ReadNetcdf(base_dir + filename)
-        shape = dataset1.dataset.variables['wind_speed'].shape
-        lat = info['lat']
-        lon = info['lon'] + 360.0
-        ndbc_wspd = info['wspd']
-        buoy = info['buoy']
-        min = 99
-        min_i = 0
-        min_j = 0
-        for i in range(shape[0]):
-            for j in range(shape[1]):
-                if (abs(dataset1.dataset.variables['lat'][i][j] - lat)**2 + abs(dataset1.dataset.variables['lon'][i][j] - lon)**2) < min:
-                    min = abs(dataset1.dataset.variables['lat'][i][j] - lat)**2 + abs(dataset1.dataset.variables['lon'][i][j] - lon)**2
-                    # print('bingo!  min: ', min)
-                    min_i = i
-                    min_j = j
-        wspd = dataset1.dataset.variables['wind_speed'][min_i][min_j]
-        # wdir = dataset1.dataset.variables['wind_dir'][min_i][min_j]
-        wspd_diff = wspd - ndbc_wspd
-        # wdir_diff = wdir - ndbc_wdir
-        content = [filename, buoy, min_i, min_j, wspd, ndbc_wspd, wspd_diff]
-        csvFile = open('/Users/zhangdongxiang/PycharmProjects/data4all/SAR/match2.csv', 'a', newline='')
-        writer = csv.writer(csvFile)
-        writer.writerow(content)
-        csvFile.close()
-
-
-
-
-
-if __name__ == '__main__':
-
-    main()
+                lat_index = 0
+                for i in lat_indices:
+                    lon_index = 0
+                    for j in lon_indices:
+                        self.cut_vwnd[lat_index][lon_index] = temp_vwnd[i][j]
+                        lon_index = lon_index + 1
+                    lat_index = lat_index + 1

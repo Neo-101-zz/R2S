@@ -5,13 +5,14 @@ import os
 def configure():
     confs = {}
 
+    ndbc_data_dir = '../data/ndbc/'
     confs['url_base'] = 'http://www.ndbc.noaa.gov/data/historical/cwind/'
     confs['station_page'] = 'http://www.ndbc.noaa.gov/station_page.php'
-    confs['var_dir'] = '../variable/'
-    confs['station_dir'] = '../station_info/'
-    confs['cwind_dir'] = '../cwind_data/'
-    confs['station_csv'] = '../stations.csv'
-    confs['pickle_dir'] = '../cwind_pickle/'
+    confs['var_dir'] = ndbc_data_dir + 'variable/'
+    confs['station_dir'] = ndbc_data_dir + 'station_info/'
+    confs['cwind_dir'] = ndbc_data_dir + 'cwind_data/'
+    confs['station_csv'] = ndbc_data_dir + 'stations.csv'
+    confs['pickle_dir'] = ndbc_data_dir + 'cwind_pickle/'
     confs['retry_times'] = 10
     confs['data_name_len'] = 16
 

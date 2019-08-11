@@ -9,7 +9,7 @@ import csv
 import pandas as pd
 import numpy as np
 
-import ndbc_conf
+import conf_ndbc
 
 station = {}
 exception = ['41036information.txt', 'lscm4information.txt']
@@ -118,7 +118,7 @@ if __name__ == '__main__':
     # min_lon = 230
     # max_lon = 240
 
-    confs = ndbc_conf.configure()
+    confs = conf_ndbc.configure()
 
     default_range = [confs['default_min_latitude'],
                      confs['default_max_latitude'],

@@ -2,173 +2,19 @@
 
 """Download NDBC Continuous Wind data and station information.
 
-Features
---------
-input years :
-    Support single input ('1997'), range input ('1997-2001'), and hybrid
-    input ('1997 1999-2001 2003-2010').
-
-input stations :
-    Support single input ('41001'), multi-input ('41001, burl1').
-
-select stations according to years :
-    Do following steps in each run of program.  
-    First derive stations' id from NDBC historical Continuous Wind data
-    directory according to the inputted year.  
-    Second store the relation between year and station in the form of 
-    a dict with year as key and station's id as value.
-    Third merge the dict into a pickle file which saves the relation
-    in the same form of the dict for other program calls.  
-
-select years according to stations :
-    Do following steps in each run of program.
-    First derive data's year from NDBC historical Continuous Wind data 
-    directory according to the inputted station's id.  
-    Second store the relation between station and year in the form of 
-    a dict with year as key and station's id as value for other program
-    calls.  
-    Third merge the dict into a pickle file which saves the relation
-    in the same form of the dict for other program calls.  
-
-download station information :
-    Extract text description of NDBC stations from NDBC website and save
-    it as text file.
-
-download cwind data :
-    Save NDBC Continous Wind data according to the inputted year and
-    station's id as txt.gz files.
 """
-
-import urllib.request
 import re
 import requests
 import os
 import time
 import pickle
-import signal
-import sys
 
 from bs4 import BeautifulSoup
-import progressbar
 
-import ndbc_conf
+import conf_ndbc
+import dl_util
 
-# Global variables
-pbar = None
-format_custom_text = None
-current_download_file = None
-
-def handler(signum, frame):
-    """Handle forcing quit which may be made by pressing Control + C and
-    sending SIGINT which will interupt this application.
-
-    Parameters
-    ----------
-    signum : int
-        Signal number which is sent to this application.
-    frame : ?
-        Current stack frame.
-
-    Returns
-    -------
-    None
-        Nothing returned by this function.
-
-    """
-    # Remove file that is downloaded currently in case forcing quit
-    # makes this file uncomplete
-    os.remove(current_download_file)
-    # Print log
-    print('\nForce quit on %s.\n' % signum)
-    # Force quit
-    sys.exit(1)
-
-def set_format_custom_text(len):
-    """Customize format text's length.
-
-    Parameters
-    ----------
-    len : int
-        Length of format text.
-
-    Returns
-    -------
-    None
-        Nothing returned by this function.
-
-    """
-    global format_custom_text
-    format_custom_text = progressbar.FormatCustomText(
-        '%(f)-' + str(len) +'s ',
-        dict(
-            f='',
-        ),
-    )
-
-def sizeof_fmt(num, suffix='B'):
-    """Convert size of file from B to unit which let size value
-    less than 1024.
-
-    Parameters
-    ----------
-    num : float
-        File size in bit.
-    suffix : str, optional
-        Character(s) after value of file size after convertion.  
-        Default value is 'B'.
-
-    Returns
-    -------
-    str
-        File size after convertion.
-
-    """
-    for unit in ['','K','M','G','T','P','E','Z']:
-        if abs(num) < 1024.0:
-            return "%3.1f %s%s" % (num, unit, suffix)
-        num /= 1024.0
-    return "%.1f %s%s" % (num, 'Y', suffix)
-
-def show_progress(block_num, block_size, total_size):
-    """Show progress of downloading data with progress bar.
-
-    Parameters
-    ----------
-    block_num : int
-        Data block that has been downloaded.
-    block_size : int
-        Size of data block.
-    total_size : int
-        Size of remote file.
-
-    Returns
-    -------
-    None
-        Nothing returned by this function.
-
-    """
-    global pbar
-    global format_custom_text
-
-    if pbar is None:
-        pbar = progressbar.bar.ProgressBar(
-            maxval=total_size,
-            widgets=[
-                format_custom_text,
-                '  | %-8s  ' % sizeof_fmt(total_size),
-                progressbar.Bar(marker=u'\u2588', fill='.',
-                                left='| ', right= ' |'),
-                progressbar.Percentage(),
-            ])
-
-    downloaded = block_num * block_size
-    if downloaded < total_size:
-        pbar.update(downloaded)
-    else:
-        pbar.finish()
-        pbar = None
-
-def get_station_in_a_year(year, url, candidate_stations=None):
+def station_in_a_year(year, url, candidate_stations=None):
     """Get stations' id in specified year.
 
     Parameters
@@ -208,8 +54,7 @@ def get_station_in_a_year(year, url, candidate_stations=None):
 
     return stations
 
-
-def get_year_of_a_station(station, url):
+def year_of_a_station(station, url):
     """Get years when the data of specified station existed.
 
     Parameters
@@ -241,7 +86,7 @@ def get_year_of_a_station(station, url):
 
     return years
 
-def get_information(station, url, save_dir):
+def dl_information(station, url, save_dir):
     """Download station information.
 
     Parameters
@@ -280,7 +125,7 @@ def get_information(station, url, save_dir):
         print(station)
         return True
 
-def get_data(station, year, save_dir, url):
+def dl_data(station, year, save_dir, data_url):
     """Download Continuous Wind data of specified station and year.
 
     Parameters
@@ -291,6 +136,8 @@ def get_data(station, year, save_dir, url):
         Specified year.
     save_dir : str
         Directory to save CWind data.
+    data_url : str
+        Url of data folder which stores data files.
 
     Returns
     -------
@@ -300,16 +147,9 @@ def get_data(station, year, save_dir, url):
     """
     os.makedirs(save_dir, exist_ok=True)
     file_name = '{0}c{1}.txt.gz'.format(station, year)
-    local_path = '{0}{1}'.format(save_dir, file_name)
-    global current_download_file
-    current_download_file = local_path
-    if os.path.exists(local_path):
-        return True
-    down_url = '{0}{1}'.format(url, file_name)
-    
-    global format_custom_text
-    format_custom_text.update_mapping(f=file_name)
-    urllib.request.urlretrieve(down_url, local_path, show_progress)
+    file_path = '{0}{1}'.format(save_dir, file_name)
+    file_url = '{0}{1}'.format(data_url, file_name)
+    dl_util.download(file_url, file_path)
 
 def write_information(path, data):
     """Write data by function open() with 'w' mode."""
@@ -414,7 +254,7 @@ def station_filter(input):
     return res
 
 def main():
-    confs = ndbc_conf.configure()
+    confs = conf_ndbc.configure()
     print(confs['input_year_prompt'], end='')
     years = year_filter(input())
     print(confs['input_station_prompt'], end='')
@@ -427,7 +267,7 @@ def main():
     if years and not stations:
         # Collect stations' id according to years
         for year in years:
-            stns = get_station_in_a_year(year, confs['url_base'])
+            stns = station_in_a_year(year, confs['url_base'])
             year_station[year] = stns
             stations.update(stns)
             for stn in stns:
@@ -438,7 +278,7 @@ def main():
     elif not years and stations:
         # Collect years according to stations' id
         for stn in stations:
-            yrs = get_year_of_a_station(stn, confs['url_base'])
+            yrs = year_of_a_station(stn, confs['url_base'])
             station_year[stn] = yrs
             years.update(yrs)
             for yr in yrs:
@@ -449,7 +289,7 @@ def main():
     elif years and stations:
         # No need to update years and stations
         for year in years:
-            stns = get_station_in_a_year(year, confs['url_base'],
+            stns = station_in_a_year(year, confs['url_base'],
                                          candidate_stations=stations)
             year_station[year] = stns
             for stn in stations:
@@ -466,12 +306,12 @@ def main():
     # Download all stations' information into single directory
     print('\nDownloading Station Information')
     for stn in stations:
-        result = get_information(stn, confs['station_page'],
+        result = dl_information(stn, confs['station_page'],
                                  confs['station_dir'])
         i = 1
         while result == 'error' and i <= confs['retry_times']:
             print('reconnect: %d' % i)
-            result = get_information(stn, confs['station_page'],
+            result = dl_information(stn, confs['station_page'],
                                      confs['station_dir'])
             i += 1
         if result == 'error':
@@ -479,15 +319,13 @@ def main():
                   +' {0}\'s information.'.format(stn))
     # Download Continuous Wind data
     print('\nDownloading Continuous Wind Data')
-    set_format_custom_text(confs['data_name_len'])
+    dl_util.set_format_custom_text(confs['data_name_len'])
     for year in years:
         for stn in year_station[year]:
-            get_data(stn, year, confs['cwind_dir'], confs['url_base'])
+            dl_data(stn, year, confs['cwind_dir'], confs['url_base'])
 
     print('\n')
 
 if __name__ == '__main__':
-    signal.signal(signal.SIGINT, handler)
-    signal.signal(signal.SIGHUP, handler)
-    signal.signal(signal.SIGTERM, handler)
+    dl_util.arrange_signal()
     main()
