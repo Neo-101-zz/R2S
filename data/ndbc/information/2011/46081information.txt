@@ -1,0 +1,13 @@
+Owned and maintained by National Data Buoy Center
+6-meter NOMAD buoy
+ARES payload
+60.799 N 148.263 W (60°47'58" N 148°15'47" W)
+
+Site elevation: sea level
+Air temp height: 4 m above site elevation
+Anemometer height: 5 m above site elevation
+Barometer elevation: sea level
+Sea temp depth: 1 m below water line
+Water depth: 434 m
+Watch circle radius: 648
+ yards

@@ -1,0 +1,7 @@
+Owned and maintained by National Data Buoy Center
+3-meter discus buoy
+VEEP payload
+40.423 N 124.525 W (40°25'22" N 124°31'31" W)
+
+Water depth: 82.3 m
+Watch circle radius: 107 yards

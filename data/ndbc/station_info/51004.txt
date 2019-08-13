@@ -1,0 +1,12 @@
+Owned and maintained by National Data Buoy Center
+3-meter discus buoy
+SCOOP payload
+17.604 N 152.364 W (17°36'15" N 152°21'50" W)
+
+Site elevation: sea level
+Air temp height: 4 m above site elevation
+Anemometer height: 4 m above site elevation
+Barometer elevation: 2.5 m above mean sea level
+Sea temp depth: 1 m below water line
+Water depth: 4998 m
+Watch circle radius: 5396 yards

@@ -1,0 +1,11 @@
+Owned and maintained by National Data Buoy Center
+3-meter discus buoy
+MARS payload
+27.504 N 90.462 W (27°30'14" N 90°27'44" W)
+
+Site elevation: sea level
+Air temp height: 4 m above site elevation
+Anemometer height: 5 m above site elevation
+Barometer elevation: sea level
+Water depth: 1435.6 m
+Watch circle radius: 1500 yards

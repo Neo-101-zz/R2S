@@ -1,0 +1,13 @@
+Owned and maintained by National Data Buoy Center
+3-meter discus buoy
+ARES 4.4 payload
+34.273 N 120.699 W (34°16'21" N 120°41'55" W)
+
+Site elevation: sea level
+Air temp height: 4 m above site elevation
+Anemometer height: 5 m above site elevation
+Barometer elevation: sea level
+Sea temp depth: 0.6 m below water line
+Water depth: 632 m
+Watch circle radius: 980
+ yards

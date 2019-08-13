@@ -11,7 +11,7 @@ import pickle
 
 from bs4 import BeautifulSoup
 
-import conf_ndbc
+import load_config
 import dl_util
 
 def station_in_a_year(year, url, candidate_stations=None):
@@ -86,7 +86,7 @@ def year_of_a_station(station, url):
 
     return years
 
-def dl_information(station, url, save_dir):
+def dl_station_info(station, url, save_dir):
     """Download station information.
 
     Parameters
@@ -103,8 +103,8 @@ def dl_information(station, url, save_dir):
         False if information is too less.
 
     """
-    filename = save_dir + station + '.txt'
-    if os.path.exists(filename):
+    file_path = save_dir + station + '.txt'
+    if os.path.exists(file_path):
         return
 
     payload = dict()
@@ -120,12 +120,14 @@ def dl_information(station, url, save_dir):
     if len(information) < 2:
         return False
     else:
-        # write_information(filename, information[1].text.replace('\xa0'*8, '\n\n'))
-        write_information(filename, information[1].text)
+        # write_information(file_path, information[1].text.replace('\xa0'*8, '\n\n'))
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, 'w') as f:
+            f.write(information[1].text)
         print(station)
         return True
 
-def dl_data(station, year, save_dir, data_url):
+def dl_cwind_data(station, year, save_dir, data_url):
     """Download Continuous Wind data of specified station and year.
 
     Parameters
@@ -150,12 +152,6 @@ def dl_data(station, year, save_dir, data_url):
     file_path = '{0}{1}'.format(save_dir, file_name)
     file_url = '{0}{1}'.format(data_url, file_name)
     dl_util.download(file_url, file_path)
-
-def write_information(path, data):
-    """Write data by function open() with 'w' mode."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
-        f.write(data)
 
 def save_relation(path, var):
     """Append variable to pickle file.
@@ -253,12 +249,21 @@ def station_filter(input):
 
     return res
 
-def main():
-    confs = conf_ndbc.configure()
-    print(confs['input_year_prompt'], end='')
+def filter_input(CONFIG):
+    """Filter user's input of target year(s) and station(s).
+    """
+    print(CONFIG['prompt']['ndbc']['input']['year'], end='')
     years = year_filter(input())
-    print(confs['input_station_prompt'], end='')
+    print(CONFIG['prompt']['ndbc']['input']['station'], end='')
     stations = station_filter(input())
+
+    return years, stations
+
+def analysis_and_save_relation(CONFIG, years, stations):
+    """Analysis and save relation between inputted year(s) and station(s)
+    from NDBC's Continuous Wind Historical Data webpage.
+
+    """
     # key: station, value: year
     station_year = dict()
     # key: year, value: station
@@ -267,7 +272,7 @@ def main():
     if years and not stations:
         # Collect stations' id according to years
         for year in years:
-            stns = station_in_a_year(year, confs['url_base'])
+            stns = station_in_a_year(year, CONFIG['urls']['ndnc']['cwind'])
             year_station[year] = stns
             stations.update(stns)
             for stn in stns:
@@ -278,7 +283,7 @@ def main():
     elif not years and stations:
         # Collect years according to stations' id
         for stn in stations:
-            yrs = year_of_a_station(stn, confs['url_base'])
+            yrs = year_of_a_station(stn, CONFIG['urls']['ndnc']['cwind'])
             station_year[stn] = yrs
             years.update(yrs)
             for yr in yrs:
@@ -289,43 +294,70 @@ def main():
     elif years and stations:
         # No need to update years and stations
         for year in years:
-            stns = station_in_a_year(year, confs['url_base'],
-                                         candidate_stations=stations)
+            stns = station_in_a_year(year, CONFIG['urls']['ndbc']['cwind'],
+                                     candidate_stations=stations)
             year_station[year] = stns
             for stn in stations:
                 if not stn in station_year:
                     station_year[stn] = set()
                 station_year[stn].add(year)
     else:
-        print('\nAt least one of year(s) and station(s) '
-              + 'should be specified.\n')
-        return
+        exit(CONFIG['prompt']['ndbc']['error']['no_input'])
     # Save two dicts which store the relation between stations and year
-    save_relation(confs['var_dir'] + 'year_station.pkl', year_station)
-    save_relation(confs['var_dir'] + 'station_year.pkl', station_year)
-    # Download all stations' information into single directory
-    print('\nDownloading Station Information')
+    save_relation(CONFIG['vars_path']['ndbc']['year_station'],
+                  year_station)
+    save_relation(CONFIG['vars_path']['ndbc']['station_year'],
+                  station_year)
+
+    return year_station
+
+def download_station_info(CONFIG, stations):
+    """Download all stations' information into single directory.
+
+    """
+    print(CONFIG['prompt']['ndbc']['info']['dl_station'])
     for stn in stations:
-        result = dl_information(stn, confs['station_page'],
-                                 confs['station_dir'])
-        i = 1
-        while result == 'error' and i <= confs['retry_times']:
-            print('reconnect: %d' % i)
-            result = dl_information(stn, confs['station_page'],
-                                     confs['station_dir'])
-            i += 1
-        if result == 'error':
-            print('Fail downloading station'
-                  +' {0}\'s information.'.format(stn))
-    # Download Continuous Wind data
-    print('\nDownloading Continuous Wind Data')
-    dl_util.set_format_custom_text(confs['data_name_len'])
+        i = 0
+        while True:
+            # download stations' information
+            result = dl_station_info(
+                stn, CONFIG['urls']['ndbc']['stations'],
+                CONFIG['dirs']['ndbc']['stations'])
+            if result != 'error':
+                break
+            else:
+                print('Fail downloading station'
+                  + ' {0}\'s information.'.format(stn))
+                i += 1
+                if i <= CONFIG['retry_times']['ndbc']: 
+                    print('reconnect: %d' % i)
+                else:
+                    exit(CONFIG['error']['no_station_info'])
+
+def download_cwind_data(CONFIG, years, year_station):
+    """Download Continuous Wind data into single directory.
+
+    """
+    print(CONFIG['prompt']['ndbc']['info']['dl_cwind'])
+    dl_util.set_format_custom_text(CONFIG['data_name_length']['ndbc'])
     for year in years:
         for stn in year_station[year]:
-            dl_data(stn, year, confs['cwind_dir'], confs['url_base'])
+            dl_cwind_data(stn, year, CONFIG['dirs']['ndbc']['cwind'],
+                          CONFIG['urls']['ndbc']['cwind'])
 
     print('\n')
 
+def download_ndbc(CONFIG):
+    """Download NDBC's buoys station's information and corresponding
+    Continuous Wind Historical Data.
+
+    """
+    years, stations = filter_input(CONFIG)
+    year_station = analysis_and_save_relation(CONFIG, years, stations)
+    download_station_info(CONFIG, stations)
+    download_cwind_data(CONFIG, years, year_station)
+
 if __name__ == '__main__':
+    CONFIG = load_config.load_config()
     dl_util.arrange_signal()
-    main()
+    download_ndbc(CONFIG)

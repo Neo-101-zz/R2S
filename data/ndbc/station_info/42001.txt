@@ -1,0 +1,12 @@
+Owned and maintained by National Data Buoy Center
+2.3-meter NOOSS buoy
+SCOOP payload
+25.941 N 89.661 W (25°56'28" N 89°39'39" W)
+
+Site elevation: sea level
+Air temp height: 3.3 m above site elevation
+Anemometer height: 3.6 m above site elevation
+Barometer elevation: 2.3 m above mean sea level
+Sea temp depth: 1.3 m below water line
+Water depth: 3334 m
+Watch circle radius: 3149 yards

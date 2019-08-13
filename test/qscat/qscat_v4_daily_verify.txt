@@ -1,0 +1,65 @@
+This verification file is for Version 4 data (produced April 2011)
+
+Verify that your daily file read routine is working correctly 
+by writing out the mingmt, windspd, winddir, scatflag and radrain
+values for this longitude, latitude subset: 
+	lon 170:175  (6 cells)
+	lat 274:278  (5 cells)
+	iasc = 1     (morning (asc) passes)
+!!!these values assume a 1-based system such as fortran.
+If you have zero-based software, use lon 169:174 and lat 273:277.
+file: qscat_20000111v4.gz
+
+The results for each latitude and longitude are:
+
+ ilon ilat mingmt windspd winddir scatflag radrain
+  170  274  228.   10.00    0.00     1       4.00
+  171  274  228.    9.80   72.00     1    -999.00
+  172  274  228.   10.80   45.00     1    -999.00
+  173  274  228.   10.80   45.00     1    -999.00
+  174  274 1524. -999.00 -999.00  -999    -999.00
+  175  274 1530. -999.00 -999.00  -999    -999.00
+  170  275  228.   10.60   43.50     1      15.50
+  171  275  228.   10.00   87.00     1       8.00
+  172  275  228.    9.60   79.50     1    -999.00
+  173  275  228.    9.60   79.50     1    -999.00
+  174  275  228.    9.80   69.00     1    -999.00
+  175  275 1530. -999.00 -999.00  -999    -999.00
+  170  276  228.    9.00   99.00     0       3.50
+  171  276  228.    8.60   87.00     1    -999.00
+  172  276  228.    9.40   63.00     1    -999.00
+  173  276  228.    9.80   69.00     1    -999.00
+  174  276  228.    9.80   69.00     1    -999.00
+  175  276  228.   12.40   27.00     0    -999.00
+  170  277  228.    8.00   97.50     0      -1.00
+  171  277  228.    7.80   79.50     1    -999.00
+  172  277  228.    9.20   54.00     1    -999.00
+  173  277  228.   11.40   36.00     0    -999.00
+  174  277  228.   12.40   27.00     0    -999.00
+  175  277  228.   12.40   27.00     0    -999.00
+  170  278  228.    7.40   99.00     1       0.00
+  171  278  228.    7.40   75.00     1       0.00
+  172  278  228.    8.80   52.50     1    -999.00
+  173  278  228.   10.40   40.50     0    -999.00
+  174  278  228.   11.80   27.00     0    -999.00
+  175  278  228.   11.80   27.00     0    -999.00
+
+
+This verification region is located west of 
+Madagascar and is shown in the qscat_v4_daily_verify.png
+file.  There is a substantial amount of rain
+within the region, altering the QuikScat winds.
+The pixels listed above are shown in the red rectangle.
+The first set of data in this list is located in 
+the bottom left of the red rectangle.
+
+The time is minute of day GMT (mingmt) and has 
+valid values between 0 and 1440 (0 - 250 binary
+value * 6. scale factor).  A value greater than 
+1440 is representative of no data.  All read 
+routines default the other values to -999.0 
+if the GMT time is greater than 1440.
+
+If you have any problems with any of the data 
+reading routines contact RSS support:
+http://www.remss.com/support

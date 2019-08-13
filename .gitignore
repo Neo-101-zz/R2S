@@ -6,7 +6,7 @@
 !.gitignore
 !*.md
 !*.py
-!.txt
+!*.txt
 
 # Even if they are in subdirectories
 

@@ -1,0 +1,9 @@
+Owned and maintained by National Data Buoy Center
+C-MAN Station
+SMART Module
+48.321 N 122.831 W (48°19'14" N 122°49'51" W)
+
+Site elevation: 15.2 m above mean sea level
+Air temp height: 2 m above site elevation
+Anemometer height: 2 m above site elevation
+Barometer elevation: 17.2 m above mean sea level

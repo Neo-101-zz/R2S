@@ -1,0 +1,9 @@
+Owned and maintained by National Data Buoy Center
+C-MAN Station
+Sutron XPERT payload
+61.060 N 146.700 W (61°3'36" N 146°42'0" W)
+
+Site elevation: 7 m above mean sea level
+Air temp height: 9.1 m above site elevation
+Anemometer height: 10 m above site elevation
+Barometer elevation: 8.5 m above mean sea level

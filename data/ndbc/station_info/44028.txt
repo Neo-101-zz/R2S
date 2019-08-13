@@ -1,0 +1,5 @@
+Owned and maintained by National Data Buoy Center
+USCG Large Navigational Buoy
+DACT payload
+41.400 N 71.080 W (41°24'0" N 71°4'48" W)
+

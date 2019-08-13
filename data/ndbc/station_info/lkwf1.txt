@@ -1,0 +1,9 @@
+Owned and maintained by NOAA's National Ocean Service
+Water Level Observation Network
+26.613 N 80.034 W (26°36'46" N 80°2'2" W)
+
+Site elevation: 5.9 m above mean sea level
+Air temp height: 4.5 m above site elevation
+Anemometer height: 6 m above site elevation
+Barometer elevation: 7.1 m above mean sea level
+Sea temp depth: 1.6 m below MLLW

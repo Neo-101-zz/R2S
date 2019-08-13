@@ -1,0 +1,13 @@
+Owned and maintained by National Data Buoy Center
+Funding to support water measurements of the velocity profile, temperature, and salinity is provided by the Prince William Sound Science Center.
+3-meter discus buoy
+AMPS payload
+60.587 N 146.819 W (60°35'12" N 146°49'8" W)
+
+Site elevation: sea level
+Air temp height: 4 m above site elevation
+Anemometer height: 5 m above site elevation
+Barometer elevation: sea level
+Sea temp depth: 0.6 m below water line
+Water depth: 445 m
+Watch circle radius: 640 yards

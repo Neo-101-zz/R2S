@@ -9,10 +9,7 @@ import csv
 import pandas as pd
 import numpy as np
 
-import conf_ndbc
-
-station = {}
-exception = ['41036information.txt', 'lscm4information.txt']
+import load_config
 
 def extract_stn_info(gzip_file_name):
     """Read latitude, longitude and anemometer height of station from
@@ -111,41 +108,45 @@ def convert_10(wspd, height):
 
     return con_wspd
 
-if __name__ == '__main__':
-    # Original author's setting
-    # min_lat = 24 
-    # max_lat = 52
-    # min_lon = 230
-    # max_lon = 240
+def set_area(CONFIG):
+    """Set selected area with user's input of range of latitude and
+    longitude.
 
-    confs = conf_ndbc.configure()
+    """
+    print(CONFIG['prompt']['ndbc']['info']['specify_area'])
+    default_range = [CONFIG['default_values']['ndbc']['min_latitude'],
+                     CONFIG['default_values']['ndbc']['max_latitude'],
+                     CONFIG['default_values']['ndbc']['min_longitude'],
+                     CONFIG['default_values']['ndbc']['max_longitude']]
 
-    default_range = [confs['default_min_latitude'],
-                     confs['default_max_latitude'],
-                     confs['default_min_longitude'],
-                     confs['default_max_longitude']]
-
-    input_range = [input(confs['input_min_latitude_prompt']),
-                   input(confs['input_max_latitude_prompt']),
-                   input(confs['input_min_longitude_prompt']),
-                   input(confs['input_max_longitude_prompt'])]
+    input_range = [input(CONFIG['prompt']['ndbc']['input']['min_latitude']),
+                   input(CONFIG['prompt']['ndbc']['input']['max_latitude']),
+                   input(CONFIG['prompt']['ndbc']['input']['min_longitude']),
+                   input(CONFIG['prompt']['ndbc']['input']['max_longitude'])]
 
     for index, value in enumerate(input_range):
         if len(value) == 0:
             input_range[index] = default_range[index]
     min_lat, max_lat = input_range[0], input_range[1]
     min_lon, max_lon = input_range[2], input_range[3]
-    # Collect all NDBC stations' info into a single csv file
-    stations_csv_name = confs['station_csv']
-    station_files = os.listdir(confs['station_dir'])
-    stations_csv = open(stations_csv_name, 'w', newline='')
+
+    return min_lat, max_lat, min_lon, max_lon
+
+def gen_station_csv(CONFIG, min_lat, max_lat, min_lon, max_lon):
+    """Collect information of all NDBC bouy stations in selected area
+    into a single csv file.
+
+    """
+    stations_csv = open(CONFIG['files_path']['ndbc']['station_csv'], 'w', 
+                        newline='')
     writer = csv.writer(stations_csv)
     content = ['id', 'lat', 'lon', 'height']
     writer.writerow(content)
 
+    station_files = os.listdir(CONFIG['dirs']['ndbc']['stations'])
     for file in station_files:
         if '.txt' in file:
-            station = extract_stn_info(confs['station_dir'] + file)
+            station = extract_stn_info(CONFIG['dirs']['ndbc']['stations'] + file)
             station['id'] = file[0:5]
             if (not (min_lat <= station['lat'] <= max_lat)
                 or not (min_lon <= station['lon'] <= max_lon)
@@ -158,12 +159,15 @@ if __name__ == '__main__':
 
     stations_csv.close()
 
-    # Read wind data
-    if not os.path.exists(confs['pickle_dir']):
-        os.mkdir(confs['pickle_dir'])
-    stations_csv = pd.read_csv(stations_csv_name)
+def read_cwind_data(CONFIG):
+    """Read Continuous Wind Data of stations in selected range into pickle
+    files.
 
-    with open(confs['var_dir'] + 'station_year.pkl', 'rb') as fr:
+    """
+    os.makedirs(CONFIG['dirs']['ndbc']['pickle'], exist_ok=True)
+    stations_csv = pd.read_csv(CONFIG['files_path']['ndbc']['station_csv'])
+    # Read relation of NDBC buoy stations and year of Continuous Wind Data
+    with open(CONFIG['vars_path']['ndbc']['station_year'], 'rb') as fr:
         station_year = pickle.load(fr)
 
     for index, id in enumerate(stations_csv['id']):
@@ -171,13 +175,14 @@ if __name__ == '__main__':
 
         for year in years:
             pickle_name = id + '_' + year + '.pkl'
-            if os.path.exists(confs['pickle_dir'] + pickle_name):
+            pickle_path = CONFIG['dirs']['ndbc']['pickle'] + pickle_name
+            if os.path.exists(pickle_path):
                 continue
 
+            # Read content of gzip file
             gzip_file_name = id + 'c' + year + '.txt.gz'
-            gzip_file_path = confs['cwind_dir'] + gzip_file_name
+            gzip_file_path = CONFIG['dirs']['ndbc']['cwind'] + gzip_file_name
             try:
-                # print('Processing ' + pickle_name)
                 with gzip.GzipFile(gzip_file_path, 'rb') as gz:
                     cwind_text = gz.read()
             except FileNotFoundError as e:
@@ -188,30 +193,34 @@ if __name__ == '__main__':
                 exit(0)
             else:
                 print('Processing ' + pickle_name)
-            with open(gzip_file_name[0:-3], 'wb') as txt:
-                txt.write(cwind_text)
 
+            # Save unzipped text into a temporary file
+            temp_file_name = gzip_file_name[0:-3]
+            with open(temp_file_name, 'wb') as txt:
+                txt.write(cwind_text)
+            # Specify data type of columns of unzipped gzip file
             data_type = {'names': ('year', 'month', 'day', 'hour',
                                    'minute', 'direction', 'speed'),
                          'formats': ('S4', 'i2', 'i2', 'i2', 'i2',
                                      'i4', 'f4')}
             data = np.loadtxt(gzip_file_name[0:-3], skiprows=1,
                               usecols=(0,1,2,3,4,5,6), dtype=data_type)
-            os.remove(gzip_file_name[0:-3])
+            os.remove(temp_file_name)
 
+            # Store Continuous Wind Data in an entire year into a pickle
+            # file
             cwind_1_year = []
             for row in data:
                 # Drop possibly existing data records in the end of
                 # last year and may LEAD TO UNCOMPLETE DATA
                 if bytes.decode(row['year'])[-2:] != year[-2:]:
                     continue
+                # Every row of data is the record of 10 minutes
                 cwind_10_mins = {}
                 cwind_10_mins['height'] = float(
                     stations_csv['height'][index])
-                cwind_10_mins['lat'] = float(
-                    stations_csv['lat'][index])
-                cwind_10_mins['lon'] = float(
-                    stations_csv['lon'][index])
+                cwind_10_mins['lat'] = float(stations_csv['lat'][index])
+                cwind_10_mins['lon'] = float(stations_csv['lon'][index])
                 cwind_10_mins['month'] = int(row['month'])
                 cwind_10_mins['day'] = int(row['day'])
                 cwind_10_mins['time'] = (int(row['hour']) * 60
@@ -221,6 +230,24 @@ if __name__ == '__main__':
                     float(row['speed']), cwind_10_mins['height'])
                 cwind_1_year.append(cwind_10_mins)
 
-            pickle_file = open(confs['pickle_dir'] + pickle_name, 'wb')
+            pickle_file = open(pickle_path, 'wb')
             pickle.dump(cwind_1_year, pickle_file)
             pickle_file.close()
+
+def read_ndbc(CONFIG):
+    """Generate a csv file of stations in the selected area and read
+    Continuous Wind Data of those stations into pickle files.
+
+    """
+    min_lat, max_lat, min_lon, max_lon = set_area(CONFIG)
+    gen_station_csv(CONFIG, min_lat, max_lat, min_lon, max_lon)
+    read_cwind_data(CONFIG)
+
+if __name__ == '__main__':
+    # Original author's setting
+    # min_lat = 24 
+    # max_lat = 52
+    # min_lon = 230
+    # max_lon = 240
+    CONFIG = load_config.load_config()
+    read_ndbc(CONFIG)

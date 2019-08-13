@@ -1,0 +1,9 @@
+Owned and maintained by National Data Buoy Center
+C-MAN Station
+DACT payload
+36.905 N 75.713 W (36°54'17" N 75°42'46" W)
+
+Site elevation: 0 m above mean sea level
+Air temp height: 22.3 m above site elevation
+Anemometer height: 43.3 m above site elevation
+Barometer elevation: 23.4 m above mean sea level

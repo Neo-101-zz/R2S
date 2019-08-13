@@ -1,0 +1,5 @@
+Owned and maintained by National Data Buoy Center
+3-meter discus buoy
+VEEP payload
+43.020 N 86.270 W (43°1'12" N 86°16'12" W)
+

@@ -58,7 +58,6 @@ def match(year, month, satellite, ndbc, space_d, time_d):
                     cnt += 1
     return match_list
 
-
 if __name__ == '__main__':
     # month_list = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
     # files_ndbc = os.listdir('./ndbc/pickle')

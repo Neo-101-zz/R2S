@@ -1,0 +1,13 @@
+Owned and maintained by National Data Buoy Center
+3-meter foam buoy
+ARES payload
+47.585 N 86.585 W (47°35'7" N 86°35'6" W)
+
+Site elevation: 183 m above mean sea level
+Air temp height: 4 m above site elevation
+Anemometer height: 5 m above site elevation
+Barometer elevation: 183 m above mean sea level
+Sea temp depth: 1 m below water line
+Water depth: 237.5 m
+Watch circle radius: 295
+ yards

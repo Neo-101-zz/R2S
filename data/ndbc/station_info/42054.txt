@@ -1,0 +1,5 @@
+Owned and maintained by National Data Buoy Center
+12-meter discus buoy
+MARS payload
+26.000 N 87.730 W (26°0'0" N 87°43'48" W)
+

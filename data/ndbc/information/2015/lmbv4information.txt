@@ -1,0 +1,6 @@
+Station operated by the US EPA & Mexican Government Cooperative Program
+Weather Station
+Sutron XPERT payload
+19.594 N 96.379 W (19°35'37" N 96°22'46" W)
+
+Barometer elevation: 9.1 m above mean sea level

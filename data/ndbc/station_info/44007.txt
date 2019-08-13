@@ -1,0 +1,12 @@
+Owned and maintained by National Data Buoy Center
+3-meter foam buoy
+AMPS payload
+43.525 N 70.141 W (43°31'30" N 70°8'26" W)
+
+Site elevation: sea level
+Air temp height: 4 m above site elevation
+Anemometer height: 5 m above site elevation
+Barometer elevation: sea level
+Sea temp depth: 0.6 m below water line
+Water depth: 26.5 m
+Watch circle radius: 91 yards
