@@ -1,9 +1,0 @@
-Owned and maintained by National Data Buoy Center
-C-MAN Station
-MARS payload
-41.397 N 71.033 W (41°23'48" N 71°2'0" W)
-
-Site elevation: 0 m above mean sea level
-Air temp height: 24.5 m above site elevation
-Anemometer height: 24.8 m above site elevation
-Barometer elevation: 17.4 m above mean sea level

@@ -1,9 +1,0 @@
-Station operated by the US EPA & Mexican Government Cooperative Program
-Weather Station
-Sutron XPERT payload
-19.204 N 96.113 W (19°12'16" N 96°6'47" W)
-
-Site elevation: sea level
-Air temp height: 9.1 m above site elevation
-Anemometer height: 9.1 m above site elevation
-Barometer elevation: sea level

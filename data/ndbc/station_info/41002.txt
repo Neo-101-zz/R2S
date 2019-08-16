@@ -1,7 +1,7 @@
 Owned and maintained by National Data Buoy Center
 3-meter discus buoy
 SCOOP payload
-31.880 N 74.947 W (31°52'48" N 74°56'48" W)
+31.892 N 74.930 W (31°53'30" N 74°55'49" W)
 
 Site elevation: sea level
 Air temp height: 4 m above site elevation

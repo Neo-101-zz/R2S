@@ -1,7 +1,7 @@
 Owned and maintained by National Data Buoy Center
 3-meter foam buoy
 SCOOP payload
-33.761 N 119.049 W (33°45'38" N 119°2'56" W)
+33.763 N 119.053 W (33°45'48" N 119°3'11" W)
 
 Site elevation: sea level
 Air temp height: 4 m above site elevation

@@ -187,7 +187,7 @@ def save_relation(path, var):
     with open(path, 'wb') as fw:
         pickle.dump(rel, fw)
 
-def year_filter(input):
+def filter_year(input):
     """Filter the inputted year.
     
     Parameters
@@ -197,8 +197,8 @@ def year_filter(input):
     
     Returns
     -------
-    set of str
-        Return a set of str, e.g. {'1997', '1999', '2000'}.
+    set of int
+        Return a set of str, e.g. {1997, 1999, 2000}.
     
     """
     if not input:
@@ -207,23 +207,23 @@ def year_filter(input):
         # single input
         if not input.count('-'):
             res = set()
-            res.add(input)
+            res.add(int(input))
         # range input
         else:
             begin = int(input.split('-')[0])
             end = int(input.split('-')[1])
-            res = set([str(x) for x in range(begin, end+1)])
+            res = set([x for x in range(begin, end+1)])
     # hybrid input
     else:
         parts = input.replace('  ', ' ').split(' ')
         res = set()
         for part in parts:
-            temp = year_filter(part)
+            temp = filter_year(part)
             res.update(temp)
 
     return res
 
-def station_filter(input):
+def filter_station(input):
     """Filter the inputted station id.
     
     Parameters
@@ -249,15 +249,17 @@ def station_filter(input):
 
     return res
 
-def filter_input(CONFIG):
-    """Filter user's input of target year(s) and station(s).
-    """
+def input_year(CONFIG):
     print(CONFIG['prompt']['ndbc']['input']['year'], end='')
-    years = year_filter(input())
-    print(CONFIG['prompt']['ndbc']['input']['station'], end='')
-    stations = station_filter(input())
+    years = filter_year(input())
 
-    return years, stations
+    return years
+
+def input_station(CONFIG):
+    print(CONFIG['prompt']['ndbc']['input']['station'], end='')
+    stations = filter_station(input())
+
+    return stations
 
 def analysis_and_save_relation(CONFIG, years, stations):
     """Analysis and save relation between inputted year(s) and station(s)
@@ -272,7 +274,7 @@ def analysis_and_save_relation(CONFIG, years, stations):
     if years and not stations:
         # Collect stations' id according to years
         for year in years:
-            stns = station_in_a_year(year, CONFIG['urls']['ndnc']['cwind'])
+            stns = station_in_a_year(year, CONFIG['urls']['ndbc']['cwind'])
             year_station[year] = stns
             stations.update(stns)
             for stn in stns:
@@ -283,7 +285,7 @@ def analysis_and_save_relation(CONFIG, years, stations):
     elif not years and stations:
         # Collect years according to stations' id
         for stn in stations:
-            yrs = year_of_a_station(stn, CONFIG['urls']['ndnc']['cwind'])
+            yrs = year_of_a_station(stn, CONFIG['urls']['ndbc']['cwind'])
             station_year[stn] = yrs
             years.update(yrs)
             for yr in yrs:
@@ -349,11 +351,18 @@ def download_cwind_data(CONFIG, years, year_station):
 
 def download_ndbc(CONFIG):
     """Download NDBC's buoys station's information and corresponding
-    Continuous Wind Historical Data.
+    Continuous Wind Historical Data according to user's input of
+    year(s) and station(s).
 
     """
-    years, stations = filter_input(CONFIG)
+    # Set of int
+    years = input_year(CONFIG)
+    # Set of str
+    stations = input_station(CONFIG)
     year_station = analysis_and_save_relation(CONFIG, years, stations)
+    # Due to update of set in function analysis_and_save_relation,
+    # variable stations is the set of all stations corresponding to
+    # variable years now
     download_station_info(CONFIG, stations)
     download_cwind_data(CONFIG, years, year_station)
 

@@ -4,6 +4,23 @@ import os
 base_dir = '/Users/zhangdongxiang/PycharmProjects/data4all/'
 
 def match_with_ndbc(month, day, dataset, ndbc, space_d, time_d):
+    """Match ASCAT/QSCAT data with NDBC data.
+
+    Parameters
+    ----------
+    dataset : list of dict
+
+    ndbc : list of dict
+
+    Returns
+    -------
+
+    Questions
+    ---------
+    Why not include field 'scatflag' which stands for 'Scattermeter
+    Rain Flag' to cover rain information like function that matchs
+    Windsat data with NDBC data ?
+    """
     wspd_list_dataset = []
     wspd_list_ndbc = []
     wdir_list_dataset = []
@@ -17,8 +34,10 @@ def match_with_ndbc(month, day, dataset, ndbc, space_d, time_d):
             if x['month'] != month or x['day'] != day:
                 continue
             for y in dataset:
+                # Spatial filter
                 if abs(lat-y['lat']) >= space_d or abs(lon-y['lon']) >= space_d:
                     continue
+                # Temporal filter
                 if abs(x['time'] - y['time']) < time_d:
                     print('ok. ', cnt)
                     wspd_list_ndbc.append(x['wspd'])
@@ -33,6 +52,9 @@ def match_with_ndbc(month, day, dataset, ndbc, space_d, time_d):
     return wspd_list_ndbc, wspd_list_dataset, wdir_list_ndbc, wdir_list_dataset
 
 def match(year, month, satellite, ndbc, space_d, time_d):
+    """Match Windsat data with NDBC data.
+
+    """
     match_list = []
     if len(satellite) and len(ndbc):
         lat = ndbc[0]['lat']
@@ -44,12 +66,16 @@ def match(year, month, satellite, ndbc, space_d, time_d):
             for y in satellite:
                 # print('lat: '+str(lat)+';'+'lon: '+str(lon))
                 # print('y_lat: '+str(y['lat'])+';'+'y_lon: '+str(y['lon']))
+
+                # Spatial filter
                 if abs(lat-y['lat']) >= space_d or abs(lon-y['lon']) >= space_d:
                     continue
+                # Temporal filter
                 if x['day'] == y['day'] and abs(x['time'] - y['time']) < time_d:
                     print('ok. ', cnt)
                     match_point = {}
                     match_point['a_wspd'] = x['wspd']
+                    # w-aw WSPD_AW All-weather 10-meter wind speed
                     match_point['b_wspd'] = y['w-aw']
                     match_point['a_wdir'] = x['wdir']
                     match_point['b_wdir'] = y['wdir']

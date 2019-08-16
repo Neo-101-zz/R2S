@@ -148,6 +148,9 @@ def url_exists(url):
     ----------
     url : str
         Complete url of file.
+    content_type: str, optional
+        Content type of file's request header. Default value is content
+        type of gzip file.
 
     Returns
     -------
@@ -155,11 +158,25 @@ def url_exists(url):
         True if url exists, otherwise False.
 
     """
-    req = requests.get(url)
-    if req.status_code == 200:
-        return True
+    if url.startswith('http'):
+        req = requests.head(url)
+        if url.endswith('.gz'):
+            if req.headers['Content-Type'] == 'application/x-gzip':
+                return True
+            else:
+                return False
+        # elif url.endswith('.nc'):
     else:
+        # if url.startswith('ftp'):
+        return True
+
+def check_period(date_, period):
+    start = period[0]
+    end = period[1]
+    if date_ < start or date_ > end or start > end:
         return False
+
+    return True
 
 def download(url, path):
     """Download file by its url.
@@ -168,7 +185,7 @@ def download(url, path):
     ----------
     url : str
         Complete url of file.
-    path : 
+    path : str
         Absolute or saving relative path of file.
 
     Returns
@@ -179,8 +196,8 @@ def download(url, path):
     """
     if os.path.exists(path):
         return
-    req = requests.get(url)
-    if req.status_code != 200:
+
+    if not url_exists(url):
         print('File doesn\'t exist: ' + url)
         return
 

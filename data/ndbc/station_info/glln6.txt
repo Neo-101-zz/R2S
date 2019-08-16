@@ -1,5 +1,0 @@
-Owned and maintained by National Data Buoy Center
-C-MAN Station
-VEEP payload
-43.890 N 76.450 W (43°53'24" N 76°27'0" W)
-

@@ -6,13 +6,42 @@ import re
 import requests
 import os
 import pickle
+from datetime import date
 
 from bs4 import BeautifulSoup
 
-import conf_sfmr
+import load_config
 import dl_util
+import dl_ndbc
 
-def input_filter(input):
+def gen_year_hurr(CONFIG, years):
+    year_hurr = {}
+
+    for year in years:
+        if int(year) < 1994:
+            year = 'prior1994'
+        url = '{0}{1}.html'.format(
+            CONFIG['urls']['sfmr']['hurricane'][:-5], year)
+        page = requests.get(url)
+        data = page.text
+        soup = BeautifulSoup(data, features='lxml')
+        anchors = soup.find_all('a')
+
+        year_hurr[year] = set()
+
+        for link in anchors:
+            if not link.contents:
+                continue
+            text = link.contents[0]
+            if text != 'SFMR':
+                continue
+            href = link.get('href')
+            hurr = href.split('/')[-2][:-4]
+            year_hurr[year].add(hurr)
+
+    return year_hurr
+
+def filter_year_hurr_input(input):
     """Filter input to get a dict of hurricane name and year.
 
     Parameters
@@ -22,81 +51,100 @@ def input_filter(input):
 
     Returns
     -------
-    hurr_year : dict
-        A dict with hurricane name as key and its year as value.
+    year_hurr : dict
+        A dict with year as key and set of corresponding hurricane name
+        as value.
 
     """
-    hurr_year = {}
+    year_hurr = {}
     input = input.replace(' ', '').lower()
     parts = re.findall('\[(.*?)\]', input)
     for part in parts:
         if part.count(','):
-            hurr = part.split(',')[1]
             year = part.split(',')[0]
-            hurr_year[hurr] = year
+            hurr = part.split(',')[1]
+            if not year in year_hurr:
+                year_hurr[year] = set()
+            year_hurr[year].add(hurr)
         else:
-            print('Input format error.')
-            exit(0)
-    return hurr_year
+            exit('Input format error.')
 
-def dl_sfmr(hurr_year, confs):
+    return year_hurr
+
+def download_sfmr_data(CONFIG, year_hurr, period=None):
     """Download SFMR data of hurricanes.
 
     Parameters
     ----------
-    hurr_year : dict
-        A dict with hurricane name as key and its year as value.
-    confs : dict
+    year_hurr : dict
+        A dict with year as key and set of corresponding hurricane name
+        as value.
+    CONFIG : dict
         A dict of configuration.
 
     Returns
     -------
-    None
-        Nothing returned by this function.
+    hit_times : dict
+        Times of hurricane NetCDF file's date being in period.
 
     """
+    print(CONFIG['prompt']['sfmr']['info']['dl_hurr'])
+    dl_util.set_format_custom_text(CONFIG['data_name_length']['sfmr'])
     suffix = '.nc'
-    save_root_dir = confs['hurr_dir']
+    save_root_dir = CONFIG['dirs']['sfmr']['hurr']
     os.makedirs(save_root_dir, exist_ok=True)
 
-    for hurr in hurr_year.keys():
+    hit_times = {}
+    for year in year_hurr.keys():
+        hit_times[year] = {}
         # Create directory to store SFMR files
-        os.makedirs(save_root_dir + hurr_year[hurr],
-                    exist_ok=True)
-        dir_path = (save_root_dir + hurr_year[hurr]
-                    + '/' + hurr + '/')
-        os.makedirs(dir_path, exist_ok=True)
-        # Generate keyword to consist url
-        keyword = hurr + hurr_year[hurr]
-        url = '{0}{1}{2}'.format(
-            confs['storm_SFMR_url_prefix'],
-            keyword,
-            confs['storm_SFMR_url_suffix'])
-        # Get page according to url
-        page = requests.get(url)
-        data = page.text
-        soup = BeautifulSoup(data, features='lxml')
-        anchors = soup.find_all('a')
+        os.makedirs('{0}{1}'.format(save_root_dir, year), exist_ok=True)
+        hurrs = list(year_hurr[year])
+        for hurr in hurrs:
+            dir_path = '{0}{1}/{2}/'.format(
+                save_root_dir, year, hurr)
+            os.makedirs(dir_path, exist_ok=True)
+            # Generate keyword to consist url
+            keyword = '{0}{1}'.format(hurr, year)
+            url = '{0}{1}{2}'.format(CONFIG['urls']['sfmr']['prefix'], keyword,
+                                     CONFIG['urls']['sfmr']['suffix'])
+            # Get page according to url
+            page = requests.get(url)
+            data = page.text
+            soup = BeautifulSoup(data, features='lxml')
+            anchors = soup.find_all('a')
 
-        for link in anchors:
-            href = link.get('href')
-            # Find href of netcdf file
-            if href.endswith(suffix):
-                # Extract file name
-                file_name = href.split('/')[-1]
-                file_path = dir_path + file_name
-                dl_util.download(href, file_path)
+            # Times of NetCDF file's date being in period
+            hit_count = 0
+            for link in anchors:
+                href = link.get('href')
+                # Find href of netcdf file
+                if href.endswith(suffix):
+                    # Extract file name
+                    file_name = href.split('/')[-1]
+                    date_str = file_name[-13:-5]
+                    date_ = date(int(date_str[:4]),
+                                 int(date_str[4:6]),
+                                 int(date_str[6:]))
+                    if not dl_util.check_period(date_, period):
+                        continue
+                    hit_count += 1
+                    file_path = dir_path + file_name
+                    dl_util.download(href, file_path)
+            hit_times[year][hurr] = hit_count
+    
+    return hit_times
 
-def save_hurr_year(path, var):
-    """Append hurr_year to the pickle file which store this variable.
+def save_year_hurr(CONFIG, year_hurr, hit_times, strict_mode=False):
+    """Append year_hurr to the pickle file which store this variable.
     
     Parameters
     ----------
     path : str
         Location of pickle file to store the variable.
-    var : dict
-        Store the relation in the form of dict, of which key is
-        hurricane name (str) and value is corresponding year (str).
+    year_hurr : dict
+        A dict with year as key and set of corresponding hurricane name
+        as value.
     
     Returns
     -------
@@ -104,40 +152,46 @@ def save_hurr_year(path, var):
         Nothing returned by this function.
     
     """
+    if strict_mode:
+        for year in hit_times.keys():
+            for hurr in hit_times[year].keys():
+                if not hit_times[year][hurr]:
+                    year_hurr[year].remove(hurr)
+                    if not year_hurr[year]:
+                        year_hurr.pop(year)
+                        if not year_hurr:
+                            return
+
+    path = CONFIG['vars_path']['sfmr']['year_hurr']
     os.makedirs(os.path.dirname(path), exist_ok=True)
     # read relation if it exists
     if os.path.exists(path):
         with open(path, 'rb') as fr:
-            rel = pickle.load(fr)
-        # append var to existing relation
-        for key in var.keys():
-            if key in rel and rel[key] != var[key]:
-                print('Error: two versions of hurr_year has conflicted:')
-                print('old version: ' + key + '-' + rel[key])
-                print('new version: ' + key + '-' + var[key])
-                exit(0)
-            else:
-                rel[key] = var[key]
-    else:
-        rel = var
+            old_year_hurr = pickle.load(fr)
+        for year in year_hurr.keys():
+            if year in old_year_hurr:
+                year_hurr[year].update(old_year_hurr[year])
+
+    new_year_hurr = year_hurr
 
     with open(path, 'wb') as fw:
-        pickle.dump(rel, fw)
+        pickle.dump(new_year_hurr, fw)
 
-def main():
-    confs = conf_sfmr.configure()
-    print(confs['input_prompt'], end='')
-    hurr_year = input_filter(input())
-    save_hurr_year(confs['var_dir'] + 'hurr_year.pkl', hurr_year)
+def download_sfmr(CONFIG):
+    # print(CONFIG['prompt']['sfmr']['input']['hurr'], end='')
+    # year_hurr = filter_year_hurr_input(input())
+    years = dl_ndbc.input_year(CONFIG)
+    year_hurr = gen_year_hurr(CONFIG, years)
 
-    print('\nDownloading Hurrican SFMR Data')
-    dl_util.set_format_custom_text(confs['data_name_len'])
-    dl_sfmr(hurr_year, confs)
+    period = [date(2002,1,1), date(2002,9,25)]
+    hit_times = download_sfmr_data(CONFIG, year_hurr, period)
+    save_year_hurr(CONFIG, year_hurr, hit_times)
     print()
 
 if __name__ == '__main__':
+    CONFIG = load_config.load_config()
     dl_util.arrange_signal()
     # Original author's target hurricane SFMR data:
     # [2011, Dora] [2014, Simon] [2015, Guillermo]
     # [2015, Patricia] [2016, Javier]
-    main()
+    download_sfmr(CONFIG)

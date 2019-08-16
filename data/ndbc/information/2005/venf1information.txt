@@ -1,9 +1,0 @@
-Owned and maintained by National Data Buoy Center
-C-MAN Station
-ARES payload
-27.072 N 82.453 W (27°4'21" N 82°27'10" W)
-
-Site elevation: 0 m above mean sea level
-Air temp height: 7.3 m above site elevation
-Anemometer height: 11.6 m above site elevation
-Barometer elevation: 4.9 m above mean sea level

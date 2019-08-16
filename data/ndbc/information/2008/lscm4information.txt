@@ -1,5 +1,0 @@
-Owned and maintained by National Weather Service Central Region
-C-MAN Station
-42.465 N 82.755 W (42°27'54" N 82°45'18" W)
-
-Site elevation: 178.5 m above mean sea level
