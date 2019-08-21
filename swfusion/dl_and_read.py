@@ -41,14 +41,10 @@ def download_sfmr(CONFIG, period):
     hit_times = dl_sfmr.download_sfmr_data(CONFIG, year_hurr, period)
     dl_sfmr.save_year_hurr(CONFIG, year_hurr, hit_times)
 
-def download_ascat(CONFIG, period):
-    dl_satel.download_satel_data(CONFIG, 'ascat', period)
-
-def download_qscat(CONFIG, period):
-    dl_satel.download_satel_data(CONFIG, 'qscat', period)
-
-def download_wsat(CONFIG, period):
-    dl_satel.download_satel_data(CONFIG, 'wsat', period)
+def download_satel(CONFIG, satel_name, period):
+    if not dl_satel.check_satel_period(CONFIG, satel_name, period):
+        return
+    dl_satel.download_satel_data(CONFIG, satel_name, period)
 
 def read_ndbc(CONFIG, region):
     rd_ndbc.gen_station_csv(CONFIG, region)
@@ -70,9 +66,9 @@ def test(CONFIG):
     period = dl_satel.input_period(CONFIG)
     download_ndbc(CONFIG, period)
     download_sfmr(CONFIG, period)
-    download_ascat(CONFIG, period)
-    download_qscat(CONFIG, period)
-    download_wsat(CONFIG, period)
+    download_satel(CONFIG, 'ascat', period)
+    download_satel(CONFIG, 'qscat', period) 
+    download_satel(CONFIG, 'wsat', period)
 
     # region = rd_ndbc.set_region(CONFIG)
     # read_ndbc(CONFIG, region)

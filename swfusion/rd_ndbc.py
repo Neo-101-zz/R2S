@@ -11,13 +11,13 @@ import numpy as np
 
 import load_config
 
-def extract_stn_info(gzip_file_name):
+def extract_stn_info(gzip_file_path):
     """Read latitude, longitude and anemometer height of station from
     text file.
 
     Parameters
     ----------
-    gzip_file_name : str
+    gzip_file_path : str
         Path of station text file.
 
     Returns
@@ -27,7 +27,7 @@ def extract_stn_info(gzip_file_name):
 
     """
     station = {}
-    with open(gzip_file_name, 'r') as sf:
+    with open(gzip_file_path, 'r') as sf:
         # Assume the station information is not valid for using
         station['valid'] = False
         location = False
@@ -140,16 +140,18 @@ def gen_station_csv(CONFIG, region):
     min_lat, max_lat = region[0], region[1]
     min_lon, max_lon = region[2], region[3]
 
-    stations_csv = open(CONFIG['files_path']['ndbc']['station_csv'], 'w', 
+    stations_csv = open(CONFIG['files_path']['ndbc']['station_csv'], 'w',
                         newline='')
     writer = csv.writer(stations_csv)
     content = ['id', 'lat', 'lon', 'height']
     writer.writerow(content)
 
-    station_files = os.listdir(CONFIG['dirs']['ndbc']['stations'])
+    gzip_file_dir = CONFIG['dirs']['ndbc']['stations']
+    station_files = os.listdir(gzip_file_dir)
     for file in station_files:
         if '.txt' in file:
-            station = extract_stn_info(CONFIG['dirs']['ndbc']['stations'] + file)
+            gzip_file_path = gzip_file_dir + file
+            station = extract_stn_info(gzip_file_path)
             station['id'] = file[0:5]
             if (not (min_lat <= station['lat'] <= max_lat)
                 or not (min_lon <= station['lon'] <= max_lon)

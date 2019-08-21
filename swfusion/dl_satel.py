@@ -32,23 +32,29 @@ def filter_date(input):
 
     return date(int(year), int(month), int(day))
 
-def check_satel_period(CONFIG, satel_name, start_date, end_date):
+def check_satel_period(CONFIG, satel_name, period):
     """Check whether inputted start date and end date is in corresponding
     satellite's operation range.
 
     """
+    start_date = period[0]
+    end_date = period[1]
     start_limit = CONFIG['operation_dates'][satel_name]['start']
     end_limit = CONFIG['operation_dates'][satel_name]['end']
     if end_limit.year == 9999:
         end_limit = date.today()
     if start_date < start_limit:
-        exit((CONFIG['prompt']['satel']['error']['range_too_early']
-              + start_limit.strftime(' %Y/%m/%d.\n')))
+        print((CONFIG['prompt']['satel']['error']['range_too_early']
+               + start_limit.strftime(' %Y/%m/%d.\n')))
+        return False
     if end_date > end_limit:
-        exit((CONFIG['prompt']['satel']['error']['range_too_late']
-              + end_limit.strftime(' %Y/%m/%d.\n')))
+        print((CONFIG['prompt']['satel']['error']['range_too_late']
+               + end_limit.strftime(' %Y/%m/%d.\n')))
+        return False
     if start_date > end_date:
-        exit('[Error] Start date is later than end date')
+        print('[Error] Start date is later than end date')
+        return False
+    return True
 
 def download_satel_data(CONFIG, satel_name, period):
     """Download ASCAT/QucikSCAT/Windsat data in specified date range.
@@ -106,7 +112,9 @@ def input_period(CONFIG, satel_name=None, check=True):
     end_date = filter_date(
         input(CONFIG['prompt']['satel']['input']['end_date']))
     if satel_name and check:
-        check_satel_period(CONFIG, satel_name, start_date, end_date)
+        if not check_satel_period(CONFIG, satel_name,
+                                  [start_date, end_date]):
+            exit()
 
     return start_date, end_date
 

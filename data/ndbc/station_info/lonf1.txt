@@ -1,6 +1,6 @@
 Owned and maintained by National Data Buoy Center
 C-MAN Station
-MARS payload
+SCOOP payload
 24.844 N 80.864 W (24°50'38" N 80°51'49" W)
 
 Site elevation: 0 m above mean sea level
