@@ -1,13 +1,19 @@
 """Manage downloading and reading NDBC Continuous Wind data.
 
 """
+import datetime as dt
+import gzip
+import math
 import re
 import os
+import time
 
-import requests
 from bs4 import BeautifulSoup
-import sqlalchemy as sa
 import mysql.connector
+import numpy as np
+import pandas as pd
+import requests
+import sqlalchemy as sa
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, Integer, Float, String, DateTime
@@ -18,6 +24,7 @@ import utils
 import terminalsize
 
 Base = declarative_base()
+DynamicBase = declarative_base(class_registry=dict())
 
 class CwindStation(Base):
     """Represents station which produces NDBC Continuous Wind data.
@@ -55,14 +62,14 @@ class CwindManager(object):
         self.cwind_station_file_names = []
         self.cwind_data_file_names = []
         self.download()
-        self.read()
+        self.read(read_all=True)
 
     def download(self):
         """Download NDBC Continuous Wind data (including responding
         station's data).
 
         """
-        correct, period = utils.check_period(
+        correct, period = utils.check_and_update_period(
             self.period, self.CWIND_CONFIG['period_limit'],
             self.CONFIG['workflow']['prompt'])
         if not correct:
@@ -97,18 +104,21 @@ class CwindManager(object):
         # Define the MySQL engine using MySQL Connector/Python
         connect_string = ('{0}://{1}:{2}@{3}/{4}?{5}'.format(
             DBAPI, USER, password_, HOST, DB_NAME, ARGS))
-        self.engine = create_engine(connect_string, echo=True)
+        self.engine = create_engine(connect_string, echo=False)
         # Create table of cwind station
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
         self.session = self.Session()
 
-        self._insert_station_info(all)
+        self._insert_station_info(read_all)
+        # st = time.time()
+        # self._insert_data(read_all)
+        # et = time.time()
+        # print('Time: %s' % (et - st))
 
         return
 
     def _get_cwind_data_table_of_one_station(self, station_id):
-        DynamicBase = declarative_base(class_registry=dict())
 
         class CwindData(DynamicBase):
             """Represents NDBC Continuous Wind data.
@@ -119,6 +129,7 @@ class CwindManager(object):
             key = Column(Integer(), primary_key=True)
             datetime = Column(DateTime(), nullable=False, unique=True)
             wspd = Column(Float(), nullable=False)
+            wspd_10 = Column(Float(), nullable=False)
             wdir = Column(Float(), nullable=False)
             gst = Column(Float())
             gdr = Column(Float())
@@ -126,32 +137,44 @@ class CwindManager(object):
 
         return CwindData
 
-    def _insert_data(self, all):
+    def _insert_data(self, read_all):
+        print(self.CWIND_CONFIG['prompt']['info']['read_data'])
         data_dir = self.CWIND_CONFIG['dirs']['data']
         station_ids = [
             id for id in self.session.query(CwindStation.id).\
             order_by(CwindStation.id)
         ]
-        if all:
-            data_files = [x for x in os.list(data_dir) if
-                          x.endswith('.txt.gz')]
+        if read_all:
+            data_files = [x for x in os.listdir(data_dir) if
+                          x.endswith('.txt.gz')
+                          and int(x[6:10]) in self.years]
         else:
             data_files = self.cwind_data_file_names
 
         for id in station_ids:
             DataOfStation = \
-                    _get_cwind_data_table_of_one_station(id)
+                    self._get_cwind_data_table_of_one_station(id)
+            DynamicBase.metadata.create_all(self.engine)
+            self.session.commit()
             station_records = []
             for file in data_files:
                 if file.startswith(id):
                     # cwind data file belong to station in cwind_station
                     # table
                     data_path = data_dir + file
-                    records = self._extract_data(self, data_path,
+                    records = self._extract_data(data_path,
                                                  DataOfStation)
                     if records:
-                        station_records.append(records)
-
+                        station_records += records
+            """
+            breakpoint()
+            # check whether station cwind data table exists or not
+            if not self.engine.has_table(DataOfStation.__tablename__):
+                # Directly insert into table is it doesn't exist
+                self.session.add_all(station_records)
+                self.session.commit()
+                continue
+            """
             # Choose out stations which have not been inserted into table
             while station_records:
                 batch = station_records[0:1000]
@@ -164,7 +187,7 @@ class CwindManager(object):
                     )
                     for data in self.session.query(DataOfStation).filter(
                         tuple_(DataOfStation.datetime).in_(
-                            [tuple_(x.datatime) for x in batch]
+                            [tuple_(x.datetime) for x in batch]
                         )
                     )
                 )
@@ -178,17 +201,14 @@ class CwindManager(object):
                 if inserts:
                     self.session.add_all(inserts)
 
-            self.session.new
             self.session.commit()
 
-
-
-
-    def _insert_station_info(self, all):
+    def _insert_station_info(self, read_all):
+        print(self.CWIND_CONFIG['prompt']['info']['read_station'])
         min_lat, max_lat = self.region[0], self.region[1]
         min_lon, max_lon = self.region[2], self.region[3]
         station_info_dir = self.CWIND_CONFIG['dirs']['stations']
-        if all:
+        if read_all:
             station_files = [x for x in os.listdir(station_info_dir) if
                              x.endswith('.txt')]
         else:
@@ -228,12 +248,81 @@ class CwindManager(object):
             if inserts:
                 self.session.add_all(inserts)
 
-        self.session.new
         self.session.commit()
 
     def _extract_data(self, data_path, DataOfStation):
-        pass
+        data_name = data_path.split('/')[-1]
+        try:
+            with gzip.GzipFile(data_path, 'rb') as gz:
+                cwind_text = gz.read()
+        except FileNotFoundError as msg:
+            exit(msg)
+        except EOFError as msg:
+            exit(msg + ': ' + data_path)
 
+        temp_file_name = data_name[0:-3]
+        with open(temp_file_name, 'wb') as txt:
+            txt.write(cwind_text)
+        # Specify data type of columns of unzipped gzip file
+        data_type = {'names': ('year', 'month', 'day', 'hour',
+                               'minute', 'wdir', 'wspd',
+                               'gdr', 'gst', 'gtime'),
+                     'formats': ('i4', 'i2', 'i2', 'i2', 'i2',
+                                 'f4', 'f4', 'f4', 'f4', 'i4')}
+        data = np.loadtxt(temp_file_name, skiprows=1, dtype=data_type)
+        os.remove(temp_file_name)
+
+        # Store Continuous Wind Data in an entire year into a list
+        cwind_1_year = []
+        before_period = False
+        in_period = False
+        after_period = False
+        for row in data:
+            # watch datatype of each column
+            # breakpoint()
+            # Every row of data is the record of 10 minutes
+            cwind_10_mins = DataOfStation()
+            cwind_10_mins.datetime = dt.datetime(
+                int(row['year']), int(row['month']), int(row['day']),
+                int(row['hour']), int(row['minute']), 0)
+            # When row's datetime is after period, skip all rows
+            # left, because all rows are sorted in chronological
+            # order
+            if cwind_10_mins.datetime > self.period[1]:
+                break
+            elif (cwind_10_mins.datetime < self.period[0]
+                  or cwind_10_mins.datetime is None):
+                continue
+            anemometer_elev = self.session.query(CwindStation).\
+                    filter_by(id=data_name[:5]).\
+                    first().anemometer_elev
+            if row['wspd'] == 99.0:
+                continue
+            else:
+                cwind_10_mins.wspd = float(row['wspd'])
+            if cwind_10_mins.wspd is None:
+                continue
+            cwind_10_mins.wspd_10 = self._convert_10(float(row['wspd']),
+                                                     anemometer_elev)
+            if row['wdir'] == 999:
+                continue
+            else:
+                cwind_10_mins.wdir = float(row['wdir'])
+            if cwind_10_mins.wdir is None:
+                continue
+            cwind_10_mins.gst = (None if row['gst'] == 99.0 \
+                                 else float(row['gst']))
+            cwind_10_mins.gdr = (None if row['gdr'] == 999 \
+                                 else float(row['gdr']))
+            cwind_10_mins.gtime = (None if row['gtime']%100 == 99 \
+                                   else int(row['gtime'])%100)
+
+            cwind_1_year.append(cwind_10_mins)
+
+        if len(cwind_1_year):
+            return cwind_1_year
+        else:
+            return None
 
     def _extract_station_info(self, station_info_path):
         station = CwindStation()
@@ -297,6 +386,38 @@ class CwindManager(object):
 
         return station
 
+    def _convert_10(self, wspd, height):
+        """Convert the wind speed at the the height of anemometer to
+        the wind speed at the height of 10 meters.
+
+        Parameters
+        ----------
+        wspd : float
+            Wind speed at the height of anemometer.
+        height : float
+            The height of anemometer.
+
+        Returns
+        -------
+        con_wspd : float
+            Wind speed at the height of 10 meters.
+
+        References
+        ----------
+        Xiaoping Xie, Jiansu Wei, and Liang Huang, Evaluation of ASCAT
+        Coastal Wind Product Using Nearshore Buoy Data, Journal of Applied
+        Meteorological Science 25 (2014), no. 4, 445–453.
+
+        """
+        if wspd <= 7:
+            z0 = 0.0023
+        else:
+            z0 = 0.022
+        kz = math.log(10/z0) / math.log(height/z0)
+        con_wspd = wspd * kz
+
+        return con_wspd
+
     def _extract_general_num(self, line):
         pattern = r"[-+]?\d*\.\d+|\d+"
         return float(re.findall(pattern, line)[0])
@@ -339,7 +460,7 @@ class CwindManager(object):
         """Download all self.stations' information into single directory.
 
         """
-        print(self.CWIND_CONFIG['prompt']['info']['dl_cwind_station'])
+        print(self.CWIND_CONFIG['prompt']['info']['download_station'])
         for stn in self.stations:
             i = 0
             while True:
@@ -351,13 +472,13 @@ class CwindManager(object):
                     # Only loop when cannot get html of cwind station
                     # webpage
                     print(self.CWIND_CONFIG['prompt']['error'] \
-                          ['fail_dl_cwind_station'] + stn)
+                          ['fail_download_station'] + stn)
                     i += 1
                     if i <= self.CWIND_CONFIG['retry_times']:
                         print('reconnect: %d' % i)
                     else:
                         print(self.CWIND_CONFIG['prompt']['info'][
-                            'skip_dl_cwind_station'])
+                            'skip_download_station'])
                         break
         print()
 
@@ -365,7 +486,7 @@ class CwindManager(object):
         """Download Continuous Wind data into single directory.
 
         """
-        print(self.CWIND_CONFIG['prompt']['info']['dl_cwind_data'])
+        print(self.CWIND_CONFIG['prompt']['info']['download_data'])
         utils.set_format_custom_text(self.CWIND_CONFIG['data_name_length'])
         for year in self.years:
             for stn in self.year_station[year]:

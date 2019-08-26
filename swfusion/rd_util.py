@@ -2,7 +2,6 @@
 
 import math
 import sys
-from functools import partial
 
 from ascat_daily import ASCATDaily
 from quikscat_daily_v4 import QuikScatDaily
@@ -19,25 +18,25 @@ def read_daily_satel(satel_name, file_path, missing_val=-999.0):
         sys.exit('Invalid satellite name')
 
     if not dataset.variables:
-        sys.exit('Filenot found')
+        sys.exit('[Error] File not found: ' + file_path)
 
     return dataset
 
-def show_dimensions(ds):
+def show_bytemap_dimensions(ds):
     print('')
     print('Dimensions')
     for dim in ds.dimensions:
         aline = ' '.join([' '*3, dim, ':', str(ds.dimensions[dim])])
         print(aline)
 
-def show_variables(ds):
+def show_bytemap_variables(ds):
     print('')
     print('Variables:')
     for var in ds.variables:
         aline = ' '.join([' '*3, var, ':', ds.variables[var].long_name])
         print(aline)
 
-def show_validrange(ds):
+def show_bytemap_validrange(ds):
     print('')
     print('Valid min and max and units:')
     for var in ds.variables:
@@ -57,11 +56,12 @@ def find_index(range, lat_or_lon):
         elif lat_or_lon == 'lon':
             delta = val - 0.125
         else:
-            print('Error parameter lat_or_lon: ' + lat_or_lon)
-            exit(0)
+            exit('Error parameter lat_or_lon: ' + lat_or_lon)
         intervals = delta / 0.25
+        # Find index of min_lat or min_lon
         if not idx:
             res.append(math.ceil(intervals))
+        # Find index of max_lat or max_lon
         else:
             res.append(math.floor(intervals))
 
@@ -71,7 +71,7 @@ def cut_map(satel_name, dataset, region, year, month, day,
             missing_val=-999.0):
     min_lat, max_lat = find_index([region[0], region[1]], 'lat')
     lat_indices = [x for x in range(min_lat, max_lat+1)]
-    min_lon, max_lon = find_index([region[2], regionn[3]], 'lon')
+    min_lon, max_lon = find_index([region[2], region[3]], 'lon')
     lon_indices = [x for x in range(min_lon, max_lon+1)]
 
     data_list = []

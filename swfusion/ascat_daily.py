@@ -186,7 +186,7 @@ def set_verify_flags(dataset,variables):
 if __name__ == '__main__':
     """ Automated testing. """
 
-    path = '../data/satel/ascat/ascat_20070301_v02.1.gz'
+    path = '../data/satel/ascat_bmaps/ascat_20070301_v02.1.gz'
     ascat = ASCATDaily(path, missing=-999.)
     if not ascat.variables:
         sys.exit('file not found')
