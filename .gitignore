@@ -8,6 +8,7 @@
 !*.py
 !requirements.txt
 !*.yml
+!*.yaml
 
 # Even if they are in subdirectories
 

@@ -1,0 +1,177 @@
+logging:
+  dir: '../log'
+cwind:
+  urls:
+    data: 'https://www.ndbc.noaa.gov/data/historical/cwind/'
+    stations: 'https://www.ndbc.noaa.gov/station_page.php'
+  period_limit:
+    start: 1988-08-31 23:00:00
+    end: 9999-12-31 23:59:59
+  retry_times: 10
+  data_name_length: 16
+  dirs:
+    vars: '../data/ndbc/variable/'
+    stations: '../data/ndbc/station_info/'
+    data: '../data/ndbc/cwind_data/'
+    pickle: '../data/ndbc/cwind_pickle/'
+  files_path:
+    station_csv: '../data/ndbc/stations.csv'
+  vars_path:
+    year_station: '../data/ndbc/variable/year_station.pkl'
+    station_year: '../data/ndbc/variable/station_year.pkl'
+  prompt:
+    info:
+      download_station: |-
+        [Info] Downloading Information of NDBC Continuous Wind Station
+      skip_download_station: |-
+        [Info] Fail downloading information of cwind station: 
+      download_data: |-
+        [Info] Downloading NDBC Continuous Wind Data
+      read_station: |-
+        [Info] Reading cwind station information
+      read_data: |-
+        [Info] Reading cwind data
+    error:
+      fail_download_cwind_station: |-
+        [Error] Fail downloading infromation of cwind station: 
+sfmr:
+  urls:
+    hurricane: 'https://www.aoml.noaa.gov/hrd/data_sub/hurr.html'
+    prefix: 'https://www.aoml.noaa.gov/hrd/Storm_pages/'
+    suffix: '/sfmr.html'
+  period_limit:
+    start: 1998-1-1 00:00:00
+    end: 9999-12-31 23:59:59
+  data_name_length: 21
+  dirs:
+    vars: '../data/sfmr/variable/'
+    hurr: '../data/sfmr/hurr_data/'
+    pickle: '../data/sfmr/sfmr_pickle/'
+  table_names:
+    prefix: 'sfmr_'
+  vars_path:
+    year_hurr: '../data/sfmr/variable/year_hurr.pkl'
+  prompt:
+    info:
+      download_hurr: |-
+        [Info] Downloading Hurricane SFMR Data
+      insert_year_table: |-
+        [Info] Writing hurricane SFMR data into 
+      extract_netcdf: |-
+        [Info] Extracting data from NetCDF file of hurricane: 
+ascat:
+  urls: 'http://data.remss.com/ascat/metopa/bmaps_v02.1/'
+  period_limit:
+    start: 2007-03-01 00:00:00
+    end: 9999-12-31 23:59:59
+  data_name_length: 26
+  missing_value: -999.0
+  dirs:
+    bmaps: '../data/satel/ascat_bmaps/'
+    pickle: '../data/satel/ascat_pickle/'
+  data_suffix: '_v02.1.gz'
+  files_path:
+    missing_dates: '../data/satel/ascat_missing_dates.pkl'
+  prompt:
+    info:
+      download: |-
+        [Info] Downloading ASCAT data
+      read: |-
+        [Info] Reading ASCAT data
+qscat:
+  urls: 'http://data.remss.com/qscat/bmaps_v04/'
+  period_limit:
+    start: 1999-07-19 00:00:00
+    end: 2009-11-19 23:59:59
+  data_name_length: 26
+  missing_value: -999.0
+  dirs:
+    bmaps: '../data/satel/qscat_bmaps/'
+    pickle: '../data/satel/qscat_pickle/'
+  data_suffix: 'v4.gz'
+  files_path:
+    missing_dates: '../data/satel/qscat_missing_dates.pkl'
+  prompt:
+    info:
+      download: |-
+        [Info] Downloading QucikSCAT data
+      read: |-
+        [Info] Reading QuickSCAT data
+wsat:
+  urls: 'http://data.remss.com/windsat/bmaps_v07.0.1/'
+  period_limit:
+    start: 2003-02-05 00:00:00
+    end: 9999-12-31 23:59:59
+  data_name_length: 26
+  missing_value: -999.0
+  dirs:
+    bmaps: '../data/satel/windsat_bmaps/'
+    pickle: '../data/satel/windsat_pickle/'
+  data_suffix: 'v7.0.1.gz'
+  files_path:
+    missing_dates: '../data/satel/wsat_missing_dates.pkl'
+  prompt:
+    info:
+      download: |-
+        [Info] Downloading Windsat data
+      read: |-
+        [Info] Reading Windsat data
+test:
+  dirs:
+    pics: '../test/pics/'
+database:
+  db_api: 'mysql+mysqlconnector'
+  user: 'root'
+  host: 'localhost'
+  port: '3306'
+  db_name: 'SWFusion'
+  args: 'use_pure=True'
+  batch_size: 1000
+workflow:
+  default_region:
+    min_latitude: -90.0
+    max_latitude: 90.0
+    min_longitude: 0.0
+    max_longitude: 360.0
+  prompt:
+    input:
+      start_date: |-
+        [Input] Enter start datetime in form of
+        YEAR/MONTH/DAY/HOUR/MINUTE/SECOND: 
+      end_date: |-
+        [Input] Enter end datetime in form of
+        YEAR/MONTH/DAY/HOUR/MINUTE/SECOND: 
+      db_root_password: >-
+        [Input] Enter MySQL root password: 
+      min_latitude: |-
+        [Input] Enter MINIMAL latitude
+        (negative if in southern hemisphere,
+        press ENTER to input default value -90): 
+      max_latitude: |-
+        [Input] Enter MAXIMAL latitude
+        (negative if in southern hemisphere,
+        press ENTER to input default value 90): 
+      min_longitude: |-
+        [Input] Enter MINIMAL longitude
+        (0~180 if in western hemisphere,
+        180~360 if in eastern hemisphere,
+        press ENTER to input default value 0): 
+      max_longitude: |-
+        [Input] Enter MAXIMAL longitude
+        (0~180 if in western hemisphere,
+        180~360 if in eastern hemisphere,
+        press ENTER to input default value 360): 
+    info:
+      period: |-
+        [Info] Inputting period
+      specify_region: |-
+        [Info] Specifying region
+      mysql_root_passwd: |-
+        [Info] Inputting database parameters
+    error:
+      too_early: |-
+        [Error] Start datetime is too early. Must not be earlier than
+      too_late: |-
+        [Error] End datetime is too late. Must not be later than
+      time_flow_backward: |-
+        [Error] Start datetime is later than end datetime.
