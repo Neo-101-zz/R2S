@@ -16,9 +16,11 @@ import requests
 import sqlalchemy as sa
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, Integer, Float, String, DateTime
+from sqlalchemy import Integer, Float, String, DateTime
+from sqlalchemy import Table, Column, MetaData
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import tuple_
+from sqlalchemy.orm import mapper
 
 import utils
 import terminalsize
@@ -111,29 +113,42 @@ class CwindManager(object):
         self.session = self.Session()
 
         self._insert_station_info(read_all)
-        # st = time.time()
-        # self._insert_data(read_all)
-        # et = time.time()
-        # print('Time: %s' % (et - st))
+        self._insert_data(read_all)
 
         return
 
-    def _get_cwind_data_table_of_one_station(self, station_id):
+    def _create_cwind_data_table(self, station_id):
+        table_name = 'cwind_%s' % station_id
 
-        class CwindData(DynamicBase):
-            """Represents NDBC Continuous Wind data.
+        class CwindData(object):
+            pass
 
-            """
-            __tablename__ = 'cwind_%s' % station_id
+        # breakpoint()
+        # if station_id[0] == '41035':
+        #     breakpoint()
+        if self.engine.dialect.has_table(self.engine, table_name): 
+            metadata = MetaData(bind=self.engine, reflect=True)
+            t = metadata.tables[table_name]
+            mapper(CwindData, t)
 
-            key = Column(Integer(), primary_key=True)
-            datetime = Column(DateTime(), nullable=False, unique=True)
-            wspd = Column(Float(), nullable=False)
-            wspd_10 = Column(Float(), nullable=False)
-            wdir = Column(Float(), nullable=False)
-            gst = Column(Float())
-            gdr = Column(Float())
-            gtime = Column(Float())
+            return CwindData
+
+        cols = []
+        cols.append(Column('key', Integer(), primary_key=True))
+        cols.append(Column('datetime', DateTime(), nullable=False,
+                           unique=True))
+        cols.append(Column('wspd', Float(), nullable=False))
+        cols.append(Column('wspd_10', Float(), nullable=False))
+        cols.append(Column('wdir', Float(), nullable=False))
+        cols.append(Column('gst', Float()))
+        cols.append(Column('gdr', Float()))
+        cols.append(Column('gtime', Float()))
+
+        metadata = MetaData(bind=self.engine)
+        t = Table(table_name, metadata, *cols)
+        metadata.create_all()
+        mapper(CwindData, t)
+        self.session.commit()
 
         return CwindData
 
@@ -150,12 +165,9 @@ class CwindManager(object):
                           and int(x[6:10]) in self.years]
         else:
             data_files = self.cwind_data_file_names
-
         for id in station_ids:
-            DataOfStation = \
-                    self._get_cwind_data_table_of_one_station(id)
-            DynamicBase.metadata.create_all(self.engine)
-            self.session.commit()
+            id = id[0]
+            DataOfStation = self._create_cwind_data_table(id)
             station_records = []
             for file in data_files:
                 if file.startswith(id):
@@ -166,42 +178,9 @@ class CwindManager(object):
                                                  DataOfStation)
                     if records:
                         station_records += records
-            """
-            breakpoint()
-            # check whether station cwind data table exists or not
-            if not self.engine.has_table(DataOfStation.__tablename__):
-                # Directly insert into table is it doesn't exist
-                self.session.add_all(station_records)
-                self.session.commit()
-                continue
-            """
-            # Choose out stations which have not been inserted into table
-            while station_records:
-                batch = station_records[0:1000]
-                station_records = station_records[1000:]
-
-                existing_records = dict(
-                    (
-                        (data.datetime),
-                        data
-                    )
-                    for data in self.session.query(DataOfStation).filter(
-                        tuple_(DataOfStation.datetime).in_(
-                            [tuple_(x.datetime) for x in batch]
-                        )
-                    )
-                )
-                inserts = []
-                for data in batch:
-                    existing = existing_records.get(data.datetime, None)
-                    if existing:
-                        pass
-                    else:
-                        inserts.append(data)
-                if inserts:
-                    self.session.add_all(inserts)
-
-            self.session.commit()
+            utils.bulk_insert_avoid_duplicate_unique(
+                station_records, self.CONFIG['database']['batch_size'],
+                DataOfStation, ['datetime'], self.session, check_self=True)
 
     def _insert_station_info(self, read_all):
         print(self.CWIND_CONFIG['prompt']['info']['read_station'])
@@ -213,8 +192,6 @@ class CwindManager(object):
                              x.endswith('.txt')]
         else:
             station_files = self.cwind_station_file_names
-        print(len(station_files))
-        print(len(self.cwind_station_file_names))
         all_stations = []
         for file_name in station_files:
             station_info_path = station_info_dir + file_name
@@ -222,33 +199,9 @@ class CwindManager(object):
             if station:
                 all_stations.append(station)
 
-        # Choose out stations which have not been inserted into table
-        while all_stations:
-            batch = all_stations[0:100]
-            all_stations = all_stations[100:]
-
-            existing_stations = dict(
-                (
-                    (stn.id),
-                    stn
-                )
-                for stn in self.session.query(CwindStation).filter(
-                    tuple_(CwindStation.id).in_(
-                        [tuple_(x.id) for x in batch]
-                    )
-                )
-            )
-            inserts = []
-            for stn in batch:
-                existing = existing_stations.get(stn.id, None)
-                if existing:
-                    pass
-                else:
-                    inserts.append(stn)
-            if inserts:
-                self.session.add_all(inserts)
-
-        self.session.commit()
+        utils.bulk_insert_avoid_duplicate_unique(
+            all_stations, self.CONFIG['database']['batch_size'],
+            CwindStation, ['id'], self.session)
 
     def _extract_data(self, data_path, DataOfStation):
         data_name = data_path.split('/')[-1]
@@ -381,7 +334,6 @@ class CwindManager(object):
             or station.site_elev is None
             or station.latitude is None
             or station.longitude is None):
-            print(station.id)
             return None
 
         return station
@@ -480,7 +432,6 @@ class CwindManager(object):
                         print(self.CWIND_CONFIG['prompt']['info'][
                             'skip_download_station'])
                         break
-        print()
 
     def _download_all_cwind_data(self):
         """Download Continuous Wind data into single directory.
@@ -542,7 +493,6 @@ class CwindManager(object):
         with open(file_path, 'w') as stn_file:
             stn_file.write(information[1].text)
         self.cwind_station_file_names.append(file_name)
-        print(station, end='\t', flush=True)
         return True
 
     def _download_single_cwind_data(self, station, year):

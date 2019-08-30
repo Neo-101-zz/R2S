@@ -5,6 +5,8 @@ import datetime
 import math
 import pickle
 import os
+import time
+import sys
 
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -27,7 +29,7 @@ class SatelManager(object):
         self.period = period
         self.region = region
 
-        # self.download()
+        self.download()
         self.read(read_all=True)
 
     def download(self):
@@ -81,38 +83,214 @@ class SatelManager(object):
             files_path = dict()
             for satel_name in self.satel_names:
                 files_path[satel_name] = []
-                files_path[satel_name] += \
-                        os.listdir(self.CONFIG[satel_name]['dirs']['bmaps'])
+                files_path[satel_name] += [
+                    (self.CONFIG[satel_name]['dirs']['bmaps']
+                     + x) for x in os.listdir(
+                         self.CONFIG[satel_name]['dirs']['bmaps'])
+                    if x.endswith('.gz')
+                ]
         else:
             files_path = self.downloaded_file_path
 
+        skip_vars = ['mingmt', 'nodata']
+        not_null_vars = ['latitude', 'longitude']
+        unique_vars = []
+        custom_cols = {1: Column('datetime', DateTime(),
+                                 nullable=False, unique=False),
+                       -1: Column('space_time', String(255),
+                                 nullable=False, unique=True)}
+
         for satel_name in files_path.keys():
+            print(self.CONFIG[satel_name]['prompt']['info']['read'])
             # Create table of particular satellite
             bytemap_file = files_path[satel_name][0]
-            table_name = satel_name
-            skip_vars = ['mingmt']
-            notnull_vars = ['latitude', 'longitude']
             if satel_name == 'ascat' or satel_name == 'qscat':
-                notnull_vars += ['windspd', 'winddir']
+                not_null_vars += ['windspd', 'winddir']
             elif satel_name == 'wsat':
-                notnull_vars += ['w-aw', 'wdir'] 
-            unique_vars = []
-            custom_cols = {1: Column('DATETIME', DateTime(),
-                                     nullable=False, unique=False),
-                           -1: Column('SPACE_TIME', String(255),
-                                     nullable=False, unique=True)}
-
-            SatelTable = utils.create_table_from_bytemap(
-                self.engine, satel_name, bytemap_file,
-                table_name, self.session, skip_vars, notnull_vars,
-                unique_vars, custom_cols)
-            breakpoint()
+                not_null_vars += ['w-aw', 'wdir'] 
 
             for file_path in files_path[satel_name]:
-                    dataset = self._dataset_of_daily_satel(satel_name,
-                                                           file_path)
-                    one_day_records = self._read_satel_dataset(satel_name,
-                                                               dataset)
+                print(f'Extracting from {file_path.split("/")[-1]}')
+                year_str = file_path.split('/')[-1].split('_')[1][:4]
+                table_name = '{0}_{1}'.format(satel_name, year_str)
+
+                SatelTable = utils.create_table_from_bytemap(
+                    self.engine, satel_name, bytemap_file,
+                    table_name, self.session, skip_vars, not_null_vars,
+                    unique_vars, custom_cols)
+
+                st = time.time()
+                one_day_records = self._extract_satel_bytemap(satel_name,
+                                                              file_path,
+                                                              SatelTable)
+                et = time.time()
+                utils.delete_last_lines()
+                print(f'Done in {et-st:.1f}s')
+
+                print(f'Inserting into {table_name}')
+                total_sample = one_day_records
+                batch_size = self.CONFIG['database']['batch_size']
+                table_class = SatelTable
+                unique_cols = ['space_time']
+                session = self.session
+                st = time.time()
+                utils.bulk_insert_avoid_duplicate_unique(
+                    total_sample, batch_size, table_class, unique_cols,
+                    session)
+                et = time.time()
+                utils.delete_last_lines()
+                print(f'Done in {et-st:.1f}s')
+
+    def _extract_satel_bytemap(self, satel_name, file_path, SatelTable):
+        bm_file = file_path
+        table_class = SatelTable
+        skip_vars = ['mingmt', 'nodata']
+        datetime_func = datetime_from_bytemap
+        datetime_col_name = 'datetime'
+        missing = self.CONFIG[satel_name]['missing_value']
+        valid_func = valid_bytemap
+        unique_func = utils.gen_space_time_fingerprint
+        unique_col_name = 'space_time'
+        lat_name = 'latitude'
+        lon_name = 'longitude'
+        period = self.period
+        region = self.region
+        not_null_vars = ['latitude', 'longitude']
+        if satel_name == 'ascat' or satel_name == 'qscat':
+            not_null_vars += ['windspd', 'winddir']
+        elif satel_name == 'wsat':
+            not_null_vars += ['w_aw', 'wdir']
+
+        # Not recommend to use utils.extract_bytemap_to_table, because it's
+        # very slow due to too much fucntion call
+        res = self._extract_bytemap_to_table_2(satel_name, bm_file,
+                                               table_class, missing)
+
+        return res
+
+    def _extract_bytemap_to_table_2(self, satel_name, bm_file, table_class,
+                                    missing):
+        dataset = utils.dataset_of_daily_satel(satel_name, bm_file)
+        vars = dataset.variables
+
+        min_lat, max_lat = self.region[0], self.region[1]
+        min_lon, max_lon = self.region[2], self.region[3]
+        min_lat_idx, max_lat_idx = utils.find_index([min_lat, max_lat], 'lat')
+        lat_indices = [x for x in range(min_lat_idx, max_lat_idx+1)]
+        min_lon_idx, max_lon_idx = utils.find_index([min_lon, max_lon], 'lon')
+        lon_indices = [x for x in range(min_lon_idx, max_lon_idx+1)]
+
+        lat_len = len(lat_indices)
+        lon_len = len(lon_indices)
+        total = 2 * lat_len * lon_len
+        count = 0
+        t_count = 0
+
+        # Store all rows
+        whole_table = []
+
+        st = time.time()
+        iasc = [0, 1]
+        # iasc = 0 (morning, descending passes)
+        # iasc = 1 (evening, ascending passes)
+        for i in iasc:
+            for j in lat_indices:
+                for k in lon_indices:
+                    count += 1
+                    if count % 2000 == 0:
+                        progress = float(count)/total*100
+                        print('\r{:.1f}%'.format(progress), end='')
+                    if t_count == -1:
+                        et = time.time()
+                        print('\ntime: %s' % (et - st))
+                        print('iter count: %d' % count)
+                        print('true count: %d' % t_count)
+                        breakpoint()
+                    # if not valid_func(vars, i, j, k):
+                    if vars['nodata'][i][j][k]:
+                        continue
+                    table_row = table_class()
+                    lat = vars['latitude'][j]
+                    lon = vars['longitude'][k]
+                    if (not lat or not lon
+                        or lat == missing or lon == missing
+                        or lat < min_lat or lat > max_lat
+                        or lon < min_lon or lon > max_lon):
+                        continue
+                    # setattr(table_row, lat_name, float(lat))
+                    # setattr(table_row, lon_name, float(lon))
+                    table_row.latitude = float(lat)
+                    table_row.longitude = float(lon)
+                    # Set datetime
+                    try:
+                        mingmt = float(vars['mingmt'][i][j][k])
+                        # See note about same mingmt for detail
+                        if (mingmt == missing
+                            or vars['mingmt'][0][j][k] == \
+                            vars['mingmt'][1][j][k]):
+                            continue
+                        time_str ='{:02d}{:02d}00'.format(
+                            *divmod(int(mingmt), 60))
+                        bm_file_name = bm_file.split('/')[-1]
+                        date_str = bm_file_name.split('_')[1][:8]
+
+                        if time_str.startswith('24'):
+                            date_ = datetime.datetime.strptime(
+                                date_str + '000000', '%Y%m%d%H%M%S').date()
+                            time_ = datetime.time(0, 0, 0)
+                            date_ = date_ + datetime.timedelta(days=1)
+                            datetime_ = datetime.datetime.combine(
+                                date_, time_)
+                        else:
+                            datetime_ = datetime.datetime.strptime(
+                                date_str + time_str, '%Y%m%d%H%M%S')
+                    except Exception as msg:
+                        breakpoint()
+                        exit(msg)
+                    # Period check
+                    if not datetime_ or not utils.check_period(datetime_,
+                                                         self.period):
+                        continue
+                    table_row.datetime = datetime_
+
+                    table_row.space_time = '%s %f %f' % (datetime_, lat, lon)
+
+                    valid = True
+                    table_row.land = bool(vars['land'][i][j][k])
+                    table_row.ice = bool(vars['ice'][i][j][k])
+                    if satel_name == 'ascat' or satel_name == 'qscat':
+                        table_row.windspd = float(vars['windspd'][i][j][k])
+                        table_row.winddir = float(vars['winddir'][i][j][k])
+                        if (table_row.windspd is None 
+                            or table_row.winddir is None
+                            or table_row.windspd == missing
+                            or table_row.winddir == missing):
+                            continue
+                        table_row.scatflag = float(vars['scatflag'][i][j][k])
+                        table_row.radrain = float(vars['radrain'][i][j][k])
+                        if satel_name == 'ascat':
+                            table_row.sos = float(vars['sos'][i][j][k])
+                    elif satel_name == 'wsat':
+                        table_row.w_aw = float(vars['w-aw'][i][j][k])
+                        table_row.wdir = float(vars['wdir'][i][j][k])
+                        if (table_row.w_aw is None 
+                            or table_row.wdir is None
+                            or table_row.w_aw == missing
+                            or table_row.wdir == missing):
+                            continue
+                        table_row.vapor = float(vars['vapor'][i][j][k])
+                        table_row.cloud = float(vars['cloud'][i][j][k])
+                        table_row.rain = float(vars['rain'][i][j][k])
+                        table_row.w_lf = float(vars['w-lf'][i][j][k])
+                        table_row.w_mf = float(vars['w-mf'][i][j][k])
+                    else:
+                        sys.exit('satel_name is wrong.')
+
+                    if valid:
+                        whole_table.append(table_row)
+                        t_count += 1
+
+        return whole_table
 
     def _read_satel_dataset(self, satel_name, dataset, missing_val=-999.0):
         min_lat_index, max_lat_index = self._find_index(
@@ -121,44 +299,6 @@ class SatelManager(object):
         min_lon_index, max_lon_index = self._find_index(
             [self.region[2], self.region[3]], 'lon')
         lon_indices = [x for x in range(min_lon_index, max_lon_index+1)]
-
-
-    def _find_index(self, range, lat_or_lon):
-        # latitude: from -89.875 to 89.875, 720 values, interval = 0.25
-        # longitude: from 0.125 to 359.875, 1440 values, interval = 0.25
-        res = []
-        for idx, val in enumerate(range):
-            if lat_or_lon == 'lat':
-                delta = val + 89.875
-            elif lat_or_lon == 'lon':
-                delta = val - 0.125
-            else:
-                exit('Error parameter lat_or_lon: ' + lat_or_lon)
-            intervals = delta / 0.25
-            # Find index of min_lat or min_lon
-            if not idx:
-                res.append(math.ceil(intervals))
-            # Find index of max_lat or max_lon
-            else:
-                res.append(math.floor(intervals))
-
-        return res
-
-    def _dataset_of_daily_satel(self, satel_name, file_path,
-                                missing_val=-999.0):
-        if satel_name == 'ascat':
-            dataset = ASCATDaily(file_path, missing=missing_val)
-        elif satel_name == 'qscat':
-            dataset = QuikScatDaily(file_path, missing=missing_val)
-        elif satel_name == 'wsat':
-            dataset = WindSatDaily(file_path, missing=missing_val)
-        else:
-            sys.exit('Invalid satellite name')
-
-        if not dataset.variables:
-            sys.exit('[Error] File not found: ' + file_path)
-
-        return dataset
 
     def _download_single_satel(self, config, satel_name, period):
         """Download ASCAT/QucikSCAT/Windsat data in specified date range.
@@ -201,3 +341,24 @@ class SatelManager(object):
 
         with open(missing_dates_file, 'wb') as fw:
             pickle.dump(missing_dates, fw)
+
+def datetime_from_bytemap(bm_file_path, vars, i, j, k, missing):
+    bm_file_name = bm_file_path.split('/')[-1]
+    date_str = bm_file_name.split('_')[1][:8]
+    mingmt = int(vars['mingmt'][i][j][k])
+    time_str = '{:02d}{:02d}00'.format(*divmod(mingmt, 60))
+
+    datetime_ = datetime.datetime.strptime(date_str + time_str, '%Y%m%d%H%M%S')
+
+    return datetime_
+
+def valid_bytemap(vars, i, j, k):
+    if vars['nodata'][i][j][k]:
+        return False
+    return True
+
+def row2dict(row):
+    d = row.__dict__
+    d.pop('_sa_instance_state', None)
+
+    return d

@@ -1,9 +1,11 @@
 from datetime import date
 import datetime
+import math
 import os
 import signal
 import sys
 import pickle
+import time
 
 import numpy as np
 from urllib import request
@@ -13,7 +15,8 @@ import mysql.connector
 from mysql.connector import errorcode
 import netCDF4
 import bytemaps
-from sqlalchemy import Table, Column, Integer, Float, String, DateTime, MetaData
+from sqlalchemy import Integer, Float, String, DateTime, Boolean
+from sqlalchemy import Table, Column, MetaData
 from sqlalchemy.orm import mapper
 from sqlalchemy import tuple_
 
@@ -25,6 +28,15 @@ from windsat_daily_v7 import WindSatDaily
 pbar = None
 format_custom_text = None
 current_file = None
+
+def delete_last_lines(n=1):
+    CURSOR_UP_ONE = '\x1b[1A'
+    CURSOR_LEFT_HEAD = '\x1b[1G'
+    ERASE_LINE = '\x1b[2K'
+
+    for _ in range(n):
+        sys.stdout.write(ERASE_LINE)
+        sys.stdout.write(CURSOR_LEFT_HEAD)
 
 def arrange_signal():
     """Arrange handler for several signal.
@@ -141,13 +153,11 @@ def show_progress(block_num, block_size, total_size):
             maxval=total_size,
             widgets=[
                 format_custom_text,
-                '  | %-8s  ' % sizeof_fmt(total_size),
-                progressbar.Percentage(),
-                ' ', progressbar.Bar(marker=progressbar.RotatingMarker()),
+                ' | %-8s' % sizeof_fmt(total_size),
+                ' | ', progressbar.Percentage(),
+                ' ', progressbar.Bar(marker='#', left='| ', right=' |'),
                 ' ', progressbar.ETA(),
-                ' ', progressbar.FileTransferSpeed(),
-                # progressbar.Bar(marker=u'\u2588', fill='.',
-                #                 left='| ', right= ' |'),
+                ' | ', progressbar.FileTransferSpeed(),
             ])
 
     downloaded = block_num * block_size
@@ -177,10 +187,14 @@ def url_exists(url):
     if url.startswith('http'):
         req = requests.head(url)
         if url.endswith('.gz'):
-            if req.headers['Content-Type'] == 'application/x-gzip':
-                return True
-            else:
-                return False
+            try:
+                if req.headers['Content-Type'] == 'application/x-gzip':
+                    return True
+                else:
+                    return False
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
         # elif url.endswith('.nc'):
     else:
         # if url.startswith('ftp'):
@@ -435,8 +449,6 @@ def extract_netcdf_to_table(nc_file, table_class, skip_vars,
         User-specified range of datetime.  Length is two.  Fisrt element is
         start datetime and second element is end datetime.
     region : list of float
-        
-
 
     Returns
     -------
@@ -455,10 +467,12 @@ def extract_netcdf_to_table(nc_file, table_class, skip_vars,
 
     # Store all rows
     whole_table = []
+    ds_min_lat = 90.0
+    ds_max_lat = -90.0
+    ds_min_lon = 360.0
+    ds_max_lon = 0.0
 
     for i in range(length):
-        if i % 5000 == 0:
-            print('Row %d' % i)
         table_row = table_class()
         # Check whether the row is valid or not
         if not valid_func(vars, i):
@@ -507,26 +521,48 @@ def extract_netcdf_to_table(nc_file, table_class, skip_vars,
         if valid:
             whole_table.append(table_row)
 
-    return whole_table
+            if getattr(table_row, lat_name) < ds_min_lat:
+                ds_min_lat = getattr(table_row, lat_name)
+            if getattr(table_row, lat_name) > ds_max_lat:
+                ds_max_lat = getattr(table_row, lat_name)
+            if getattr(table_row, lon_name) < ds_min_lon:
+                ds_min_lon = getattr(table_row, lon_name)
+            if getattr(table_row, lon_name) > ds_max_lon:
+                ds_max_lon = getattr(table_row, lon_name)
+
+    return whole_table, ds_min_lat, ds_max_lat, ds_min_lon, ds_max_lon
 
 def is_missing(var, missing):
     if var is missing:
         return True
     return False
 
-def convert_dtype(masked_array):
-    if masked_array is np.ma.core.masked:
+def convert_dtype(nparray):
+    # In case that type of array is <class 'numpy.ma.core.MaskedArray'>
+    if nparray is np.ma.core.masked:
         return None
     for dtype in [np.int32, np.int64]:
-        if np.issubdtype(masked_array.dtype, dtype):
-            return int(masked_array)
+        if np.issubdtype(nparray.dtype, dtype):
+            return int(nparray)
     for dtype in [np.float32, np.float64]:
-        if np.issubdtype(masked_array.dtype, dtype):
-            return float(masked_array)
+        if np.issubdtype(nparray.dtype, dtype):
+            return float(nparray)
+    if np.issubdtype(nparray.dtype, np.dtype(bool).type):
+        return bool(nparray)
 
 def create_table_from_netcdf(engine, nc_file, table_name, session,
                              skip_vars=None, notnull_vars=None,
                              unique_vars=None, custom_cols=None):
+    class Netcdf(object):
+        pass
+
+    if engine.dialect.has_table(engine, table_name): 
+        metadata = MetaData(bind=engine, reflect=True)
+        t = metadata.tables[table_name]
+        mapper(Netcdf, t)
+
+        return Netcdf
+
     # Sort custom_cols by column indices
     tmp = custom_cols
     custom_cols = dict()
@@ -536,14 +572,12 @@ def create_table_from_netcdf(engine, nc_file, table_name, session,
     dataset = netCDF4.Dataset(nc_file)
     vars = dataset.variables
 
-    class Netcdf(object):
-        pass
-
     cols = []
     key = Column('key', Integer(), primary_key=True)
     cols.append(key)
     index = 1
     for var_name in vars.keys():
+        col_name = var_name.replace('-', '_')
         while index in custom_cols:
             cols.append(custom_cols[index])
             index += 1
@@ -551,9 +585,13 @@ def create_table_from_netcdf(engine, nc_file, table_name, session,
             continue
         nullable = True if var_name not in notnull_vars else False
         unique = False if var_name not in unique_vars else True
-        cols.append(nc2sacol(vars, var_name, nullable, unique))
+        try:
+            cols.append(var2sacol(vars, var_name, col_name, nullable, unique))
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
         index += 1
-    # In case that there is one custom col to insert into tial of row
+    # In case that there is one custom col to insert into tail of row
     if index in custom_cols:
         cols.append(custom_cols[index])
         index += 1
@@ -565,28 +603,52 @@ def create_table_from_netcdf(engine, nc_file, table_name, session,
 
     return Netcdf
 
-def nc2sacol(vars, var_name, nullable=True, unique=False):
-    var_dtype = vars[var_name].dtype
-    column = None
-    for dtype in [np.int32, np.int64]:
-        if np.issubdtype(var_dtype, dtype):
-            return Column(var_name, Integer(), nullable=nullable,
-                          unique=unique)
-    for dtype in [np.float32, np.float64]:
-        if np.issubdtype(var_dtype, dtype):
-            return Column(var_name, Float(), nullable=nullable,
-                          unique=unique)
+def table_objects_same(object_1, object_2, unique_cols):
+    unique_key = '_sa_instance_state'
+    for key in unique_cols:
+        if object_1.__dict__[key] == object_2.__dict__[key]:
+            return True
+
+    return False
 
 def bulk_insert_avoid_duplicate_unique(total_sample, batch_size,
                                        table_class, unique_cols,
-                                       session):
+                                       session, check_self=False):
     """
     Bulkly insert into a table which has unique columns.
 
     """
+    total = len(total_sample)
+    count = 0
+
     while total_sample:
-        batch = total_sample[0:batch_size]
+        count += batch_size
+        progress = float(count)/total*100
+        print('\r{:.1f}%'.format(progress), end='')
+
+        batch = total_sample[:batch_size]
         total_sample = total_sample[batch_size:]
+
+        if check_self:
+            # Remove duplicate table class objects in batch
+            batch_len = len(batch)
+            dup_val = -999
+            try:
+                for i in range(batch_len-1):
+                    for j in range(i+1, batch_len):
+                        if batch[i] == dup_val or batch[j] == dup_val:
+                            continue
+                        if table_objects_same(batch[i], batch[j],
+                                              unique_cols):
+                            batch[j] = dup_val
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
+            old_batch = batch
+            batch = []
+            for i in range(batch_len):
+                if old_batch[i] != -999:
+                    batch.append(old_batch[i])
 
         existing_records = dict(
             (
@@ -615,30 +677,52 @@ def bulk_insert_avoid_duplicate_unique(total_sample, batch_size,
             else:
                 inserts.append(data)
         if inserts:
-            session.add_all(inserts)
+            # session.add_all(inserts)
+            session.bulk_insert_mappings(
+                table_class,
+                [
+                    row2dict(record)
+                    for record in inserts
+                ],
+            )
 
     session.commit()
 
-def create_table_from_bytemap(engine, satel_name, bytemap_file, table_name, 
+def row2dict(row):
+    d = row.__dict__
+    d.pop('_sa_instance_state', None)
+
+    return d
+
+def create_table_from_bytemap(engine, satel_name, bytemap_file, table_name,
                               session, skip_vars=None, notnull_vars=None,
                               unique_vars=None, custom_cols=None):
+
+    class Satel(object):
+        pass
+
+    if engine.dialect.has_table(engine, table_name): 
+        metadata = MetaData(bind=engine, reflect=True)
+        t = metadata.tables[table_name]
+        mapper(Satel, t)
+
+        return Satel
+
     # Sort custom_cols by column indices
     tmp = custom_cols
     custom_cols = dict()
     for i in sorted(tmp.keys()):
         custom_cols[i] = tmp[i]
 
-    dataset = read_daily_satel(satel_name, bytemap_file)
+    dataset = dataset_of_daily_satel(satel_name, bytemap_file)
     vars = dataset.variables
-
-    class Satel(object):
-        pass
 
     cols = []
     key = Column('key', Integer(), primary_key=True)
     cols.append(key)
     index = 1
     for var_name in vars.keys():
+        col_name = var_name.replace('-', '_')
         while index in custom_cols:
             cols.append(custom_cols[index])
             index += 1
@@ -646,7 +730,7 @@ def create_table_from_bytemap(engine, satel_name, bytemap_file, table_name,
             continue
         nullable = True if var_name not in notnull_vars else False
         unique = False if var_name not in unique_vars else True
-        cols.append(bm2sacol(vars, var_name, nullable, unique))
+        cols.append(var2sacol(vars, var_name, col_name, nullable, unique))
         index += 1
     # In case that there is one custom col to insert into tial of row
     if -1 in custom_cols:
@@ -658,19 +742,24 @@ def create_table_from_bytemap(engine, satel_name, bytemap_file, table_name,
     mapper(Satel, t)
     session.commit()
 
-def bm2sacol(vars, var_name, nullable=True, unique=False):
+    return Satel
+
+def var2sacol(vars, var_name, col_name, nullable=True, unique=False):
     var_dtype = vars[var_name].dtype
     column = None
     for dtype in [np.int32, np.int64]:
         if np.issubdtype(var_dtype, dtype):
-            return Column(var_name, Integer(), nullable=nullable,
+            return Column(col_name, Integer(), nullable=nullable,
                           unique=unique)
     for dtype in [np.float32, np.float64]:
         if np.issubdtype(var_dtype, dtype):
-            return Column(var_name, Float(), nullable=nullable,
+            return Column(col_name, Float(), nullable=nullable,
                           unique=unique)
+    if np.issubdtype(var_dtype, np.dtype(bool).type):
+        return Column(col_name, Boolean(), nullable=nullable,
+                      unique=unique)
 
-def read_daily_satel(satel_name, file_path, missing_val=-999.0):
+def dataset_of_daily_satel(satel_name, file_path, missing_val=-999.0):
     if satel_name == 'ascat':
         dataset = ASCATDaily(file_path, missing=missing_val)
     elif satel_name == 'qscat':
@@ -708,3 +797,158 @@ def show_bytemap_validrange(ds):
                 str(ds.variables[var].valid_max),
                 '(',ds.variables[var].units,')'])
         print(aline)
+
+def find_index(range, lat_or_lon):
+    # latitude: from -89.875 to 89.875, 720 values, interval = 0.25
+    # longitude: from 0.125 to 359.875, 1440 values, interval = 0.25
+    res = []
+    for idx, val in enumerate(range):
+        if lat_or_lon == 'lat':
+            delta = val + 89.875
+        elif lat_or_lon == 'lon':
+            delta = val - 0.125
+        else:
+            exit('Error parameter lat_or_lon: ' + lat_or_lon)
+        intervals = delta / 0.25
+        # Find index of min_lat or min_lon
+        if not idx:
+            res.append(math.ceil(intervals))
+        # Find index of max_lat or max_lon
+        else:
+            res.append(math.floor(intervals))
+
+    return res
+
+def extract_bytemap_to_table(satel_name, bm_file, table_class, skip_vars,
+                            datetime_func, datetime_col_name, missing,
+                            valid_func, unique_func, unique_col_name,
+                            lat_name, lon_name,
+                            period, region, not_null_vars):
+    """Extract variables from netcdf file to generate an instance of
+    table class.
+
+    Paramters
+    ---------
+    bm_file : str
+        Path of bytemap file.
+    table_class :
+        The class which represents data of netcdf file.
+    skip_vars : list of str
+        Variables' names that to be skipped reading.
+    datetime_func : func
+        Function which maps temporal variables of netcdf file to datetime
+        attribute of table class.
+    datetime_col_name: str
+        Name of table column which represents datetime.
+    missing : custom
+        Could be numpy.ma.core.masked or something else that user custom.
+    valid_func : func
+        Function which check whether a row of table is valid or not.
+    unique_func : func
+        Function which returns unique column value.
+    unique_col_name : str
+        Name of table column which is unique.
+    lat_name : str
+        Name of table column which represents latitude.
+    lon_name : str
+        Name of table column which represents longitude.
+    period : list of datetime
+        User-specified range of datetime.  Length is two.  Fisrt element is
+        start datetime and second element is end datetime.
+    region : list of float
+
+    Returns
+    -------
+    table_row : instance of `table_class`
+        Instance of table class that has data of netcdf file as its
+        attributes.
+
+    """
+
+    dataset = dataset_of_daily_satel(satel_name, bm_file)
+    vars = dataset.variables
+
+    min_lat, max_lat = region[0], region[1]
+    min_lon, max_lon = region[2], region[3]
+    min_lat_idx, max_lat_idx = find_index([min_lat, max_lat], 'lat')
+    lat_indices = [x for x in range(min_lat_idx, max_lat_idx+1)]
+    min_lon_idx, max_lon_idx = find_index([min_lon, max_lon], 'lon')
+    lon_indices = [x for x in range(min_lon_idx, max_lon_idx+1)]
+
+    lat_len = len(lat_indices)
+    lon_len = len(lon_indices)
+    total = 2 * lat_len * lon_len
+    count = 0
+
+    # Store all rows
+    whole_table = []
+
+    st = time.time()
+    iasc = [0, 1]
+    # iasc = 0 (morning, descending passes)
+    # iasc = 1 (evening, ascending passes)
+    for i in iasc:
+        for j in lat_indices:
+            for k in lon_indices:
+                count += 1
+                if count % 10000 == 0:
+                    print('\r{:5f}%'.format((float(count)/total)*100), end='')
+                if j == 120:
+                    et = time.time()
+                    print('\ntime: %s' % (et - st))
+                    breakpoint()
+                if not valid_func(vars, i, j, k):
+                    continue
+                table_row = table_class()
+                lat = vars[lat_name][j]
+                lon = vars[lon_name][k]
+                if (not lat or not lon or lat < min_lat or lat > max_lat
+                    or lon < min_lon or lon > max_lon):
+                    continue
+                setattr(table_row, lat_name, convert_dtype(lat))
+                setattr(table_row, lon_name, convert_dtype(lon))
+                skip_vars.append(lat_name)
+                skip_vars.append(lon_name)
+                # Set datetime
+                try:
+                    datetime_ = datetime_func(bm_file, vars, i, j, k,
+                                              missing)
+                except Exception as msg:
+                    breakpoint()
+                    exit(msg)
+                # Period check
+                if not datetime_ or not check_period(datetime_, period):
+                    continue
+                setattr(table_row, datetime_col_name, datetime_)
+
+                setattr(table_row, unique_col_name,
+                        unique_func(datetime_, lat, lon))
+
+                valid = True
+                # Process all variables of NetCDF dataset
+                for var_name in vars.keys():
+                    # Skip specified variables
+                    if var_name in skip_vars:
+                        continue
+                    # Set columns which is not nullable
+                    if var_name in not_null_vars:
+                        # Skip this row if not null variable is null
+                        if is_missing(vars[var_name][i][j][k],  missing):
+                            valid = False
+                            break
+                        setattr(table_row, var_name,
+                                convert_dtype(vars[var_name][i][j][k]))
+                        continue
+                    # Set columns which is nullable
+                    setattr(table_row, var_name,
+                            convert_dtype(vars[var_name][i][j][k]))
+
+                if valid:
+                    whole_table.append(table_row)
+
+    return whole_table
+
+def gen_space_time_fingerprint(datetime, lat, lon):
+
+    return '%s %f %f' % (datetime, lat, lon)
+

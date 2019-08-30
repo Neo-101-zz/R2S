@@ -1,7 +1,7 @@
 """Manage downloading and reading NOAA HRD SFMR hurricane data.
 
 """
-import datetime as dt
+import datetime
 import gzip
 import math
 import pickle
@@ -17,7 +17,7 @@ import requests
 import sqlalchemy as sa
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, Integer, Float, String, DateTime
+from sqlalchemy import Column, Integer, Float, String, DateTime, Date
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import tuple_
 from sqlalchemy.schema import Table
@@ -29,6 +29,19 @@ MASKED = np.ma.core.masked
 Base = declarative_base()
 DynamicBase = declarative_base(class_registry=dict())
 
+class HurrSfmr(Base):
+    __tablename__ = 'hurr_sfmr'
+
+    key = Column(Integer, primary_key=True)
+    name = Column(String(length=20), nullable=False)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    min_lat = Column(Float, nullable=False)
+    max_lat = Column(Float, nullable=False)
+    min_lon = Column(Float, nullable=False)
+    max_lon = Column(Float, nullable=False)
+    name_period = Column(String(100), nullable=False, unique=True)
+
 class SfmrManager(object):
 
     def __init__(self, CONFIG, period, region):
@@ -37,7 +50,7 @@ class SfmrManager(object):
         self.period = period
         self.region = region
         self.years = None
-        # self.download()
+        self.download()
         self.read(read_all=True)
 
     def download(self):
@@ -78,18 +91,12 @@ class SfmrManager(object):
         connect_string = ('{0}://{1}:{2}@{3}/{4}?{5}'.format(
             DBAPI, USER, password_, HOST, DB_NAME, ARGS))
         self.engine = create_engine(connect_string, echo=False)
-        # Create table of cwind station
+        # Create table of SFMR records of hurricanes
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
         self.session = self.Session()
 
         self._insert_sfmr(read_all)
-        # self._insert_station_info(read_all)
-        # st = time.time()
-        # self._insert_data(read_all)
-        # et = time.time()
-        # print('Time: %s' % (et - st))
-
 
         return
 
@@ -98,20 +105,55 @@ class SfmrManager(object):
             year_hurr = pickle.load(fr)
 
         data_root_dir = self.SFMR_CONFIG['dirs']['hurr']
-        if read_all:
-            files_path = []
-            for year in year_hurr.keys():
-                for hurr in year_hurr[year]:
-                    spec_data_dir = '{0}{1}/{2}/'.format(
-                        data_root_dir, year, hurr)
-                    file_names = os.listdir(spec_data_dir)
+        # if read_all:
+        files_path = []
+        all_hurr_records = []
+        for year in year_hurr.keys():
+            for hurr in year_hurr[year]:
+                spec_data_dir = '{0}{1}/{2}/'.format(
+                    data_root_dir, year, hurr)
+                file_names = os.listdir(spec_data_dir)
 
-                    for file in file_names:
-                        if file.endswith('.nc'):
-                            files_path.append(spec_data_dir + file)
-        else:
+                start_date = datetime.date(9999, 12, 31)
+                end_date = datetime.date(1, 1, 1)
+                nc_count = 0
+                for file in file_names:
+                    if file.endswith('.nc'):
+                        nc_count += 1
+                        files_path.append(spec_data_dir + file)
+
+                        date_ = datetime.datetime.strptime(
+                            file.split('SFMR')[1][:8]+'000000',
+                            '%Y%m%d%H%M%S').date()
+                        if date_ < start_date:
+                            start_date = date_
+                        if date_ > end_date:
+                            end_date = date_
+
+                # If is no NetCDF file in hurricane's directories,
+                # it means that hurricane is not in period
+                if not nc_count:
+                    continue
+
+                hurr_record = HurrSfmr()
+                hurr_record.name = hurr
+                hurr_record.start_date = start_date
+                hurr_record.end_date = end_date
+                hurr_record.min_lat = 90.0
+                hurr_record.max_lat = -90.0
+                hurr_record.min_lon = 360.0
+                hurr_record.max_lon = 0.0
+                hurr_record.name_period = '{0} {1} {2}'.format(
+                    hurr, start_date, end_date)
+
+                all_hurr_records.append(hurr_record)
+
+        utils.bulk_insert_avoid_duplicate_unique(
+            all_hurr_records, self.CONFIG['database']['batch_size'],
+            HurrSfmr, ['name_period'], self.session)
+
+        if not read_all:
             files_path = self._files_path_downloaded_in_this_run
-
 
         # Classify files_path by corresponding year
         files_years = set([x.split('/')[-3] for x in files_path])
@@ -121,7 +163,6 @@ class SfmrManager(object):
             for file_path in files_path:
                 if file_path.split('/')[-3] == year:
                     year_file_path[year].append(file_path)
-
 
         # Create SFMR table
         table_name_prefix = self.SFMR_CONFIG['table_names']['prefix']
@@ -144,14 +185,12 @@ class SfmrManager(object):
                 custom_cols)
 
             for file_path in year_file_path[year]:
-                if not file_path.endswith('02H1.nc'):
-                    continue
                 hurr_name = file_path.split('/')[-2]
                 print((self.SFMR_CONFIG['prompt']['info']['extract_netcdf']\
                        + hurr_name))
                 print(file_path)
-                one_day_records = self._extract_sfmr_from_netcdf(file_path,
-                                                                 SfmrTable)
+                one_day_records, min_lat, max_lat, min_lon, max_lon = \
+                        self._extract_sfmr_from_netcdf(file_path, SfmrTable)
 
                 total_sample = one_day_records
                 batch_size = 1000
@@ -161,6 +200,31 @@ class SfmrManager(object):
                 utils.bulk_insert_avoid_duplicate_unique(
                     total_sample, batch_size, table_class, unique_cols,
                     session)
+
+                # Update SFMR records of hurricanes
+                hurr = file_path.split('/')[-2]
+                date_ = datetime.datetime.strptime(
+                    file_path.split('/')[-1].split('SFMR')[1][:8]+'000000',
+                    '%Y%m%d%H%M%S').date()
+                hurr_query = self.session.query(HurrSfmr).\
+                        filter(HurrSfmr.name == hurr).\
+                        filter(HurrSfmr.start_date <= date_).\
+                        filter(HurrSfmr.end_date >= date_)
+
+                if hurr_query.count() > 1:
+                    exit('[Error] Not unique hurricane SFMR record queried.')
+                target = hurr_query.first()
+
+                if min_lat < target.min_lat:
+                    target.min_lat = min_lat
+                if max_lat > target.max_lat:
+                    target.max_lat = max_lat
+                if min_lon < target.min_lon:
+                    target.min_lon = min_lon 
+                if max_lon > target.max_lon:
+                    target.max_lon = max_lon
+
+                self.session.commit()
 
     def _extract_sfmr_from_netcdf(self, file_path, SfmrTable):
         """Dump one SFMR NetCDF file into one pickle file.
@@ -173,7 +237,7 @@ class SfmrManager(object):
         datetime_col_name = 'DATETIME'
         missing = MASKED
         valid_func = valid_netcdf
-        unique_func = gen_space_time_fingerprint
+        unique_func = utils.gen_space_time_fingerprint
         unique_col_name = 'SPACE_TIME'
         lat_name = 'LAT'
         lon_name = 'LON'
@@ -181,13 +245,14 @@ class SfmrManager(object):
         region = self.region
         not_null_vars = ['LAT', 'LON', 'SWS', 'SRR']
 
-        res = utils.extract_netcdf_to_table(
-            nc_file, table_class, skip_vars, datetime_func,
-            datetime_col_name, missing, valid_func, unique_func,
-            unique_col_name, lat_name, lon_name, period, region,
-            not_null_vars)
+        res, min_lat, max_lat, min_lon, max_lon = \
+                utils.extract_netcdf_to_table(
+                    nc_file, table_class, skip_vars, datetime_func,
+                    datetime_col_name, missing, valid_func, unique_func,
+                    unique_col_name, lat_name, lon_name, period, region,
+                    not_null_vars)
 
-        return res
+        return res, min_lat, max_lat, min_lon, max_lon
 
     def _download_sfmr_data(self):
         """Download SFMR data of hurricanes.
@@ -212,17 +277,16 @@ class SfmrManager(object):
         self._files_path_downloaded_in_this_run = []
 
         for year in self.year_hurr.keys():
-            # Create directory to store SFMR files
-            # os.makedirs('{0}{1}'.format(save_root_dir, year), exist_ok=True)
             hurrs = list(self.year_hurr[year])
             for hurr in hurrs:
-                dir_path = '{0}{1}/{2}/'.format(save_root_dir, year, hurr)
+                # Create directory to store SFMR files
+                dir_path = f'{save_root_dir}{year}/{hurr}/'
                 os.makedirs(dir_path, exist_ok=True)
                 # Generate keyword to consist url
-                keyword = '{0}{1}'.format(hurr, year)
-                url = '{0}{1}{2}'.format(
-                    self.SFMR_CONFIG['urls']['prefix'], keyword,
-                    self.SFMR_CONFIG['urls']['suffix'])
+                keyword = f'{hurr}{year}'
+                url = (f'{self.SFMR_CONFIG["urls"]["prefix"]}'
+                       + f'{keyword}'
+                       + f'{self.SFMR_CONFIG["urls"]["suffix"]}')
                 # Get page according to url
                 page = requests.get(url)
                 data = page.text
@@ -236,10 +300,24 @@ class SfmrManager(object):
                     if href.endswith(suffix):
                         # Extract file name
                         file_name = href.split('/')[-1]
-                        date_str = file_name[-13:-5]
-                        date_ = dt.date(int(date_str[:4]),
-                                        int(date_str[4:6]),
-                                        int(date_str[6:]))
+                        tail_half = file_name.split('SFMR')[1]
+                        try:
+                            if (tail_half.startswith('20')
+                                or tail_half.startswith('199')):
+                                date_str = tail_half[:8]
+                                date_ = datetime.date(int(date_str[:4]),
+                                                int(date_str[4:6]),
+                                                int(date_str[6:]))
+                            else:
+                                date_str = tail_half[:6]
+                                date_ = datetime.date(int(f'20{date_str[:2]}'),
+                                                int(date_str[2:4]),
+                                                int(date_str[4:]))
+                                file_name = (f'{file_name.split("SFMR")[0]}20'
+                                             + f'{file_name.split("SFMR")[1]}')
+                        except Exception as msg:
+                            breakpoint()
+                            exit(msg)
                         if not utils.check_period(date_, self.period):
                             continue
                         file_path = dir_path + file_name
@@ -294,10 +372,7 @@ def datetime_from_netcdf(vars, index, missing):
         TIME = '0' * (6 - len(TIME)) + TIME
     if DATE is missing or TIME is missing:
         return False
-    datetime_ = dt.datetime.strptime(DATE + TIME, '%Y%m%d%H%M%S')
+    datetime_ = datetime.datetime.strptime(DATE + TIME, '%Y%m%d%H%M%S')
 
     return datetime_
 
-def gen_space_time_fingerprint(datetime, lat, lon):
-
-    return '%s %f %f' % (datetime, lat, lon)

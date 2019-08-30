@@ -81,12 +81,23 @@ def cut_map(satel_name, dataset, region, year, month, day,
     num = len(lat_indices) * len(lon_indices) * 2
     num_c1, num_c2, num_c3 = 0, 0, 0
     vars = dataset.variables
-    for j in lat_indices:
-        for k in lon_indices:
-            for i in iasc:
+    n_cut_land = 0
+    n_cut_missing = 0
+    n_cut_wdir = 0
+
+    for i in iasc:
+        for j in lat_indices:
+            for k in lon_indices:
                 cut_missing = vars['nodata'][i][j][k]
+                if cut_missing:
+                    num_c1 += 1
+                    continue
                 cut_mingmt = vars['mingmt'][i][j][k]
                 cut_land = vars['land'][i][j][k]
+                if cut_land:
+                    n_cut_land += 1
+                if cut_missing:
+                    n_cut_missing += 1
                 if satel_name == 'ascat' or satel_name == 'qscat':
                     cut_wspd = vars['windspd'][i][j][k]
                     cut_wdir = vars['winddir'][i][j][k]
@@ -100,6 +111,8 @@ def cut_map(satel_name, dataset, region, year, month, day,
                 else:
                     sys.exit('satel_name is wrong.')
 
+                if cut_wdir == missing_val:
+                    n_cut_wdir += 1
                 if cut_missing or cut_land or cut_wdir == missing_val:
                     # same pass condition for all satellites
                     num_c1 += 1
@@ -137,12 +150,15 @@ def cut_map(satel_name, dataset, region, year, month, day,
 
                 data_list.append(data_point)
 
-   #  print()
-   #  print('total data point: ' + str(num))
-   #  print('skip condition 1: ' + str(num_c1))
-   #  print('skip condition 2: ' + str(num_c2))
-   #  print('skip condition 3: ' + str(num_c3))
-   #  print('returned data point: ' + str(len(data_list)))
+    print()
+    print('total data point: ' + str(num))
+    print('cut_missing: ' + str(n_cut_missing))
+    print('cut_land: ' + str(n_cut_land))
+    print('cut_wdir: ' + str(n_cut_wdir))
+    print('skip condition 1: ' + str(num_c1))
+    print('skip condition 2: ' + str(num_c2))
+    print('skip condition 3: ' + str(num_c3))
+    print('returned data point: ' + str(len(data_list)))
    #  print()
 
     return data_list

@@ -1,7 +1,7 @@
 Owned and maintained by National Data Buoy Center
 2.3-meter NOOSS buoy
 SCOOP payload
-25.941 N 89.661 W (25°56'28" N 89°39'39" W)
+25.961 N 89.650 W (25°57'41" N 89°38'59" W)
 
 Site elevation: sea level
 Air temp height: 3.3 m above site elevation
