@@ -10,7 +10,7 @@
 !*.yaml
 
 # Ignore directories
-test/
+/test/*
 
 # Even if they are in subdirectories
 
