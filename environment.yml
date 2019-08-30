@@ -13,6 +13,7 @@ dependencies:
   - cffi=1.12.3=py37hb5b8e2f_0
   - cftime=1.0.3.4=py37h1d22016_1001
   - chardet=3.0.4=py37_1003
+  - coloredlogs=10.0=py37_0
   - cryptography=2.7=py37ha12b0ac_0
   - curl=7.65.2=ha441bb4_0
   - cycler=0.10.0=py37_0
@@ -20,6 +21,7 @@ dependencies:
   - freetype=2.9.1=hb4e5f40_0
   - hdf4=4.2.13=h39711bb_2
   - hdf5=1.10.4=hfa1e0ec_0
+  - humanfriendly=4.18=py37_0
   - icu=58.2=h4b95b61_1
   - idna=2.8=py37_0
   - importlib_metadata=0.19=py37_0

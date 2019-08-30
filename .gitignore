@@ -9,6 +9,9 @@
 !*.yml
 !*.yaml
 
+# Ignore directories
+test/
+
 # Even if they are in subdirectories
 
 !*/
