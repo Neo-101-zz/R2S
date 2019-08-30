@@ -1,9 +1,0 @@
-Owned and maintained by National Data Buoy Center
-C-MAN Station
-SCOOP payload
-24.628 N 81.109 W (24°37'40" N 81°6'31" W)
-
-Site elevation: 0 m above mean sea level
-Air temp height: 6.6 m above site elevation
-Anemometer height: 6.6 m above site elevation
-Barometer elevation: 6.6 m above mean sea level

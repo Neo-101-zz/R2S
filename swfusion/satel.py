@@ -3,6 +3,7 @@
 """
 import datetime
 import math
+import logging
 import pickle
 import os
 import time
@@ -23,17 +24,19 @@ Base = declarative_base()
 
 class SatelManager(object):
 
-    def __init__(self, CONFIG, period, region):
+    def __init__(self, CONFIG, period, region, passwd):
+        self.logger = logging.getLogger(__name__)
         self.satel_names = ['ascat', 'qscat', 'wsat']
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
+        self.db_root_passwd = passwd
 
         self.download()
         self.read(read_all=True)
 
     def download(self):
-        utils.arrange_signal()
+        utils.setup_signal_handler()
         # Check and update period for each satellite
         self.periods = dict()
         self.downloaded_file_path = dict()
@@ -52,12 +55,14 @@ class SatelManager(object):
         """Read data into MySQL database.
 
         """
+        utils.reset_signal_handler()
+
         DB_CONFIG = self.CONFIG['database']
         PROMPT = self.CONFIG['workflow']['prompt']
         DBAPI = DB_CONFIG['db_api']
         USER = DB_CONFIG['user']
         # password_ = input(PROMPT['input']['db_root_password'])
-        password_ = '39cnj971hw-'
+        password_ = self.db_root_passwd
         HOST = DB_CONFIG['host']
         DB_NAME = DB_CONFIG['db_name']
         ARGS = DB_CONFIG['args']
@@ -100,8 +105,20 @@ class SatelManager(object):
                        -1: Column('space_time', String(255),
                                  nullable=False, unique=True)}
 
+        old_files_path = files_path
+        files_path = dict()
+        for satel_name in old_files_path.keys():
+            files_path[satel_name] = []
+            for file_path in old_files_path[satel_name]:
+                date_= datetime.datetime.strptime(
+                    file_path.split('/')[-1].split('_')[1][:8] + '000000',
+                    '%Y%m%d%H%M%S').date()
+                if utils.check_period(date_, self.period):
+                    files_path[satel_name].append(file_path)
+
         for satel_name in files_path.keys():
-            print(self.CONFIG[satel_name]['prompt']['info']['read'])
+            self.logger.info(self.CONFIG[satel_name]\
+                             ['prompt']['info']['read'])
             # Create table of particular satellite
             bytemap_file = files_path[satel_name][0]
             if satel_name == 'ascat' or satel_name == 'qscat':
@@ -109,8 +126,11 @@ class SatelManager(object):
             elif satel_name == 'wsat':
                 not_null_vars += ['w-aw', 'wdir'] 
 
+            total = len(files_path[satel_name])
+            count = 0
+
             for file_path in files_path[satel_name]:
-                print(f'Extracting from {file_path.split("/")[-1]}')
+                count += 1
                 year_str = file_path.split('/')[-1].split('_')[1][:4]
                 table_name = '{0}_{1}'.format(satel_name, year_str)
 
@@ -119,27 +139,36 @@ class SatelManager(object):
                     table_name, self.session, skip_vars, not_null_vars,
                     unique_vars, custom_cols)
 
-                st = time.time()
+                info = (f'Extracting {satel_name} data '
+                        + f'from {file_path.split("/")[-1]}')
+                if count > 1:
+                    utils.delete_last_lines()
+                print(f'\r{info} ({count}/{total})', end='')
+
+                start = time.process_time()
                 one_day_records = self._extract_satel_bytemap(satel_name,
                                                               file_path,
                                                               SatelTable)
-                et = time.time()
-                utils.delete_last_lines()
-                print(f'Done in {et-st:.1f}s')
+                end = time.process_time()
+                self.logger.debug(f'{info} in {end-start:.2f} s')
 
-                print(f'Inserting into {table_name}')
                 total_sample = one_day_records
                 batch_size = self.CONFIG['database']['batch_size']
                 table_class = SatelTable
                 unique_cols = ['space_time']
                 session = self.session
-                st = time.time()
+
+                start = time.process_time()
                 utils.bulk_insert_avoid_duplicate_unique(
                     total_sample, batch_size, table_class, unique_cols,
                     session)
-                et = time.time()
-                utils.delete_last_lines()
-                print(f'Done in {et-st:.1f}s')
+                end = time.process_time()
+                self.logger.debug((f'Bulk inserting {satel_name} data '
+                                   + f'into {table_name} '
+                                   + f'in {end-start:.2f} s'))
+
+            utils.delete_last_lines()
+            print(f'Done')
 
     def _extract_satel_bytemap(self, satel_name, file_path, SatelTable):
         bm_file = file_path
@@ -184,7 +213,6 @@ class SatelManager(object):
         lon_len = len(lon_indices)
         total = 2 * lat_len * lon_len
         count = 0
-        t_count = 0
 
         # Store all rows
         whole_table = []
@@ -197,15 +225,9 @@ class SatelManager(object):
             for j in lat_indices:
                 for k in lon_indices:
                     count += 1
-                    if count % 2000 == 0:
-                        progress = float(count)/total*100
-                        print('\r{:.1f}%'.format(progress), end='')
-                    if t_count == -1:
-                        et = time.time()
-                        print('\ntime: %s' % (et - st))
-                        print('iter count: %d' % count)
-                        print('true count: %d' % t_count)
-                        breakpoint()
+                    # if count % 2000 == 0:
+                    #     progress = float(count)/total*100
+                    #     print('\r{:.1f}%'.format(progress), end='')
                     # if not valid_func(vars, i, j, k):
                     if vars['nodata'][i][j][k]:
                         continue
@@ -288,7 +310,6 @@ class SatelManager(object):
 
                     if valid:
                         whole_table.append(table_row)
-                        t_count += 1
 
         return whole_table
 
@@ -304,7 +325,8 @@ class SatelManager(object):
         """Download ASCAT/QucikSCAT/Windsat data in specified date range.
 
         """
-        print(config['prompt']['info']['download'])
+        info = config['prompt']['info']['download']
+        self.logger.info(info)
         start_date = period[0].date()
         end_date = period[1].date()
         data_url = config['urls']
@@ -321,7 +343,15 @@ class SatelManager(object):
 
         os.makedirs(save_dir, exist_ok=True)
         delta_date = end_date - start_date
+
+        total = delta_date.days + 1
+        count = 0
+
         for i in range(delta_date.days + 1):
+            count += 1
+            print(f'\r({count}/{total})', end='')
+            self.logger.debug(info)
+
             date_ = start_date + datetime.timedelta(days=i)
             if date_ in missing_dates:
                 continue
@@ -338,6 +368,9 @@ class SatelManager(object):
             file_path = save_dir + file_name
             utils.download(file_url, file_path)
             self.downloaded_file_path[satel_name].append(file_path)
+
+        utils.delete_last_lines()
+        print('Done')
 
         with open(missing_dates_file, 'wb') as fw:
             pickle.dump(missing_dates, fw)

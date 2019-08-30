@@ -3,6 +3,7 @@
 """
 import datetime as dt
 import gzip
+import logging
 import math
 import re
 import os
@@ -23,7 +24,6 @@ from sqlalchemy import tuple_
 from sqlalchemy.orm import mapper
 
 import utils
-import terminalsize
 
 Base = declarative_base()
 DynamicBase = declarative_base(class_registry=dict())
@@ -52,18 +52,19 @@ class CwindManager(object):
     """Manage downloading and reading NDBC Continuous Wind data.
 
     """
-    def __init__(self, CONFIG, period, region):
+    def __init__(self, CONFIG, period, region, passwd):
         self.CWIND_CONFIG = CONFIG['cwind']
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
-        self.years = None
-        self.stations = None
-        self.year_station = None
-        self.station_year = None
+        self.db_root_passwd = passwd
         self.cwind_station_file_names = []
         self.cwind_data_file_names = []
+
+        self.logger = logging.getLogger(__name__)
+
         self.download()
+
         self.read(read_all=True)
 
     def download(self):
@@ -76,7 +77,7 @@ class CwindManager(object):
             self.CONFIG['workflow']['prompt'])
         if not correct:
             return
-        utils.arrange_signal()
+        utils.setup_signal_handler()
         self.years = [x for x in range(self.period[0].year,
                                        self.period[1].year+1)]
         self.stations = set()
@@ -88,12 +89,14 @@ class CwindManager(object):
         """Read data into MySQL database.
 
         """
+        utils.reset_signal_handler()
+
         DB_CONFIG = self.CONFIG['database']
         PROMPT = self.CONFIG['workflow']['prompt']
         DBAPI = DB_CONFIG['db_api']
         USER = DB_CONFIG['user']
         # password_ = input(PROMPT['input']['db_root_password'])
-        password_ = '39cnj971hw-'
+        password_ = self.db_root_passwd
         HOST = DB_CONFIG['host']
         DB_NAME = DB_CONFIG['db_name']
         ARGS = DB_CONFIG['args']
@@ -123,9 +126,6 @@ class CwindManager(object):
         class CwindData(object):
             pass
 
-        # breakpoint()
-        # if station_id[0] == '41035':
-        #     breakpoint()
         if self.engine.dialect.has_table(self.engine, table_name): 
             metadata = MetaData(bind=self.engine, reflect=True)
             t = metadata.tables[table_name]
@@ -153,7 +153,7 @@ class CwindManager(object):
         return CwindData
 
     def _insert_data(self, read_all):
-        print(self.CWIND_CONFIG['prompt']['info']['read_data'])
+        self.logger.info(self.CWIND_CONFIG['prompt']['info']['read_data'])
         data_dir = self.CWIND_CONFIG['dirs']['data']
         station_ids = [
             id for id in self.session.query(CwindStation.id).\
@@ -165,6 +165,10 @@ class CwindManager(object):
                           and int(x[6:10]) in self.years]
         else:
             data_files = self.cwind_data_file_names
+
+        total = len(data_files)
+        count = 0
+
         for id in station_ids:
             id = id[0]
             DataOfStation = self._create_cwind_data_table(id)
@@ -173,17 +177,35 @@ class CwindManager(object):
                 if file.startswith(id):
                     # cwind data file belong to station in cwind_station
                     # table
+                    count += 1
                     data_path = data_dir + file
-                    records = self._extract_data(data_path,
-                                                 DataOfStation)
+
+                    info = f'Extracting cwind data from {file}'
+                    print(f'\r{info} ({count}/{total})', end='')
+
+                    start = time.process_time()
+                    records = self._extract_data(data_path, DataOfStation)
+                    end = time.process_time()
+
+                    self.logger.debug(f'{info} in {end-start:.2f} s')
+
                     if records:
                         station_records += records
+
+            start = time.process_time()
             utils.bulk_insert_avoid_duplicate_unique(
                 station_records, self.CONFIG['database']['batch_size'],
                 DataOfStation, ['datetime'], self.session, check_self=True)
+            end = time.process_time()
+
+            self.logger.debug((f'Bulk inserting cwind data into '
+                               + f'cwind_{id} in {end-start:2f} s'))
+        utils.delete_last_lines()
+        print('Done')
 
     def _insert_station_info(self, read_all):
-        print(self.CWIND_CONFIG['prompt']['info']['read_station'])
+        self.logger.info(self.CWIND_CONFIG['prompt']['info']\
+                         ['read_station'])
         min_lat, max_lat = self.region[0], self.region[1]
         min_lon, max_lon = self.region[2], self.region[3]
         station_info_dir = self.CWIND_CONFIG['dirs']['stations']
@@ -193,15 +215,35 @@ class CwindManager(object):
         else:
             station_files = self.cwind_station_file_names
         all_stations = []
+        total = len(station_files)
+        count = 0
         for file_name in station_files:
+            count += 1
             station_info_path = station_info_dir + file_name
+
+            info = f'Extracting station information from {file_name}'
+            print((f'\r{info} ({count}/{total})'), end='')
+
+            start = time.process_time()
             station = self._extract_station_info(station_info_path)
+            end = time.process_time()
+
+            self.logger.debug(f'{info} in {end-start:.2f} s')
             if station:
                 all_stations.append(station)
 
+        utils.delete_last_lines()
+        print('Done')
+
+        start = time.process_time()
         utils.bulk_insert_avoid_duplicate_unique(
             all_stations, self.CONFIG['database']['batch_size'],
             CwindStation, ['id'], self.session)
+        end = time.process_time()
+
+        self.logger.debug(('Bulk inserting cwind station information into '
+                           + f'{CwindStation.__tablename__} '
+                           + f'in {end-start:.2f}s'))
 
     def _extract_data(self, data_path, DataOfStation):
         data_name = data_path.split('/')[-1]
@@ -412,8 +454,16 @@ class CwindManager(object):
         """Download all self.stations' information into single directory.
 
         """
-        print(self.CWIND_CONFIG['prompt']['info']['download_station'])
+        self.logger.info(self.CWIND_CONFIG['prompt']['info']\
+                         ['download_station'])
+        total = len(self.stations)
+        count = 0
         for stn in self.stations:
+            count += 1
+            info = f'Downloading information of cwind station {stn}'
+            self.logger.debug(info)
+            print((f'\r{info} ({count}/{total})'), end='')
+
             i = 0
             while True:
                 # download self.stations' information
@@ -423,25 +473,40 @@ class CwindManager(object):
                 else:
                     # Only loop when cannot get html of cwind station
                     # webpage
-                    print(self.CWIND_CONFIG['prompt']['error'] \
+                    self.logger.error(self.CWIND_CONFIG['prompt']['error'] \
                           ['fail_download_station'] + stn)
                     i += 1
                     if i <= self.CWIND_CONFIG['retry_times']:
-                        print('reconnect: %d' % i)
+                        self.logger.info('reconnect: %d' % i)
                     else:
-                        print(self.CWIND_CONFIG['prompt']['info'][
-                            'skip_download_station'])
+                        self.logger.critical(
+                            self.CWIND_CONFIG['prompt']['info']\
+                            ['skip_download_station'])
                         break
+        utils.delete_last_lines()
+        print('Done')
 
     def _download_all_cwind_data(self):
         """Download Continuous Wind data into single directory.
 
         """
-        print(self.CWIND_CONFIG['prompt']['info']['download_data'])
+        self.logger.info(self.CWIND_CONFIG['prompt']['info']\
+                         ['download_data'])
         utils.set_format_custom_text(self.CWIND_CONFIG['data_name_length'])
+        total = 0
+        count = 0
+        for year in self.years:
+            total += len(self.year_station[year])
+
         for year in self.years:
             for stn in self.year_station[year]:
                 self._download_single_cwind_data(stn, year)
+                count += 1
+                info = f'Downloading {year} cwind data of station {stn}'
+                self.logger.debug(info)
+                print((f'\r{info} ({count}/{total})'), end='')
+        utils.delete_last_lines()
+        print('Done')
 
     def _station_in_a_year(self, year):
         """Get stations' id in specified year.
@@ -480,7 +545,8 @@ class CwindManager(object):
         try:
             html = requests.get(url, params=payload, verify=True)
         except Exception as msg:
-            print(msg)
+            logger.exception(('Exception occurred when getting '
+                              + 'html with requests'))
             return 'error'
         page = BeautifulSoup(html.text, features='lxml')
         div = page.find_all('div', id='stn_metadata')

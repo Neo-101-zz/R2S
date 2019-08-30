@@ -22,18 +22,18 @@ cwind:
   prompt:
     info:
       download_station: |-
-        [Info] Downloading Information of NDBC Continuous Wind Station
+        Downloading Information of NDBC Continuous Wind Station
       skip_download_station: |-
-        [Info] Fail downloading information of cwind station: 
+        Fail downloading information of cwind station: 
       download_data: |-
-        [Info] Downloading NDBC Continuous Wind Data
+        Downloading NDBC Continuous Wind Data
       read_station: |-
-        [Info] Reading cwind station information
+        Reading cwind station information
       read_data: |-
-        [Info] Reading cwind data
+        Reading cwind data
     error:
       fail_download_cwind_station: |-
-        [Error] Fail downloading infromation of cwind station: 
+        Fail downloading infromation of cwind station: 
 sfmr:
   urls:
     hurricane: 'https://www.aoml.noaa.gov/hrd/data_sub/hurr.html'
@@ -54,11 +54,9 @@ sfmr:
   prompt:
     info:
       download_hurr: |-
-        [Info] Downloading Hurricane SFMR Data
-      insert_year_table: |-
-        [Info] Writing hurricane SFMR data into 
-      extract_netcdf: |-
-        [Info] Extracting data from NetCDF file of hurricane: 
+        Downloading hurricane SFMR data
+      read_hurr: |-
+        Reading hurricane SFMR data
 ascat:
   urls: 'http://data.remss.com/ascat/metopa/bmaps_v02.1/'
   period_limit:
@@ -75,9 +73,9 @@ ascat:
   prompt:
     info:
       download: |-
-        [Info] Downloading ASCAT data
+        Downloading ASCAT data
       read: |-
-        [Info] Reading ASCAT data
+        Reading ASCAT data
 qscat:
   urls: 'http://data.remss.com/qscat/bmaps_v04/'
   period_limit:
@@ -94,9 +92,9 @@ qscat:
   prompt:
     info:
       download: |-
-        [Info] Downloading QucikSCAT data
+        Downloading QucikSCAT data
       read: |-
-        [Info] Reading QuickSCAT data
+        Reading QuickSCAT data
 wsat:
   urls: 'http://data.remss.com/windsat/bmaps_v07.0.1/'
   period_limit:
@@ -113,12 +111,12 @@ wsat:
   prompt:
     info:
       download: |-
-        [Info] Downloading Windsat data
+        Downloading Windsat data
       read: |-
-        [Info] Reading Windsat data
+        Reading Windsat data
 test:
   dirs:
-    pics: '../test/pics/'
+    pics: '../pics/'
 database:
   db_api: 'mysql+mysqlconnector'
   user: 'root'
@@ -163,15 +161,15 @@ workflow:
         press ENTER to input default value 360): 
     info:
       period: |-
-        [Info] Inputting period
+        Inputting period
       specify_region: |-
-        [Info] Specifying region
+        Specifying region
       mysql_root_passwd: |-
-        [Info] Inputting database parameters
+        Inputting database parameters
     error:
       too_early: |-
-        [Error] Start datetime is too early. Must not be earlier than
+        Start datetime is too early. Must not be earlier than
       too_late: |-
-        [Error] End datetime is too late. Must not be later than
+        End datetime is too late. Must not be later than
       time_flow_backward: |-
-        [Error] Start datetime is later than end datetime.
+        Start datetime is later than end datetime.

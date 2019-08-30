@@ -21,6 +21,7 @@ handlers:
         level: CRITICAL
         formatter: standard
         filename: ../log/critical.log
+        mode: w
         maxBytes: 10485760 # 10MB
         backupCount: 20
         encoding: utf8
@@ -30,6 +31,7 @@ handlers:
         level: ERROR
         formatter: error
         filename: ../log/errors.log
+        mode: w
         maxBytes: 10485760 # 10MB
         backupCount: 20
         encoding: utf8
@@ -39,6 +41,7 @@ handlers:
         level: WARN
         formatter: standard
         filename: ../log/warn.log
+        mode: w
         maxBytes: 10485760 # 10MB
         backupCount: 20
         encoding: utf8
@@ -48,6 +51,7 @@ handlers:
         level: INFO
         formatter: standard
         filename: ../log/info.log
+        mode: w
         maxBytes: 10485760 # 10MB
         backupCount: 20
         encoding: utf8
@@ -57,22 +61,41 @@ handlers:
         level: DEBUG
         formatter: standard
         filename: ../log/debug.log
+        mode: w
         maxBytes: 10485760 # 10MB
         backupCount: 20
         encoding: utf8
 
 root:
     level: NOTSET
-    handlers: [console]
+    handlers:
+      - console
+      - critical_file_handler
+      - error_file_handler
+      - warn_file_handler
+      - info_file_handler
+      - debug_file_handler
     propagate: yes
 
 loggers:
     <module>:
         level: INFO
-        handlers: [console, info_file_handler, error_file_handler, critical_file_handler, debug_file_handler, warn_file_handler]
+        handlers:
+          - console
+          - critical_file_handler
+          - error_file_handler
+          - warn_file_handler
+          - info_file_handler
+          - debug_file_handler
         propagate: no
 
     <module.x>:
         level: DEBUG
-        handlers: [info_file_handler, error_file_handler, critical_file_handler, debug_file_handler, warn_file_handler]
+        handlers:
+          - console
+          - critical_file_handler
+          - error_file_handler
+          - warn_file_handler
+          - info_file_handler
+          - debug_file_handler
         propagate: yes

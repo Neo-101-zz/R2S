@@ -1,5 +1,6 @@
 from datetime import date
 import datetime
+import logging
 import math
 import os
 import signal
@@ -25,6 +26,7 @@ from quikscat_daily_v4 import QuikScatDaily
 from windsat_daily_v7 import WindSatDaily
 
 # Global variables
+logger = logging.getLogger(__name__)
 pbar = None
 format_custom_text = None
 current_file = None
@@ -38,7 +40,7 @@ def delete_last_lines(n=1):
         sys.stdout.write(ERASE_LINE)
         sys.stdout.write(CURSOR_LEFT_HEAD)
 
-def arrange_signal():
+def setup_signal_handler():
     """Arrange handler for several signal.
     
     Parameters
@@ -55,6 +57,12 @@ def arrange_signal():
     signal.signal(signal.SIGINT, handler)
     signal.signal(signal.SIGHUP, handler)
     signal.signal(signal.SIGTERM, handler)
+
+def reset_signal_handler():
+    global current_file
+    current_file = None
+
+    signal.signal(signal.SIGINT, signal.default_int_handler)
 
 def handler(signum, frame):
     """Handle forcing quit which may be made by pressing Control + C and
@@ -75,7 +83,8 @@ def handler(signum, frame):
     """
     # Remove file that is downloaded currently in case forcing quit
     # makes this file uncomplete
-    os.remove(current_file)
+    if current_file is not None:
+        os.remove(current_file)
     # Print log
     print('\nForce quit on %s.\n' % signum)
     # Force quit
@@ -206,7 +215,7 @@ def check_period(temporal, period):
     elif type(temporal) is datetime.time:
         period = [x.time() for x in period]
     elif type(temporal) is not datetime.datetime:
-        exit('[Error] Type of inputted temporal variable should be ' \
+        logger.error('Type of inputted temporal variable should be ' \
              'datetime.date or datetime.time or datetime.datetime')
     start = period[0]
     end = period[1]
@@ -215,7 +224,7 @@ def check_period(temporal, period):
 
     return True
 
-def download(url, path):
+def download(url, path, progress=False):
     """Download file by its url.
 
     Parameters
@@ -244,7 +253,10 @@ def download(url, path):
     global format_custom_text
     file_name = path.split('/')[-1]
     format_custom_text.update_mapping(f=file_name)
-    request.urlretrieve(url, path, show_progress)
+    if progress:
+        request.urlretrieve(url, path, show_progress)
+    else:
+        request.urlretrieve(url, path)
 
     return True
 
@@ -622,9 +634,9 @@ def bulk_insert_avoid_duplicate_unique(total_sample, batch_size,
     count = 0
 
     while total_sample:
-        count += batch_size
-        progress = float(count)/total*100
-        print('\r{:.1f}%'.format(progress), end='')
+        # count += batch_size
+        # progress = float(count)/total*100
+        # print('\r{:.1f}%'.format(progress), end='')
 
         batch = total_sample[:batch_size]
         total_sample = total_sample[batch_size:]
@@ -952,3 +964,124 @@ def gen_space_time_fingerprint(datetime, lat, lon):
 
     return '%s %f %f' % (datetime, lat, lon)
 
+def cut_map(satel_name, dataset, region, year, month, day,
+            missing_val=-999.0):
+    min_lat, max_lat = find_index([region[0], region[1]], 'lat')
+    lat_indices = [x for x in range(min_lat, max_lat+1)]
+    min_lon, max_lon = find_index([region[2], region[3]], 'lon')
+    lon_indices = [x for x in range(min_lon, max_lon+1)]
+
+    data_list = []
+    iasc = [0, 1]
+    # iasc = 0 (morning, descending passes)
+    # iasc = 1 (evening, ascending passes)
+    num = len(lat_indices) * len(lon_indices) * 2
+    num_c1, num_c2, num_c3 = 0, 0, 0
+    vars = dataset.variables
+    n_cut_land = 0
+    n_cut_missing = 0
+    n_cut_wdir = 0
+
+    for i in iasc:
+        for j in lat_indices:
+            for k in lon_indices:
+                cut_missing = vars['nodata'][i][j][k]
+                if cut_missing:
+                    num_c1 += 1
+                    continue
+                cut_mingmt = vars['mingmt'][i][j][k]
+                cut_land = vars['land'][i][j][k]
+                if cut_land:
+                    n_cut_land += 1
+                if cut_missing:
+                    n_cut_missing += 1
+                if satel_name == 'ascat' or satel_name == 'qscat':
+                    cut_wspd = vars['windspd'][i][j][k]
+                    cut_wdir = vars['winddir'][i][j][k]
+                    cut_rain = vars['scatflag'][i][j][k]
+                elif satel_name == 'wsat':
+                    cut_rain = vars['rain'][i][j][k]
+                    cut_wspd_lf = vars['w-lf'][i][j][k]
+                    cut_wspd_mf = vars['w-mf'][i][j][k]
+                    cut_wspd_aw = vars['w-aw'][i][j][k]
+                    cut_wdir = vars['wdir'][i][j][k]
+                else:
+                    sys.exit('satel_name is wrong.')
+
+                if cut_wdir == missing_val:
+                    n_cut_wdir += 1
+                if cut_missing or cut_land or cut_wdir == missing_val:
+                    # same pass condition for all satellites
+                    num_c1 += 1
+                    continue
+
+                if satel_name == 'ascat' or satel_name == 'qscat':
+                    if cut_wspd == missing_val:
+                        num_c2 += 1
+                        continue
+                elif satel_name == 'wsat':
+                    if (cut_wspd_lf == missing_val
+                        or cut_wspd_mf == missing_val
+                        or cut_wspd_aw == missing_val):
+                        # at least one of three wind speed is missing
+                        num_c3 += 1
+                        continue
+
+                data_point = {}
+                data_point['iasc'] = i
+                data_point['lat'] = vars['latitude'][j]
+                data_point['lon'] = vars['longitude'][k]
+                data_point['wdir'] = cut_wdir
+                data_point['rain'] = cut_rain
+                data_point['time'] = cut_mingmt
+                data_point['year'] = year
+                data_point['month'] = month
+                data_point['day'] = day
+
+                if satel_name == 'ascat' or satel_name == 'qscat':
+                    data_point['wspd'] = cut_wspd
+                elif satel_name == 'wsat':
+                    data_point['w-lf'] = cut_wspd_lf
+                    data_point['w-mf'] = cut_wspd_mf
+                    data_point['w-aw'] = cut_wspd_aw
+
+                data_list.append(data_point)
+
+    print()
+    print('total data point: ' + str(num))
+    print('cut_missing: ' + str(n_cut_missing))
+    print('cut_land: ' + str(n_cut_land))
+    print('cut_wdir: ' + str(n_cut_wdir))
+    print('skip condition 1: ' + str(num_c1))
+    print('skip condition 2: ' + str(num_c2))
+    print('skip condition 3: ' + str(num_c3))
+    print('returned data point: ' + str(len(data_list)))
+   #  print()
+
+    return data_list
+
+def narrow_map(dataset, region):
+    # Find rectangle range of area
+    min_lat, max_lat = find_index([region[0], region[1]], 'lat')
+    min_lon, max_lon = find_index([region[2], region[3]], 'lon')
+
+    map = {}
+    map['wspd'] = []
+    map['wdir'] = []
+    map['rain'] = []
+    map['time'] = []
+    # iasc = 0 (morning, descending passes)
+    # iasc = 1 (evening, ascending passes)
+    iasc = [0, 1]
+    vars = dataset.variables
+    for i in iasc:
+        wspd = vars['windspd'][i][min_lat:max_lat+1, min_lon:max_lon+1]
+        wdir = vars['winddir'][i][min_lat:max_lat+1, min_lon:max_lon+1]
+        rain = vars['scatflag'][i][min_lat:max_lat+1, min_lon:max_lon+1]
+        time = vars['mingmt'][i][min_lat:max_lat+1, min_lon:max_lon+1]
+        map['wspd'].append(wspd)
+        map['wdir'].append(wdir)
+        map['rain'].append(rain)
+        map['time'].append(time)
+
+    return map

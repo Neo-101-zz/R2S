@@ -4,7 +4,7 @@ import logging.config
 import logging
 import coloredlogs
 
-def setup_logging(default_path='logging.yaml', default_level=logging.INFO, env_key='LOG_CFG'):
+def setup_logging(default_path='../logging.yaml', default_level=logging.INFO, env_key='LOG_CFG'):
     """
     | **@author:** Prathyush SP
     | Logging Setup
@@ -18,7 +18,10 @@ def setup_logging(default_path='logging.yaml', default_level=logging.INFO, env_k
             try:
                 config = yaml.safe_load(f.read())
                 logging.config.dictConfig(config)
-                coloredlogs.install()
+                # Change field style of levelname
+                custom_field_styles = coloredlogs.DEFAULT_FIELD_STYLES
+                custom_field_styles['levelname']['color']='yellow'
+                coloredlogs.install(field_styles=custom_field_styles)
             except Exception as e:
                 print(e)
                 print('Error in Logging Configuration. Using default configs')
@@ -32,7 +35,7 @@ def setup_logging(default_path='logging.yaml', default_level=logging.INFO, env_k
 def load_config():
     """ Load config data from config.yaml """
 
-    with open("config.yaml", 'r') as stream:
+    with open("../config.yaml", 'r') as stream:
         try:
             return yaml.safe_load(stream)
         except yaml.YAMLError as exc:

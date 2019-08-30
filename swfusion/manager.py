@@ -9,22 +9,32 @@ import load_configs
 import utils
 
 def work_flow():
-    # CONFIG
-    CONFIG = load_configs.load_config()
-    os.makedirs(CONFIG['logging']['dir'], exist_ok=True)
     load_configs.setup_logging()
-    breakpoint()
+    logger = logging.getLogger(__name__)
+    # CONFIG
+    try:
+        CONFIG = load_configs.load_config()
+    except Exception as msg:
+        logger.exception('Exception occurred when loading config.')
+    os.makedirs(CONFIG['logging']['dir'], exist_ok=True)
     # Period
     # period = utils.input_period(CONFIG)
-    period = [datetime(2008, 7, 11, 0, 0, 0),
-              datetime(2008, 7, 14, 23, 59, 59)]
+    period = [datetime(2008, 7, 12, 0, 0, 0),
+              datetime(2008, 7, 12, 1, 0, 0)]
+    logger.info(f'Period: {period}')
     # Region
     # region = utils.input_region(CONFIG)
     region = [-90, 90, 0, 360]
+    logger.info(f'Region: {region}')
+    # MySQL Server root password
+    passwd = '39cnj971hw-'
     # Download and read
-    # cwind_ = cwind.CwindManager(CONFIG, period, region)
-    # sfmr_ = sfmr.SfmrManager(CONFIG, period, region)
-    satel_ = satel.SatelManager(CONFIG, period, region)
+    try:
+        cwind_ = cwind.CwindManager(CONFIG, period, region, passwd)
+        sfmr_ = sfmr.SfmrManager(CONFIG, period, region, passwd)
+        satel_ = satel.SatelManager(CONFIG, period, region, passwd)
+    except Exception as msg:
+        logger.exception('Exception occured when downloading and reading')
     # Match
     # Validate
     # Fusion
