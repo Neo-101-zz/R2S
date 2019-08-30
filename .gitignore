@@ -6,7 +6,6 @@
 !.gitignore
 !*.md
 !*.py
-!requirements.txt
 !*.yml
 !*.yaml
 
