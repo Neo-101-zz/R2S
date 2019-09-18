@@ -9,31 +9,47 @@ import os
 import time
 import sys
 
+from geopy import distance
+import mysql.connector
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, Integer, Float, String, DateTime
+from sqlalchemy import Integer, Float, String, DateTime
+from sqlalchemy import Table, Column, MetaData
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import mapper
+import matplotlib.pyplot as plt
+from mpl_toolkits.basemap import Basemap
+import numpy as np
 
-import mysql.connector
 from ascat_daily import ASCATDaily
 from quikscat_daily_v4 import QuikScatDaily
 from windsat_daily_v7 import WindSatDaily
 import utils
+import cwind
+import sfmr
 
 Base = declarative_base()
 
 class SatelManager(object):
 
-    def __init__(self, CONFIG, period, region, passwd):
+    def __init__(self, CONFIG, period, region, passwd,
+                 spatial_window, temporal_window):
         self.logger = logging.getLogger(__name__)
         self.satel_names = ['ascat', 'qscat', 'wsat']
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
         self.db_root_passwd = passwd
+        self.spatial_window = spatial_window
+        self.temporal_window = temporal_window
 
-        self.download()
+        self.years = [x for x in range(self.period[0].year,
+                                       self.period[1].year+1)]
+
+        # self.download()
         self.read(read_all=True)
+        # self.show()
+        self.match()
 
     def download(self):
         utils.setup_signal_handler()
@@ -81,7 +97,351 @@ class SatelManager(object):
         self.Session = sessionmaker(bind=self.engine)
         self.session = self.Session()
 
-        self._insert_satel(read_all)
+        # self._insert_satel(read_all)
+
+    def show(self):
+        for satel_name in self.satel_names:
+            for year in self.years:
+                satel_table_name = f'{satel_name}_{year}'
+
+                class SatelTable(object):
+                    pass
+
+                if self.engine.dialect.has_table(self.engine,
+                                                 satel_table_name):
+                    metadata = MetaData(bind=self.engine, reflect=True)
+                    t = metadata.tables[satel_table_name]
+                    mapper(SatelTable, t)
+                else:
+                    self.logger.error(f'{satel_table_name} not exists')
+                    exit(1)
+
+                lats = []
+                lons = []
+                mingmt = [True for i in range(1, 1441)]
+                for satel in self.session.query(SatelTable).yield_per(
+                    self.CONFIG['database']['batch_size']['query']):
+                    mins = satel.datetime.hour*60 + satel.datetime.minute
+                    if mingmt[mins]:
+                        lats.append(satel.latitude)
+                        lons.append(satel.longitude)
+                        mingmt[mins] = False
+
+                map = Basemap(llcrnrlon=-180.0, llcrnrlat=-90.0, urcrnrlon=180.0,
+                              urcrnrlat=90.0)
+                map.drawcoastlines()
+                map.drawmapboundary(fill_color='aqua')
+                map.fillcontinents(color='coral', lake_color='aqua')
+                map.drawmeridians(np.arange(0, 360, 30))
+                map.drawparallels(np.arange(-90, 90, 30))
+                map.scatter(lons, lats, latlon=True)
+                plt.show()
+                breakpoint()
+
+    def match(self):
+        self._match_with_cwind()
+        self._match_with_sfmr()
+
+    def _match_with_sfmr(self):
+        """Add two new columns: hurr_year_name and sfmr_key.
+        Then copy corrsponding sfmr data row to satel table.
+
+        """
+        # get years in period
+        # general sfmr_year table name
+        # iterate rows of table
+            # match with sfmr location and datetime
+
+        try:
+            col_hurrname = Column('roughly_matching_sfmr_hurrname',
+                                  String(length=20))
+            col_datakey = Column('matching_sfmr_datakey', Integer())
+        except Exception as msg:
+            breakpoint()
+            self.logger.exception(('Error occurred when defining new '
+                                   + 'columns about cwind'))
+            exit(msg)
+
+        # Roughly figure out the bounday of all hurricans
+        hurr_lat = []
+        hurr_lon = []
+
+        for hurr in self.session.query(sfmr.HurrSfmr):
+            hurr_lat.append(hurr.min_lat)
+            hurr_lat.append(hurr.max_lat)
+            hurr_lon.append(hurr.min_lon)
+            hurr_lon.append(hurr.max_lon)
+
+        min_lat, max_lat = min(hurr_lat), max(hurr_lat)
+        min_lon, max_lon = min(hurr_lon), max(hurr_lon)
+
+        # generate satelname_year table name
+        for satel_name in self.satel_names:
+            for year in self.years:
+                satel_table_name = f'{satel_name}_{year}'
+                info = f'Matching {satel_table_name} with sfmr'
+                self.logger.info(info)
+
+                SatelTable = utils.get_class_by_tablename(self.engine,
+                                                          satel_table_name)
+                if SatelTable is None:
+                    continue
+
+                try:
+                    # Check if columns of cwind exists
+                    if not hasattr(SatelTable, col_hurrname.name):
+                        # Add new columns of cwind
+                        utils.add_column(self.engine, satel_table_name,
+                                         col_hurrname)
+                        utils.add_column(self.engine, satel_table_name,
+                                         col_datakey)
+                except Exception as msg:
+                    self.logger(('Error occurred when checking if '
+                                 + 'columns about sfmr exist'))
+                    exit(msg)
+                # Iterate rows of table
+                satel_query = self.session.query(SatelTable).yield_per(
+                    self.CONFIG['database']['batch_size']['query'])
+                total = satel_query.count()
+                match_count = 0
+                for idx, row in enumerate(satel_query):
+
+                    print((f'\r{info} ({idx+1}/{total}) '
+                           + f'match {match_count}'), end='')
+                    # Roughly check whether row is in region of all
+                    # hurricanes
+                    if (row.latitude < min_lat or row.latitude > max_lat
+                        or row.longitude < min_lon or row.longitude > max_lon):
+                        continue
+                    # match with cwind station location and
+                    # corresponding cwind data datetime
+                    row.roughly_matching_sfmr_hurrname, \
+                            row.matching_hurr_datakey = \
+                            self._match_row_with_sfmr(SatelTable, row)
+
+                    if (row.roughly_matching_sfmr_hurrname is not None
+                        and row.matching_sfmr_datakey is not None):
+                        match_count += 1
+                        self.session.commit()
+
+                utils.delete_last_lines()
+                print('Done')
+
+
+    def _match_with_cwind(self):
+        """Add two new columns: cwind_station_id and cwind_data_key.
+        There copy corresponding cwind data row to satel table.
+
+        """
+
+        try:
+            col_stnid = Column('matching_cwind_stnid', String(length=10))
+            col_datakey = Column('matching_cwind_datakey', Integer())
+        except Exception as msg:
+            breakpoint()
+            self.logger.exception(('Error occurred when defining new '
+                                   + 'columns about cwind'))
+            exit(msg)
+
+        stn_lat = []
+        stn_lon = []
+
+        for stn in self.session.query(cwind.CwindStation):
+            stn_lat.append(stn.latitude)
+            stn_lon.append(stn.longitude)
+
+        min_lat, max_lat = min(stn_lat), max(stn_lat)
+        min_lon, max_lon = min(stn_lon), max(stn_lon)
+
+        # generate satelname_year table name
+        for satel_name in self.satel_names:
+            for year in self.years:
+                satel_table_name = f'{satel_name}_{year}'
+                info = f'Matching {satel_table_name} with cwind'
+                self.logger.info(info)
+
+                SatelTable = utils.get_class_by_tablename(self.engine,
+                                                          satel_table_name)
+                if SatelTable is None:
+                    continue
+
+                try:
+                    # Check if columns of cwind exists
+                    if not hasattr(SatelTable, col_stnid.name):
+                        # Add new columns of cwind
+                        utils.add_column(self.engine, satel_table_name,
+                                         col_stnid)
+                        utils.add_column(self.engine, satel_table_name,
+                                         col_datakey)
+                except Exception as msg:
+                    self.logger(('Error occurred when checking if '
+                                 + 'columns about cwind exist'))
+                    exit(msg)
+                # Iterate rows of table
+                satel_query = self.session.query(SatelTable).yield_per(
+                    self.CONFIG['database']['batch_size']['query'])
+                total = satel_query.count()
+                match_count = 0
+                for idx, row in enumerate(satel_query):
+
+                    print((f'\r{info} ({idx+1}/{total}) '
+                           + f'match {match_count}'), end='')
+                    if (row.latitude < min_lat or row.latitude > max_lat
+                        or row.longitude < min_lon or row.longitude > max_lon):
+                        continue
+                    # match with cwind station location and
+                    # corresponding cwind data datetime
+                    row.matching_cwind_stnid, row.matching_cwind_datakey \
+                            = self._match_row_with_cwind(SatelTable, row)
+
+                    if (row.matching_cwind_stnid is not None
+                        and row.matching_cwind_datakey is not None):
+                        match_count += 1
+                        self.session.commit()
+
+                utils.delete_last_lines()
+                print('Done')
+
+
+    def _match_row_with_sfmr(self, SatelTable, row):
+        """Select the hurricane SFMR data which is matching in space and
+        time.
+
+        """
+        matching_hurr = None
+        matching_data = None
+
+        # Find the roughly matching hurricane candidates in time and space
+        matching_hurr_candidate = dict()
+
+        for hurr in self.session.query(sfmr.HurrSfmr):
+            if (row.datetime.date < hurr.start_date
+                or row.datetime.date > hurr.end_date):
+                continue
+            if (row.latitude < hurr.min_lat or row.latitude > hurr.max_lat
+                or row.longitude < hurr_min_lon
+                or row.longitude > hurr_max_lon):
+                continue
+            matching_hurr_candidate[hurr] = dict()
+            matching_hurr_candidate[hurr]['table_name'] = \
+                    f'sfmr_{hurr.start_date.year}_{hurr.name}'
+
+            lat_dis = abs(stn.latitude - row.latitude)
+            lon_dis = abs(stn.longitude - row.longitude)
+            if (lat_dis >= self.spatial_window
+                or lon_dis >= self.spatial_window):
+                continue
+            dis = distance.distance((stn.latitude, stn.longitude),
+                                    (row.latitude, row.longitude))
+            if dis < min_dis:
+                min_dis = dis
+                matching_stn = stn
+
+        if not len(matching_hurr_candidate):
+            return None, None
+
+        # Find the precisely matching sfmr data record in time and space
+        for hurr in matching_hurr_candidate:
+            matching_hurr_candidate[hurr]['space_time_dis'] = None
+            matching_hurr_candidate[hurr]['datakey'] = None
+
+            SfmrTable = utils.get_class_by_tablename(
+                self.engine, matching_hurr_candidate[hurr])
+            if SfmrTable is None:
+                continue
+
+            min_space_time_dis = 999999999
+
+            for data in self.session.query(SfmrTable).yield_per(
+                self.CONFIG['database']['batch_size']['query']):
+                # Filter by datetime
+                datetime_dis = abs(data.datetime - row.datetime).seconds
+                if datetime_dis >= self.temporal_window:
+                    continue
+                # Filter by latitude and longitude
+                lat_dis = abs(stn.latitude - row.latitude)
+                lon_dis = abs(stn.longitude - row.longitude)
+                if (lat_dis >= self.spatial_window
+                    or lon_dis >= self.spatial_window):
+                    continue
+                # ??? How to calculate space-time distance ???
+                location_dis = distance.distance(
+                    (data.latitude, data.longitude),
+                    (row.latitude, row.longitude))
+                space_time_dis = cal_space_time_distance(
+                    location_dis, datetime_dis)
+                if space_time_dis < min_space_time_dis:
+                    min_space_time_dis = space_time_dis
+                    matching_hurr_candidate[hurr]['space_time_dis'] =\
+                            space_time_dis
+                    matching_hurr_candidate[hurr]['datakey'] = data.key
+
+        # Select closest hurricane SFMR data record from candidates
+        min_space_time_dis = 999999999
+        closest_hurr = None
+        for hurr in matching_hurr_candidate:
+            if matching_hurr_candidate[hurr]['datakey'] is None:
+                continue
+            if matching_hurr_candidate[hurr]['space_time_dis']\
+               < min_space_time_dis:
+                min_space_time_dis = \
+                        matching_hurr_candidate[hurr]['space_time_dis']
+                closest_hurr = hurr
+
+        if closest_hurr is not None:
+            return hurr, matching_hurr_candidate[hurr]['datakey']
+        else:
+            return None, None
+
+    def _match_row_with_cwind(self, SatelTable, row):
+        """Select the cwind station which is the matching in space
+        and the cwind data which is the matching in time.
+
+        """
+        matching_stn = None
+        matching_data = None
+
+        # Find the matching cwind station in space
+        min_dis = 99999999
+
+        for stn in self.session.query(cwind.CwindStation):
+            lat_dis = abs(stn.latitude - row.latitude)
+            lon_dis = abs(stn.longitude - row.longitude)
+            if (lat_dis >= self.spatial_window
+                or lon_dis >= self.spatial_window):
+                continue
+            dis = distance.distance((stn.latitude, stn.longitude),
+                                    (row.latitude, row.longitude))
+            if dis < min_dis:
+                min_dis = dis
+                matching_stn = stn
+
+        if matching_stn is None:
+            return None, None
+
+        # Find the matching cwind data record which belongs to
+        # matching cwind station in time
+        cwind_data_table_name = f'cwind_{matching_stn.id}'
+        CwindData = utils.get_class_by_tablename(
+            self.engine, cwind_data_table_name)
+        if CwindData is None:
+            return None, None
+
+        min_datetime_dis = 99999999
+
+        for data in self.session.query(CwindData).yield_per(
+            self.CONFIG['database']['batch_size']['query']):
+            datetime_dis = abs(data.datetime - row.datetime).seconds
+            if datetime_dis>= self.temporal_window:
+                continue
+            if datetime_dis < min_datetime_dis:
+                min_datetime_dis = datetime_dis
+                matching_data = data
+
+        if matching_data is None:
+            return matching_stn.id, None
+        else:
+            return matching_stn.id, matching_data.key
 
     def _insert_satel(self, read_all):
         if read_all:
@@ -96,6 +456,12 @@ class SatelManager(object):
                 ]
         else:
             files_path = self.downloaded_file_path
+            files_path = dict()
+            for satel_name in self.satel_names:
+                files_path[satel_name] = []
+                for file in os.listdir(
+                    self.CONFIG[satel_name]['dirs']['bmaps']):
+                    pass
 
         skip_vars = ['mingmt', 'nodata']
         not_null_vars = ['latitude', 'longitude']
@@ -153,7 +519,8 @@ class SatelManager(object):
                 self.logger.debug(f'{info} in {end-start:.2f} s')
 
                 total_sample = one_day_records
-                batch_size = self.CONFIG['database']['batch_size']
+                batch_size = \
+                        self.CONFIG['database']['batch_size']['insert']
                 table_class = SatelTable
                 unique_cols = ['space_time']
                 session = self.session
@@ -366,6 +733,9 @@ class SatelManager(object):
                 continue
 
             file_path = save_dir + file_name
+
+            if not utils.ready_for_download(file_url, file_path):
+                return
             utils.download(file_url, file_path)
             self.downloaded_file_path[satel_name].append(file_path)
 

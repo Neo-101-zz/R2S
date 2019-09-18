@@ -16,6 +16,8 @@ import mysql.connector
 from mysql.connector import errorcode
 import netCDF4
 import bytemaps
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine
 from sqlalchemy import Integer, Float, String, DateTime, Boolean
 from sqlalchemy import Table, Column, MetaData
 from sqlalchemy.orm import mapper
@@ -85,6 +87,8 @@ def handler(signum, frame):
     # makes this file uncomplete
     if current_file is not None:
         os.remove(current_file)
+        info = f'Removing uncompleted downloaded file: {current_file}'
+        logger.info(info)
     # Print log
     print('\nForce quit on %s.\n' % signum)
     # Force quit
@@ -241,11 +245,11 @@ def download(url, path, progress=False):
 
     """
     if os.path.exists(path):
-        return False
+        return
 
     if not url_exists(url):
         print('File doesn\'t exist: ' + url)
-        return False
+        return
 
     global current_file
     current_file = path
@@ -253,12 +257,13 @@ def download(url, path, progress=False):
     global format_custom_text
     file_name = path.split('/')[-1]
     format_custom_text.update_mapping(f=file_name)
-    if progress:
-        request.urlretrieve(url, path, show_progress)
-    else:
-        request.urlretrieve(url, path)
-
-    return True
+    try:
+        if progress:
+            request.urlretrieve(url, path, show_progress)
+        else:
+            request.urlretrieve(url, path)
+    except Exception as msg:
+        logger.exception(f'Error occured when downloading {path} from {url}')
 
 def check_and_update_period(period, limit, prompt):
     """Check whether period is in range of date limit,
@@ -829,6 +834,13 @@ def find_index(range, lat_or_lon):
         else:
             res.append(math.floor(intervals))
 
+    # in case that two elements of range is same (representing single
+    # point)
+    if res[0] > res[1]:
+        tmp = res[0]
+        res[0] = res[1]
+        res[1] = tmp
+
     return res
 
 def extract_bytemap_to_table(satel_name, bm_file, table_class, skip_vars,
@@ -1085,3 +1097,85 @@ def narrow_map(dataset, region):
         map['time'].append(time)
 
     return map
+
+def get_class_by_tablename(engine, table_fullname):
+    """Return class reference mapped to table.
+
+    :param table_fullname: String with fullname of table.
+    :return: Class reference or None.
+    """
+    class Template(object):
+        pass
+
+    if engine.dialect.has_table(engine, table_fullname):
+        metadata = MetaData(bind=engine, reflect=True)
+        t = metadata.tables[table_fullname]
+        mapper(Template, t)
+        return Template
+    else:
+        logger.error(f'{table_fullname} not exists')
+        return None
+
+
+def add_column(engine, table_name, column):
+    column_name = column.compile(dialect=engine.dialect)
+    column_type = column.type.compile(engine.dialect)
+    engine.execute('ALTER TABLE %s ADD COLUMN %s %s' % (table_name, column_name, column_type))
+
+def setup_database(the_class, Base):
+    DB_CONFIG = the_class.CONFIG['database']
+    PROMPT = the_class.CONFIG['workflow']['prompt']
+    DBAPI = DB_CONFIG['db_api']
+    USER = DB_CONFIG['user']
+    # password_ = input(PROMPT['input']['db_root_password'])
+    password_ = the_class.db_root_passwd
+    HOST = DB_CONFIG['host']
+    DB_NAME = DB_CONFIG['db_name']
+    ARGS = DB_CONFIG['args']
+
+    the_class.cnx = mysql.connector.connect(user=USER, password=password_,
+                                       host=HOST, use_pure=True)
+    create_database(the_class.cnx, DB_NAME)
+    use_database(the_class.cnx, DB_NAME)
+
+    # Define the MySQL engine using MySQL Connector/Python
+    connect_string = ('{0}://{1}:{2}@{3}/{4}?{5}'.format(
+        DBAPI, USER, password_, HOST, DB_NAME, ARGS))
+    the_class.engine = create_engine(connect_string, echo=False)
+    # Create table of the class
+    Base.metadata.create_all(the_class.engine)
+    the_class.Session = sessionmaker(bind=the_class.engine)
+    the_class.session = the_class.Session()
+
+def convert_10(wspd, height):
+    """Convert the wind speed at the the height of anemometer to
+    the wind speed at the height of 10 meters.
+
+    Parameters
+    ----------
+    wspd : float
+        Wind speed at the height of anemometer.
+    height : float
+        The height of anemometer.
+
+    Returns
+    -------
+    con_wspd : float
+        Wind speed at the height of 10 meters.
+
+    References
+    ----------
+    Xiaoping Xie, Jiansu Wei, and Liang Huang, Evaluation of ASCAT
+    Coastal Wind Product Using Nearshore Buoy Data, Journal of Applied
+    Meteorological Science 25 (2014), no. 4, 445–453.
+
+    """
+    if wspd <= 7:
+        z0 = 0.0023
+    else:
+        z0 = 0.022
+    kz = math.log(10/z0) / math.log(height/z0)
+    con_wspd = wspd * kz
+
+    return con_wspd
+

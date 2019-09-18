@@ -4,9 +4,8 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-import load_config
+import load_configs
 import utils
-import rd_util as ru
 
 TIME_D = 1440
 LON_D = 1440
@@ -122,7 +121,7 @@ def load_data(CONFIG, satel_name, date):
     suffix = CONFIG[satel_name]['data_suffix']
     date_str = date.strftime('%Y%m%d')
     file_path = '{0}{1}_{2}{3}'.format(dir, satel_name, date_str, suffix)
-    dataset = ru.read_daily_satel(satel_name, file_path)
+    dataset = utils.dataset_of_daily_satel(satel_name, file_path)
     print('[Info] [%s] Load %s' % (satel_name.upper(), file_path))
 
     return dataset
@@ -160,12 +159,12 @@ def entirely_check_mode(CONFIG):
             same_mingmt, same_lat, same_lon = \
                     test_mingmt_duplicate_and_its_vars(dataset.variables)
             if len(same_mingmt):
-                plot_same_distribution(CONFIG['test']['dirs']['pics'],
+                plot_same_distribution(CONFIG['result']['dirs']['fig'],
                                        satel_name, date_, same_mingmt,
                                        same_lat, same_lon)
 
 if __name__ == '__main__':
-    CONFIG = load_config.load_config()
+    CONFIG = load_configs.load_config()
     mode = choose_mode()
     if mode == 1:
         custom_mode(CONFIG)

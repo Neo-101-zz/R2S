@@ -28,14 +28,17 @@ from mpl_toolkits.basemap import Basemap
 
 import utils
 
+n_ane = 0
+n_ele = 0
+
 Base = declarative_base()
 DynamicBase = declarative_base(class_registry=dict())
 
-class CwindStation(Base):
+class StdmetStation(Base):
     """Represents station which produces NDBC Continuous Wind data.
 
     """
-    __tablename__ = 'cwind_station'
+    __tablename__ = 'stdmet_station'
 
     key = Column(Integer(), primary_key=True)
     id = Column(String(length=10), nullable=False, unique=True)
@@ -51,12 +54,12 @@ class CwindStation(Base):
     water_depth = Column(Float())
     watch_circle_radius = Column(Float())
 
-class CwindManager(object):
+class StdmetManager(object):
     """Manage downloading and reading NDBC Continuous Wind data.
 
     """
     def __init__(self, CONFIG, period, region, passwd):
-        self.CWIND_CONFIG = CONFIG['cwind']
+        self.STDMET_CONFIG = CONFIG['stdmet']
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
@@ -74,14 +77,14 @@ class CwindManager(object):
         self._extract_relation()
 
         # self.download()
-        self.download_all_stations_no_limit()
+        # self.download_all_stations_no_limit()
 
         utils.reset_signal_handler()
         utils.setup_database(self, Base)
 
-        self.read()
+        # self.read()
 
-        # self.show()
+        self.show()
 
     def download(self):
         """Download NDBC Continuous Wind data (including responding
@@ -89,28 +92,28 @@ class CwindManager(object):
 
         """
         correct, period = utils.check_and_update_period(
-            self.period, self.CWIND_CONFIG['period_limit'],
+            self.period, self.STDMET_CONFIG['period_limit'],
             self.CONFIG['workflow']['prompt'])
         if not correct:
             return
         utils.setup_signal_handler()
         self._download_all_station_info()
-        self._download_all_cwind_data()
+        self._download_all_stdmet_data()
 
     def read(self, read_all=False):
         """Read data into MySQL database.
 
         """
         self._insert_station_info(read_all=True)
-        self._insert_data(read_all)
+        self._insert_data()
 
         return
 
     def show(self):
-        self._draw_cwind_stations('focus')
+        self._draw_stdmet_stations('focus')
 
-    def _draw_cwind_stations(self, mode='global'):
-        stn_query = self.session.query(CwindStation)
+    def _draw_stdmet_stations(self, mode='global'):
+        stn_query = self.session.query(StdmetStation)
         stn_lat = []
         stn_lon = []
 
@@ -138,21 +141,21 @@ class CwindManager(object):
         map.drawparallels(np.arange(-90,90,30))
         map.scatter(stn_lon, stn_lat, latlon=True)
         plt.savefig((f'{self.CONFIG["result"]["dirs"]["fig"]}'
-                     + f'distribution_of_cwind_stations.png'))
+                     + f'distribution_of_stdmet_stations.png'))
         plt.show()
 
-    def _create_cwind_data_table(self, station_id):
-        table_name = 'cwind_%s' % station_id
+    def _create_stdmet_data_table(self, station_id):
+        table_name = 'stdmet_%s' % station_id
 
-        class CwindData(object):
+        class StdmetData(object):
             pass
 
         if self.engine.dialect.has_table(self.engine, table_name):
             metadata = MetaData(bind=self.engine, reflect=True)
             t = metadata.tables[table_name]
-            mapper(CwindData, t)
+            mapper(StdmetData, t)
 
-            return CwindData
+            return StdmetData
 
         cols = []
         cols.append(Column('key', Integer(), primary_key=True))
@@ -162,23 +165,33 @@ class CwindManager(object):
         cols.append(Column('wspd_10', Float(), nullable=False))
         cols.append(Column('wdir', Float(), nullable=False))
         cols.append(Column('gst', Float()))
-        cols.append(Column('gdr', Float()))
-        cols.append(Column('gtime', Float()))
+
+        cols.append(Column('wvht', Float()))
+        cols.append(Column('dpd', Float()))
+        cols.append(Column('apd', Float()))
+        cols.append(Column('mwd', Float()))
+        cols.append(Column('pres', Float()))
+        cols.append(Column('atmp', Float()))
+        cols.append(Column('wtmp', Float()))
+        cols.append(Column('dewp', Float()))
+        cols.append(Column('vis', Float()))
+        cols.append(Column('ptdy', Float()))
+        cols.append(Column('tide', Float()))
 
         metadata = MetaData(bind=self.engine)
         t = Table(table_name, metadata, *cols)
         metadata.create_all()
-        mapper(CwindData, t)
+        mapper(StdmetData, t)
         self.session.commit()
 
-        return CwindData
+        return StdmetData
 
     def _insert_data(self, read_all=False):
-        self.logger.info(self.CWIND_CONFIG['prompt']['info']['read_data'])
-        data_dir = self.CWIND_CONFIG['dirs']['data']
+        self.logger.info(self.STDMET_CONFIG['prompt']['info']['read_data'])
+        data_dir = self.STDMET_CONFIG['dirs']['data']
         station_ids = [
-            id for id in self.session.query(CwindStation.id).\
-            order_by(CwindStation.id)
+            id for id in self.session.query(StdmetStation.id).\
+            order_by(StdmetStation.id)
         ]
         if not read_all:
             data_files = [x for x in os.listdir(data_dir) if
@@ -193,15 +206,15 @@ class CwindManager(object):
 
         for id in station_ids:
             id = id[0]
-            DataOfStation = self._create_cwind_data_table(id)
+            DataOfStation = self._create_stdmet_data_table(id)
             for file in data_files:
                 if file.startswith(id):
-                    # cwind data file belong to station in cwind_station
+                    # stdmet data file belong to station in stdmet_station
                     # table
                     count += 1
                     data_path = data_dir + file
 
-                    info = f'Extracting cwind data from {file}'
+                    info = f'Extracting stdmet data from {file}'
                     print(f'\r{info} ({count}/{total})', end='')
 
                     start = time.process_time()
@@ -221,17 +234,17 @@ class CwindManager(object):
                         check_self=True)
                     end = time.process_time()
 
-                    self.logger.debug((f'Bulk inserting cwind data into '
-                                       + f'cwind_{id} in {end-start:2f} s'))
+                    self.logger.debug((f'Bulk inserting stdmet data into '
+                                       + f'stdmet_{id} in {end-start:2f} s'))
         utils.delete_last_lines()
         print('Done')
 
     def _insert_station_info(self, read_all=False):
-        self.logger.info(self.CWIND_CONFIG['prompt']['info']\
+        self.logger.info(self.STDMET_CONFIG['prompt']['info']\
                          ['read_station'])
         min_lat, max_lat = self.region[0], self.region[1]
         min_lon, max_lon = self.region[2], self.region[3]
-        station_info_dir = self.CWIND_CONFIG['dirs']['stations']
+        station_info_dir = self.STDMET_CONFIG['dirs']['stations']
 
         station_files = []
         if not read_all:
@@ -273,18 +286,21 @@ class CwindManager(object):
         start = time.process_time()
         utils.bulk_insert_avoid_duplicate_unique(
             all_stations, self.CONFIG['database']['batch_size']['insert'],
-            CwindStation, ['id'], self.session)
+            StdmetStation, ['id'], self.session)
         end = time.process_time()
 
-        self.logger.debug(('Bulk inserting cwind station information into '
-                           + f'{CwindStation.__tablename__} '
+        print('n_ane: ' + str(n_ane))
+        print('n_ele: ' + str(n_ele))
+
+        self.logger.debug(('Bulk inserting stdmet station information into '
+                           + f'{StdmetStation.__tablename__} '
                            + f'in {end-start:.2f}s'))
 
     def _extract_data(self, data_path, DataOfStation):
         data_name = data_path.split('/')[-1]
         try:
             with gzip.GzipFile(data_path, 'rb') as gz:
-                cwind_text = gz.read()
+                stdmet_text = gz.read()
         except FileNotFoundError as msg:
             exit(msg)
         except EOFError as msg:
@@ -292,19 +308,36 @@ class CwindManager(object):
 
         temp_file_name = data_name[0:-3]
         with open(temp_file_name, 'wb') as txt:
-            txt.write(cwind_text)
+            txt.write(stdmet_text)
+
+        with open(temp_file_name, 'rb') as txt:
+            first_line = txt.readline().decode('utf-8')
+
+        names = ['year', 'month', 'day', 'hour']
+        formats = ['i4', 'i2', 'i2', 'i2']
+        if 'mm' in first_line:
+            names.append('minute')
+            formats.append('i2')
+        names += ['wdir', 'wspd', 'gst', 'wvht', 'dpd' ,'apd', 'mwd',
+                  'pres', 'atmp', 'wtmp', 'dewp', 'vis']
+        formats += ['f4', 'f4', 'f4', 'f4', 'f4', 'f4', 'i4', 'f4',
+                    'f4', 'f4', 'f4', 'f4']
+        if 'PTDY' in first_line:
+            names.append('ptdy')
+            formats.append('f4')
+        if 'TIDE' in first_line:
+            names.append('tide')
+            formats.append('f4')
+
         # Specify data type of columns of unzipped gzip file
-        data_type = {'names': ('year', 'month', 'day', 'hour',
-                               'minute', 'wdir', 'wspd',
-                               'gdr', 'gst', 'gtime'),
-                     'formats': ('i4', 'i2', 'i2', 'i2', 'i2',
-                                 'f4', 'f4', 'f4', 'f4', 'i4')}
+        data_type = {'names': tuple(names),
+                     'formats': tuple(formats)}
         data = np.genfromtxt(temp_file_name, skip_header=1,
                              invalid_raise=False, dtype=data_type)
         os.remove(temp_file_name)
 
         # Store Continuous Wind Data in an entire year into a list
-        cwind_1_year = []
+        stdmet_1_year = []
 
         if data[3]['year'] < 100:
             year_base = 1900
@@ -315,52 +348,75 @@ class CwindManager(object):
             # watch datatype of each column
             # breakpoint()
             # Every row of data is the record of 10 minutes
-            cwind_10_mins = DataOfStation()
+            stdmet_1_hour = DataOfStation()
             row['year'] = year_base + row['year']
-            cwind_10_mins.datetime = datetime.datetime(
+            if 'minute' in data_type['names']:
+                minute = int(row['minute'])
+            else:
+                minute = 0
+            stdmet_1_hour.datetime = datetime.datetime(
                 int(row['year']), int(row['month']), int(row['day']),
-                int(row['hour']), int(row['minute']), 0)
+                int(row['hour']), minute, 0)
             # When row's datetime is after period, skip all rows
             # left, because all rows are sorted in chronological
             # order
-            if cwind_10_mins.datetime > self.period[1]:
+            if stdmet_1_hour.datetime > self.period[1]:
                 break
-            elif (cwind_10_mins.datetime < self.period[0]
-                  or cwind_10_mins.datetime is None):
+            elif (stdmet_1_hour.datetime < self.period[0]
+                  or stdmet_1_hour.datetime is None):
                 continue
-            anemometer_elev = self.session.query(CwindStation).\
+            anemometer_elev = self.session.query(StdmetStation).\
                     filter_by(id=data_name[:-12]).\
                     first().anemometer_elev
             if row['wspd'] == 99.0:
                 continue
             else:
-                cwind_10_mins.wspd = float(row['wspd'])
-            if cwind_10_mins.wspd is None:
+                stdmet_1_hour.wspd = float(row['wspd'])
+            if stdmet_1_hour.wspd is None:
                 continue
-            cwind_10_mins.wspd_10 = utils.convert_10(float(row['wspd']),
-                                                      anemometer_elev)
+            stdmet_1_hour.wspd_10 = utils.convert_10(float(row['wspd']),
+                                                     anemometer_elev)
             if row['wdir'] == 999:
                 continue
             else:
-                cwind_10_mins.wdir = float(row['wdir'])
-            if cwind_10_mins.wdir is None:
+                stdmet_1_hour.wdir = float(row['wdir'])
+            if stdmet_1_hour.wdir is None:
                 continue
-            cwind_10_mins.gst = (None if row['gst'] == 99.0 \
+            stdmet_1_hour.gst = (None if row['gst'] == 99.0 \
                                  else float(row['gst']))
-            cwind_10_mins.gdr = (None if row['gdr'] == 999 \
-                                 else float(row['gdr']))
-            cwind_10_mins.gtime = (None if row['gtime']%100 == 99 \
-                                   else int(row['gtime'])%100)
+            stdmet_1_hour.wvht = (None if row['wvht'] == 99.0 \
+                                 else float(row['wvht']))
+            stdmet_1_hour.dpd = (None if row['dpd'] == 99.0 \
+                                 else float(row['dpd']))
+            stdmet_1_hour.apd = (None if row['apd'] == 99.0 \
+                                 else float(row['apd']))
+            stdmet_1_hour.mwd= (None if row['mwd'] == 999 \
+                                 else int(row['mwd']))
+            stdmet_1_hour.pres = (None if row['pres'] == 9999.0 \
+                                 else float(row['pres']))
+            stdmet_1_hour.atmp = (None if row['atmp'] == 999.0 \
+                                 else float(row['atmp']))
+            stdmet_1_hour.wtmp = (None if row['wtmp'] == 999.0 \
+                                 else float(row['wtmp']))
+            stdmet_1_hour.dewp = (None if row['dewp'] == 999.0 \
+                                 else float(row['dewp']))
+            stdmet_1_hour.vis = (None if row['vis'] == 99.0 \
+                                 else float(row['vis']))
+            # Since field PTDY is not found in sample stdmet files,
+            # PTDY will not be read for now
+            if 'TIDE' in first_line:
+                stdmet_1_hour.tide = (None if row['tide'] == 99.0 \
+                                     else float(row['tide']))
 
-            cwind_1_year.append(cwind_10_mins)
+            stdmet_1_year.append(stdmet_1_hour)
 
-        if len(cwind_1_year):
-            return cwind_1_year
+        if len(stdmet_1_year):
+            return stdmet_1_year
         else:
             return None
 
     def _extract_station_info(self, station_info_path):
-        station = CwindStation()
+        station = StdmetStation()
         station.id = station_info_path.split('/')[-1][:-4]
 
         with open(station_info_path, 'r') as station_file:
@@ -412,6 +468,12 @@ class CwindManager(object):
                 station.watch_circle_radius = 0.9144 * \
                         self._extract_general_num(line)
 
+        global n_ane, n_ele
+        if station.anemometer_elev is None:
+            n_ane += 1
+        if station.site_elev is None:
+            n_ele += 1
+
         if (station.anemometer_elev is None
             or station.site_elev is None
             or station.latitude is None
@@ -439,7 +501,7 @@ class CwindManager(object):
 
         """
         if not hasattr(self, 'all_year_station'):
-            with open(self.CWIND_CONFIG['vars_path']['all_year_station'],
+            with open(self.STDMET_CONFIG['vars_path']['all_year_station'],
                       'rb') as file:
                 self.all_year_station = pickle.load(file)
 
@@ -465,17 +527,17 @@ class CwindManager(object):
         """
         this_year = datetime.datetime.today().year
 
-        if (os.path.exists(self.CWIND_CONFIG['vars_path']\
+        if (os.path.exists(self.STDMET_CONFIG['vars_path']\
                            ['all_year_station'])
-            and os.path.exists(self.CWIND_CONFIG['vars_path']\
+            and os.path.exists(self.STDMET_CONFIG['vars_path']\
                                ['all_station_year'])):
             relation_modified_datetime = dict()
             relation_modified_datetime['all_year_station'] = \
                     datetime.datetime.fromtimestamp(os.path.getmtime(
-                        self.CWIND_CONFIG['vars_path']['all_year_station']))
+                        self.STDMET_CONFIG['vars_path']['all_year_station']))
             relation_modified_datetime['all_station_year'] = \
                     datetime.datetime.fromtimestamp(os.path.getmtime(
-                        self.CWIND_CONFIG['vars_path']['all_station_year']))
+                        self.STDMET_CONFIG['vars_path']['all_station_year']))
 
             lastest_relation = True
             for key in relation_modified_datetime.keys():
@@ -488,8 +550,8 @@ class CwindManager(object):
         self.all_year_station = dict()
         self.all_station_year = dict()
 
-        start_year = self.CWIND_CONFIG['period_limit']['start'].year
-        end_year = self.CWIND_CONFIG['period_limit']['end'].year
+        start_year = self.STDMET_CONFIG['period_limit']['start'].year
+        end_year = self.STDMET_CONFIG['period_limit']['end'].year
         if end_year > this_year:
             end_year = this_year
         self.all_years = [x for x in range(start_year, end_year+1)]
@@ -512,21 +574,21 @@ class CwindManager(object):
 
         # Save two dicts which store the relation between all years and
         # stations
-        utils.save_relation(self.CWIND_CONFIG['vars_path']['all_year_station'],
+        utils.save_relation(self.STDMET_CONFIG['vars_path']['all_year_station'],
                             self.all_year_station)
-        utils.save_relation(self.CWIND_CONFIG['vars_path']['all_station_year'],
+        utils.save_relation(self.STDMET_CONFIG['vars_path']['all_station_year'],
                             self.all_station_year)
 
     def download_all_stations_no_limit(self):
         # There are several stations which can be found in
-        # https://www.ndbc.noaa.gov/data/historical/cwind/
+        # https://www.ndbc.noaa.gov/data/historical/stdmet/
         # but do not have station page:
         # ['46a54', '42a02', '42otp', '42a03', '46a35', '47072', '32st2',
         # '51wh2', '41nt1', '41nt2', '51wh1', '32st1', '46074', '4h364',
         # 'a025w', '4h390', '4h361', 'q004w', '4h394', 'b040z', 'a002e',
         # 'et01z']
         if not hasattr(self, 'all_station_year'):
-            with open(self.CWIND_CONFIG['vars_path']['all_station_year'],
+            with open(self.STDMET_CONFIG['vars_path']['all_station_year'],
                       'rb') as file:
                 self.all_station_year = pickle.load(file)
 
@@ -534,13 +596,13 @@ class CwindManager(object):
         for stn in self.all_station_year.keys():
             self.all_stations.add(stn)
 
-        self.logger.info(self.CWIND_CONFIG['prompt']['info']\
+        self.logger.info(self.STDMET_CONFIG['prompt']['info']\
                          ['download_all_station'])
         total = len(self.all_stations)
         count = 0
         for stn in self.all_stations:
             count += 1
-            info = f'Downloading information of cwind station {stn}'
+            info = f'Downloading information of stdmet station {stn}'
             self.logger.debug(info)
             print((f'\r{info} ({count}/{total})'), end='')
 
@@ -551,16 +613,16 @@ class CwindManager(object):
                 if result != 'error':
                     break
                 else:
-                    # Only loop when cannot get html of cwind station
+                    # Only loop when cannot get html of stdmet station
                     # webpage
-                    self.logger.error(self.CWIND_CONFIG['prompt']['error'] \
+                    self.logger.error(self.STDMET_CONFIG['prompt']['error'] \
                           ['fail_download_station'] + stn)
                     i += 1
-                    if i <= self.CWIND_CONFIG['retry_times']:
+                    if i <= self.STDMET_CONFIG['retry_times']:
                         self.logger.info('reconnect: %d' % i)
                     else:
                         self.logger.critical(
-                            self.CWIND_CONFIG['prompt']['info']\
+                            self.STDMET_CONFIG['prompt']['info']\
                             ['skip_download_station'])
                         break
         utils.delete_last_lines()
@@ -570,13 +632,13 @@ class CwindManager(object):
         """Download all self.stations' information into single directory.
 
         """
-        self.logger.info(self.CWIND_CONFIG['prompt']['info']\
+        self.logger.info(self.STDMET_CONFIG['prompt']['info']\
                          ['download_station'])
         total = len(self.stations)
         count = 0
         for stn in self.stations:
             count += 1
-            info = f'Downloading information of cwind station {stn}'
+            info = f'Downloading information of stdmet station {stn}'
             self.logger.debug(info)
             print((f'\r{info} ({count}/{total})'), end='')
 
@@ -587,28 +649,28 @@ class CwindManager(object):
                 if result != 'error':
                     break
                 else:
-                    # Only loop when cannot get html of cwind station
+                    # Only loop when cannot get html of stdmet station
                     # webpage
-                    self.logger.error(self.CWIND_CONFIG['prompt']['error'] \
+                    self.logger.error(self.STDMET_CONFIG['prompt']['error'] \
                           ['fail_download_station'] + stn)
                     i += 1
-                    if i <= self.CWIND_CONFIG['retry_times']:
+                    if i <= self.STDMET_CONFIG['retry_times']:
                         self.logger.info('reconnect: %d' % i)
                     else:
                         self.logger.critical(
-                            self.CWIND_CONFIG['prompt']['info']\
+                            self.STDMET_CONFIG['prompt']['info']\
                             ['skip_download_station'])
                         break
         utils.delete_last_lines()
         print('Done')
 
-    def _download_all_cwind_data(self):
+    def _download_all_stdmet_data(self):
         """Download Continuous Wind data into single directory.
 
         """
-        self.logger.info(self.CWIND_CONFIG['prompt']['info']\
+        self.logger.info(self.STDMET_CONFIG['prompt']['info']\
                          ['download_data'])
-        utils.set_format_custom_text(self.CWIND_CONFIG['data_name_length'])
+        utils.set_format_custom_text(self.STDMET_CONFIG['data_name_length'])
         total = 0
         count = 0
         for year in self.years:
@@ -616,9 +678,9 @@ class CwindManager(object):
 
         for year in self.years:
             for stn in self.year_station[year]:
-                self._download_single_cwind_data(stn, year)
+                self._download_single_stdmet_data(stn, year)
                 count += 1
-                info = f'Downloading {year} cwind data of station {stn}'
+                info = f'Downloading {year} stdmet data of station {stn}'
                 self.logger.debug(info)
                 print((f'\r{info} ({count}/{total})'), end='')
         utils.delete_last_lines()
@@ -628,12 +690,12 @@ class CwindManager(object):
         """Get stations' id in specified year.
 
         """
-        url = self.CWIND_CONFIG['urls']['data']
+        url = self.STDMET_CONFIG['urls']['data']
         page = requests.get(url)
         data = page.text
         soup = BeautifulSoup(data, features='lxml')
         stations = set()
-        suffix = 'c%s.txt.gz' % year
+        suffix = 'h%s.txt.gz' % year
         anchors = soup.find_all('a')
 
         for link in anchors:
@@ -645,11 +707,11 @@ class CwindManager(object):
         return stations
 
     def _download_single_station_info(self, station):
-        """Download single cwind station information.
+        """Download single stdmet station information.
 
         """
-        url = self.CWIND_CONFIG['urls']['stations']
-        save_dir = self.CWIND_CONFIG['dirs']['stations']
+        url = self.STDMET_CONFIG['urls']['stations']
+        save_dir = self.STDMET_CONFIG['dirs']['stations']
         file_name = station + '.txt'
         file_path = save_dir + file_name
 
@@ -677,14 +739,14 @@ class CwindManager(object):
 
         return True
 
-    def _download_single_cwind_data(self, station, year):
+    def _download_single_stdmet_data(self, station, year):
         """Download Continuous Wind data of specified station and year.
 
         """
-        save_dir = self.CWIND_CONFIG['dirs']['data']
-        data_url = self.CWIND_CONFIG['urls']['data']
+        save_dir = self.STDMET_CONFIG['dirs']['data']
+        data_url = self.STDMET_CONFIG['urls']['data']
         os.makedirs(save_dir, exist_ok=True)
-        file_name = '{0}c{1}.txt.gz'.format(station, year)
+        file_name = '{0}h{1}.txt.gz'.format(station, year)
         file_path = '{0}{1}'.format(save_dir, file_name)
         file_url = '{0}{1}'.format(data_url, file_name)
 

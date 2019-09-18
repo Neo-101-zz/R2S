@@ -1,5 +1,38 @@
 logging:
   dir: '../log'
+stdmet:
+  urls:
+    data: 'https://www.ndbc.noaa.gov/data/historical/stdmet/'
+    stations: 'https://www.ndbc.noaa.gov/station_page.php'
+  period_limit:
+    start: 1970-02-26 20:00:00
+    end: 9999-12-31 23:59:59
+  retry_times: 10
+  data_name_length: 16
+  dirs:
+    vars: '../data/ndbc/stdmet_variable/'
+    stations: '../data/ndbc/stdmet_station_info/'
+    data: '../data/ndbc/stdmet_data/'
+  vars_path:
+    all_year_station: '../data/ndbc/stdmet_variable/all_year_station.pkl'
+    all_station_year: '../data/ndbc/stdmet_variable/all_station_year.pkl'
+  prompt:
+    info:
+      download_station: |-
+        Downloading Information of NDBC Standard Meteorological Data Station
+      download_all_station: |-
+        Downloading Information of [ALL] NDBC Standard Meteorological Data Station
+      skip_download_station: |-
+        Fail downloading information of stdmet station: 
+      download_data: |-
+        Downloading NDBC Standard Meteorological Data
+      read_station: |-
+        Reading stdmet station information
+      read_data: |-
+        Reading stdmet data
+    error:
+      fail_download_stdmet_station: |-
+        Fail downloading infromation of cwind station: 
 cwind:
   urls:
     data: 'https://www.ndbc.noaa.gov/data/historical/cwind/'
@@ -10,19 +43,18 @@ cwind:
   retry_times: 10
   data_name_length: 16
   dirs:
-    vars: '../data/ndbc/variable/'
-    stations: '../data/ndbc/station_info/'
+    vars: '../data/ndbc/cwind_variable/'
+    stations: '../data/ndbc/cwind_station_info/'
     data: '../data/ndbc/cwind_data/'
-    pickle: '../data/ndbc/cwind_pickle/'
-  files_path:
-    station_csv: '../data/ndbc/stations.csv'
   vars_path:
-    year_station: '../data/ndbc/variable/year_station.pkl'
-    station_year: '../data/ndbc/variable/station_year.pkl'
+    all_year_station: '../data/ndbc/cwind_variable/all_year_station.pkl'
+    all_station_year: '../data/ndbc/cwind_variable/all_station_year.pkl'
   prompt:
     info:
       download_station: |-
         Downloading Information of NDBC Continuous Wind Station
+      download_all_station: |-
+        Downloading Information of [ALL] NDBC Continuous Wind Data Station
       skip_download_station: |-
         Fail downloading information of cwind station: 
       download_data: |-
@@ -50,12 +82,14 @@ sfmr:
   table_names:
     prefix: 'sfmr_'
   vars_path:
-    year_hurr: '../data/sfmr/variable/year_hurr.pkl'
+    all_year_hurr: '../data/sfmr/variable/all_year_hurr.pkl'
   prompt:
     info:
       download_hurr: |-
         Downloading hurricane SFMR data
-      read_hurr: |-
+      read_hurr_record: |-
+        Reading general record of hurricanes which have SFMR data
+      read_hurr_sfmr: |-
         Reading hurricane SFMR data
 ascat:
   urls: 'http://data.remss.com/ascat/metopa/bmaps_v02.1/'
@@ -114,9 +148,9 @@ wsat:
         Downloading Windsat data
       read: |-
         Reading Windsat data
-test:
+result:
   dirs:
-    pics: '../pics/'
+    fig: '../fig/'
 database:
   db_api: 'mysql+mysqlconnector'
   user: 'root'
@@ -124,7 +158,9 @@ database:
   port: '3306'
   db_name: 'SWFusion'
   args: 'use_pure=True'
-  batch_size: 1000
+  batch_size:
+    insert: 1000
+    query: 1000
 workflow:
   default_region:
     min_latitude: -90.0
