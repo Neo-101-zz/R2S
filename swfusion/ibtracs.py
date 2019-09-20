@@ -53,11 +53,20 @@ class IBTrACS(object):
         self.years = [x for x in range(self.period[0].year,
                                        self.period[1].year+1)]
         utils.setup_database(self, Base)
+        self.download()
         self.read()
 
+    def download(self):
+        url = self.CONFIG['ibtracs']['urls']['wp']
+        file = url.split('/')[-1]
+        file = file[:-3].replace('.', '_') + '.nc'
+        self.wp_file_path = f'{self.CONFIG["ibtracs"]["dirs"]["wp"]}{file}'
+        os.makedirs(self.wp_file_path, exist_ok=True)
+
+        utils.download(url, self.wp_file_path)
+
     def read(self):
-        file_path = '/Users/lujingze/Downloads/IBTrACS.WP.v04r00.nc'
-        dataset = Dataset(file_path)
+        dataset = Dataset(self.wp_file_path)
         vars = dataset.variables
         wmo_pres = vars['wmo_pres']
         wmo_wind = vars['wmo_wind']

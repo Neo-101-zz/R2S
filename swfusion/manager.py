@@ -42,11 +42,11 @@ def work_flow():
     passwd = '39cnj971hw-'
     # Download and read
     try:
+        ibtracs_ = ibtracs.IBTrACS(CONFIG, period, region, passwd)
         era5_ = era5.ERA5Manager(CONFIG, period, region, passwd)
         # cwind_ = cwind.CwindManager(CONFIG, period, region, passwd)
         # stdmet_ = stdmet.StdmetManager(CONFIG, period, region, passwd)
         # sfmr_ = sfmr.SfmrManager(CONFIG, period, region, passwd)
-        # ibtracs_ = ibtracs.IBTrACS(CONFIG, period, region, passwd)
         # satel_ = satel.SatelManager(CONFIG, period, region, passwd,
         #                             spatial_window, temporal_window)
         # compare_ = compare_offshore.CompareCCMPWithInStu(

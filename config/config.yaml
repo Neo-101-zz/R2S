@@ -1,5 +1,10 @@
 logging:
   dir: '../log'
+ibtracs:
+  urls:
+    wp: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.WP.v04r00.nc'
+  dirs:
+    wp: '../data/ibtracs/'
 era5:
   dirs:
     rea_pres_lvl_maj: '../data/era5/reanalysis_pressure_levels/majority/'
