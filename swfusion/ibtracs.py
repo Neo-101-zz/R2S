@@ -52,18 +52,25 @@ class IBTrACS(object):
 
         self.years = [x for x in range(self.period[0].year,
                                        self.period[1].year+1)]
-        utils.setup_database(self, Base)
         self.download()
+
+        utils.reset_signal_handler()
+        utils.setup_database(self, Base)
         self.read()
 
     def download(self):
+        utils.setup_signal_handler()
+        utils.set_format_custom_text(self.CONFIG['ibtracs']\
+                                     ['data_name_length'])
+
         url = self.CONFIG['ibtracs']['urls']['wp']
         file = url.split('/')[-1]
         file = file[:-3].replace('.', '_') + '.nc'
-        self.wp_file_path = f'{self.CONFIG["ibtracs"]["dirs"]["wp"]}{file}'
-        os.makedirs(self.wp_file_path, exist_ok=True)
+        dir = self.CONFIG["ibtracs"]["dirs"]["wp"]
+        os.makedirs(dir, exist_ok=True)
+        self.wp_file_path = f'{dir}{file}'
 
-        utils.download(url, self.wp_file_path)
+        utils.download(url, self.wp_file_path, progress=True)
 
     def read(self):
         dataset = Dataset(self.wp_file_path)
@@ -80,7 +87,7 @@ class IBTrACS(object):
 
         total = storm_num * date_time_num
         count = 0
-        info = f'Reading WMO records in {file_path.split("/")[-1]}'
+        info = f'Reading WMO records in {self.wp_file_path.split("/")[-1]}'
 
         for i in range(storm_num):
             if int(vars['season'][i]) not in self.years:

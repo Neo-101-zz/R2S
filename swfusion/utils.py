@@ -209,6 +209,8 @@ def url_exists(url):
                 breakpoint()
                 exit(msg)
         # elif url.endswith('.nc'):
+        else:
+            return True
     else:
         # if url.startswith('ftp'):
         return True
@@ -256,7 +258,8 @@ def download(url, path, progress=False):
 
     global format_custom_text
     file_name = path.split('/')[-1]
-    format_custom_text.update_mapping(f=file_name)
+    if format_custom_text is not None:
+        format_custom_text.update_mapping(f=file_name)
     try:
         if progress:
             request.urlretrieve(url, path, show_progress)
