@@ -1,5 +1,9 @@
 logging:
   dir: '../log'
+era5:
+  dirs:
+    rea_pres_lvl_maj: '../data/era5/reanalysis_pressure_levels/majority/'
+    rea_pres_lvl_min: '../data/era5/reanalysis_pressure_levels/minority/'
 stdmet:
   urls:
     data: 'https://www.ndbc.noaa.gov/data/historical/stdmet/'
