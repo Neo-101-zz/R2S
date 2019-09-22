@@ -112,15 +112,17 @@ class ERA5Manager(object):
         tc_table_name = ibtracs.WMOWPTC.__tablename__
         TCTable = utils.get_class_by_tablename(self.engine,
                                                tc_table_name)
+        has_add = set()
         for m in range(grbs.messages):
             grb = grbs.message(m+1)
             message_name = grb.name.replace(' ', '_').lower()
             col_name = f'{message_name}_{grb.level}'
-            if not hasattr(TCTable, col_name):
+            if col_name not in has_add and not hasattr(TCTable, col_name):
                 self.logger.info((f'Adding column {col_name} '
                                   + f'to table {tc_table_name}'))
                 utils.add_column(self.engine, tc_table_name,
                                  Column(col_name, Float()))
+                has_add.add(col_name)
         # Update TC table
         self.session.commit()
         # loop TC table
