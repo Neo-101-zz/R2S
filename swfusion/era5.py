@@ -44,7 +44,7 @@ class ERA5Manager(object):
         utils.setup_database(self, Base)
         self.download_and_read()
 
-    def download_majority(self, file_name, year, month):
+    def download_majority(self, file_path, year, month):
         self.cdsapi_client.retrieve(
             'reanalysis-era5-pressure-levels',
             {
@@ -57,9 +57,9 @@ class ERA5Manager(object):
                 'day':list(self.dt_majority[year][month]['day']),
                 'time':list(self.dt_majority[year][month]['time'])
             },
-            file_name)
+            file_path)
 
-    def download_minority(self, file_name, year, month, day_str):
+    def download_minority(self, file_path, year, month, day_str):
         self.cdsapi_client.retrieve(
             'reanalysis-era5-pressure-levels',
             {
@@ -72,7 +72,7 @@ class ERA5Manager(object):
                 'day':day_str,
                 'time':list(self.dt_minority[year][month][day_str])
             },
-            file_name)
+            file_path)
 
     def download_and_read(self):
         self.logger.info('Downloading and reading ERA5 reanalysis')
@@ -84,28 +84,30 @@ class ERA5Manager(object):
 
         for year in self.dt_majority.keys():
             for month in self.dt_majority[year].keys():
-                file_name = f'{majority_dir}{year}{str(month).zfill(2)}.grib'
-                self.logger.info(f'Downloading majority {file_name}')
-                self.download_majority(file_name, year, month)
-                self.logger.info(f'Reading majority {file_name}')
-                self.read(file_name)
-                os.remove(file_name)
+                file_path = f'{majority_dir}{year}{str(month).zfill(2)}.grib'
+                self.logger.info(f'Downloading majority {file_path}')
+                if not os.path.exists(file_path):
+                    self.download_majority(file_path, year, month)
+                self.logger.info(f'Reading majority {file_path}')
+                self.read(file_path)
+                os.remove(file_path)
 
         for year in self.dt_minority.keys():
             for month in self.dt_minority[year].keys():
                 for day_str in self.dt_minority[year][month].keys():
-                    file_name =\
+                    file_path =\
                             (f'{minority_dir}{year}{str(month).zfill(2)}'
                              + f'{day_str}.grib')
-                    self.logger.info(f'Downloading minority {file_name}')
-                    self.download_minority(file_name, year, month, day_str)
-                    self.logger.info(f'Reading minority {file_name}')
-                    self.read(file_name)
-                    os.remove(file_name)
+                    self.logger.info(f'Downloading minority {file_path}')
+                    if not os.path.exists(file_path):
+                        self.download_minority(file_path, year, month, day_str)
+                    self.logger.info(f'Reading minority {file_path}')
+                    self.read(file_path)
+                    os.remove(file_path)
 
-    def read(self, file_name):
+    def read(self, file_path):
         # load grib file
-        grbs = pygrib.open(file_name)
+        grbs = pygrib.open(file_path)
         # Alter TC table
         tc_table_name = ibtracs.WMOWPTC.__tablename__
         TCTable = utils.get_class_by_tablename(self.engine,
@@ -132,12 +134,21 @@ class ERA5Manager(object):
             # Get range of matching cell
             lat1, lat2, lon1, lon2 = self._get_subset_range_of_grib(
                 row.lat, row.lon)
+            tc_datetime = row.datetime
             count += 1
             print(f'\r{info} {count}/{total}', end='')
 
             # read out variables
             for m in range(grbs.messages):
                 grb = grbs.message(m+1)
+                grb_date, grb_time = str(grb.dataDate), str(grb.dataTime)
+                if grb_time == '0':
+                    grb_time = '000'
+                grb_datetime = datetime.datetime.strptime(
+                    f'{grb_date}{grb_time}', '%Y%m%d%H%M%S')
+                if tc_datetime != grb_datetime:
+                    continue
+
                 # extract corresponding cell in ERA5 reanalysis file
                 data, lats, lons = grb.data(lat1, lat2, lon1, lon2)
                 data = utils.convert_dtype(data)
