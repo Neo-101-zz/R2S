@@ -1120,10 +1120,31 @@ def get_class_by_tablename(engine, table_fullname):
         return None
 
 
-def add_column(engine, table_name, column):
+def add_column(mysql_connector, engine, table_name, column):
+    breakpoint()
     column_name = column.compile(dialect=engine.dialect)
     column_type = column.type.compile(engine.dialect)
-    engine.execute('ALTER TABLE %s ADD COLUMN %s %s' % (table_name, column_name, column_type))
+    # connection = engine.connect()
+    # result = connection.execute('ALTER TABLE %s ADD COLUMN %s %s' % (table_name, column_name, column_type))
+    # connection.close()
+    use_database(mysql_connector, 'SWFusion')
+    cursor = mysql_connector.cursor()
+    cursor.execute('ALTER TABLE %s ADD COLUMN %s %s' % (table_name, column_name, column_type))
+
+def get_mysql_connector(the_class):
+    DB_CONFIG = the_class.CONFIG['database']
+    PROMPT = the_class.CONFIG['workflow']['prompt']
+    DBAPI = DB_CONFIG['db_api']
+    USER = DB_CONFIG['user']
+    # password_ = input(PROMPT['input']['db_root_password'])
+    password_ = the_class.db_root_passwd
+    HOST = DB_CONFIG['host']
+    DB_NAME = DB_CONFIG['db_name']
+    ARGS = DB_CONFIG['args']
+
+    cnx = mysql.connector.connect(user=USER, password=password_,
+                                       host=HOST, use_pure=True)
+    return cnx
 
 def setup_database(the_class, Base):
     DB_CONFIG = the_class.CONFIG['database']
@@ -1136,10 +1157,15 @@ def setup_database(the_class, Base):
     DB_NAME = DB_CONFIG['db_name']
     ARGS = DB_CONFIG['args']
 
-    the_class.cnx = mysql.connector.connect(user=USER, password=password_,
-                                       host=HOST, use_pure=True)
-    create_database(the_class.cnx, DB_NAME)
-    use_database(the_class.cnx, DB_NAME)
+    # the_class.cnx = mysql.connector.connect(user=USER, password=password_,
+    #                                    host=HOST, use_pure=True)
+    # the_class.cursor = the_class.cnx.cursor()
+    # create_database(the_class.cnx, DB_NAME)
+    # use_database(the_class.cnx, DB_NAME)
+    mysql_connector = get_mysql_connector(the_class)
+    create_database(mysql_connector, DB_NAME)
+    use_database(mysql_connector, DB_NAME)
+    mysql_connector.close()
 
     # Define the MySQL engine using MySQL Connector/Python
     connect_string = ('{0}://{1}:{2}@{3}/{4}?{5}'.format(

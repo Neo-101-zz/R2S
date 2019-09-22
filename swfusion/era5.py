@@ -118,11 +118,15 @@ class ERA5Manager(object):
             message_name = grb.name.replace(' ', '_').lower()
             col_name = f'{message_name}_{grb.level}'
             if col_name not in has_add and not hasattr(TCTable, col_name):
+                breakpoint()
+                mysql_connector = utils.get_mysql_connector(self)
+                col = Column(col_name, Float())
                 self.logger.info((f'Adding column {col_name} '
                                   + f'to table {tc_table_name}'))
-                utils.add_column(self.engine, tc_table_name,
-                                 Column(col_name, Float()))
+                utils.add_column(mysql_connector,
+                                 self.engine, tc_table_name, col)
                 has_add.add(col_name)
+                mysql_connector.close()
         # Update TC table
         self.session.commit()
         # loop TC table

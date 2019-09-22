@@ -7,6 +7,8 @@ ibtracs:
     wp: '../data/ibtracs/'
   data_name_length: 22
 era5:
+  vars:
+    - 
   dirs:
     rea_pres_lvl_maj: '../data/era5/reanalysis_pressure_levels/majority/'
     rea_pres_lvl_min: '../data/era5/reanalysis_pressure_levels/minority/'
