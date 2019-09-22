@@ -117,6 +117,8 @@ class ERA5Manager(object):
             message_name = grb.name.replace(' ', '_').lower()
             col_name = f'{message_name}_{grb.level}'
             if not hasattr(TCTable, col_name):
+                self.logger.info((f'Adding column {col_name} '
+                                  + f'to table {tc_table_name}'))
                 utils.add_column(self.engine, tc_table_name,
                                  Column(col_name, Float()))
         # Update TC table
