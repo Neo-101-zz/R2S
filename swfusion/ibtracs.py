@@ -59,6 +59,7 @@ class IBTrACS(object):
         self.read()
 
     def download(self):
+        self.logger.info('Downloading IBTrACS')
         utils.setup_signal_handler()
         utils.set_format_custom_text(
             self.CONFIG['ibtracs']['data_name_length'])
@@ -73,6 +74,7 @@ class IBTrACS(object):
         utils.download(url, self.wp_file_path, progress=True)
 
     def read(self):
+        self.logger.info('Reading IBTrACS')
         dataset = Dataset(self.wp_file_path)
         vars = dataset.variables
         wmo_pres = vars['wmo_pres']
@@ -83,10 +85,15 @@ class IBTrACS(object):
 
         wmo_shape = wmo_pres.shape
         storm_num, date_time_num = wmo_shape[0], wmo_shape[1]
-        all_wmo_wp_tcs = []
+        wmo_wp_tcs = []
 
         total = storm_num * date_time_num
         count = 0
+        have_read = dict()
+        for year in self.years:
+            have_read[year] = dict()
+            for m in range(12):
+                have_read[year][m+1] = False
         info = f'Reading WMO records in {self.wp_file_path.split("/")[-1]}'
 
         for i in range(storm_num):
@@ -108,6 +115,19 @@ class IBTrACS(object):
                     iso_time_str, '%Y-%m-%d %H:%M:%S')
                 if not utils.check_period(row.datetime, self.period):
                     continue
+                year, month = row.datetime.year, row.datetime.month
+
+                if not have_read[year][month]:
+                    if len(wmo_wp_tcs):
+                        utils.bulk_insert_avoid_duplicate_unique(
+                            wmo_wp_tcs, self.CONFIG['database']\
+                            ['batch_size']['insert'],
+                            WMOWPTC, ['sid_datetime'], self.session,
+                            check_self=True)
+                        wmo_wp_tcs = []
+                    self.logger.info((f'Reading WMO records of '
+                                      + f'{year}-{str(month).zfill(2)}'))
+                    have_read[year][month] = True
 
                 lat = vars['lat'][i][j]
                 lon = vars['lon'][i][j]
@@ -125,13 +145,8 @@ class IBTrACS(object):
                 row.wind = int(wind) if wind is not MASKED else None
                 row.sid_datetime = f'{sid}_{row.datetime}'
 
-                all_wmo_wp_tcs.append(row)
+                wmo_wp_tcs.append(row)
 
-        utils.bulk_insert_avoid_duplicate_unique(
-            all_wmo_wp_tcs,
-            self.CONFIG['database']['batch_size']['insert'],
-            WMOWPTC, ['sid_datetime'], self.session,
-            check_self=True)
 
         utils.delete_last_lines()
         print('Done')

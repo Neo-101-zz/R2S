@@ -42,8 +42,7 @@ class ERA5Manager(object):
             '925','975','1000'
         ]
         utils.setup_database(self, Base)
-        # self.download_and_read()
-        self.read('/Users/lujingze/Downloads/download.grib')
+        self.download_and_read()
 
     def download_majority(self, file_name, year, month):
         self.cdsapi_client.retrieve(
@@ -76,6 +75,7 @@ class ERA5Manager(object):
             file_name)
 
     def download_and_read(self):
+        self.logger.info('Downloading and reading ERA5 reanalysis')
         self._get_target_datetime()
         majority_dir = self.CONFIG['era5']['dirs']['rea_pres_lvl_maj']
         minority_dir = self.CONFIG['era5']['dirs']['rea_pres_lvl_min']
@@ -85,7 +85,9 @@ class ERA5Manager(object):
         for year in self.dt_majority.keys():
             for month in self.dt_majority[year].keys():
                 file_name = f'{majority_dir}{year}{str(month).zfill(2)}.grib'
+                self.logger.info(f'Downloading majority {file_name}')
                 self.download_majority(file_name, year, month)
+                self.logger.info(f'Reading majority {file_name}')
                 self.read(file_name)
                 os.remove(file_name)
 
@@ -95,7 +97,9 @@ class ERA5Manager(object):
                     file_name =\
                             (f'{minority_dir}{year}{str(month).zfill(2)}'
                              + f'{day_str}.grib')
+                    self.logger.info(f'Downloading minority {file_name}')
                     self.download_minority(file_name, year, month, day_str)
+                    self.logger.info(f'Reading minority {file_name}')
                     self.read(file_name)
                     os.remove(file_name)
 
