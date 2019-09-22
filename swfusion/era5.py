@@ -5,6 +5,8 @@ import os
 import cdsapi
 import pygrib
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Integer, Float, String, DateTime
+from sqlalchemy import Column
 
 import ibtracs
 import utils
@@ -25,6 +27,9 @@ class ERA5Manager(object):
         self.years = [x for x in range(self.period[0].year,
                                        self.period[1].year+1)]
         self.main_hours = [0, 6, 12, 18]
+        self.lat_grid_p = [y*0.25-90 for y in range(721)]
+        self.lon_grid_p = [x*0.25-90 for x in range(1440)]
+
         self.cdsapi_client = cdsapi.Client()
         self.vars = [
             'geopotential','relative_humidity','temperature',
@@ -37,7 +42,8 @@ class ERA5Manager(object):
             '925','975','1000'
         ]
         utils.setup_database(self, Base)
-        self.download_and_read()
+        # self.download_and_read()
+        self.read('/Users/lujingze/Downloads/download.grib')
 
     def download_majority(self, file_name, year, month):
         self.cdsapi_client.retrieve(
@@ -96,19 +102,65 @@ class ERA5Manager(object):
     def read(self, file_name):
         # load grib file
         grbs = pygrib.open(file_name)
+        # Alter TC table
+        tc_table_name = ibtracs.WMOWPTC.__tablename__
+        TCTable = utils.get_class_by_tablename(self.engine,
+                                               tc_table_name)
+        for m in range(grbs.messages):
+            grb = grbs.message(m+1)
+            message_name = grb.name.replace(' ', '_').lower()
+            col_name = f'{message_name}_{grb.level}'
+            if not hasattr(TCTable, col_name):
+                utils.add_column(self.engine, tc_table_name,
+                                 Column(col_name, Float()))
+        # Update TC table
+        self.session.commit()
         # loop TC table
-        tc_query = self.session.query(ibtracs.WMOWPTC)
+        TCTable = utils.get_class_by_tablename(self.engine,
+                                               tc_table_name)
+        tc_query = self.session.query(TCTable)
         total = tc_query.count()
         count = 0
+        info = f'Reading reanalysis data of TC records'
+        self.logger.info(info)
         # get lat and lon of row
         for row in tc_query:
+            # Get range of matching cell
+            lat1, lat2, lon1, lon2 = self._get_subset_range_of_grib(
+                row.lat, row.lon)
+            count += 1
+            print(f'\r{info} {count}/{total}', end='')
 
-        # search corresponding cell in ERA5 reanalysis file
-        # read out variables
+            # read out variables
+            for m in range(grbs.messages):
+                grb = grbs.message(m+1)
+                # extract corresponding cell in ERA5 reanalysis file
+                data, lats, lons = grb.data(lat1, lat2, lon1, lon2)
+                data = utils.convert_dtype(data)
+                if data == grb.missingValue:
+                    continue
+                name = f'{grb.name.replace(" ", "_").lower()}_{grb.level}'
+                # Add column value
+                setattr(row, name, data)
         # write into DB
+        self.session.commit()
+        utils.delete_last_lines()
+        print('Done')
 
     def _get_subset_range_of_grib(self, lat, lon):
-        lat_ae = [abs(lat-x) for x in self.lats_grid_p]
+        lat_ae = [abs(lat-y) for y in self.lat_grid_p]
+        lon_ae = [abs(lon-x) for x in self.lon_grid_p]
+
+        lat_match = self.lat_grid_p[lat_ae.index(min(lat_ae))]
+        lon_match = self.lon_grid_p[lon_ae.index(min(lon_ae))]
+
+        lat1 = lat_match if lat > lat_match else lat
+        lat2 = lat_match if lat < lat_match else lat
+        lon1 = lon_match if lon > lon_match else lon
+        lon2 = lon_match if lon < lon_match else lon
+
+        return lat1, lat2, lon1, lon2
+
     def _update_majority_datetime_dict(self, dt_dict, year, month, day, hour):
         day_str = str(day).zfill(2)
         time_str = f'{str(hour).zfill(2)}:00'

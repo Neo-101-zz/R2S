@@ -60,8 +60,8 @@ class IBTrACS(object):
 
     def download(self):
         utils.setup_signal_handler()
-        utils.set_format_custom_text(self.CONFIG['ibtracs']\
-                                     ['data_name_length'])
+        utils.set_format_custom_text(
+            self.CONFIG['ibtracs']['data_name_length'])
 
         url = self.CONFIG['ibtracs']['urls']['wp']
         file = url.split('/')[-1]
