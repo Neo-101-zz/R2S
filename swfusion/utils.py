@@ -920,10 +920,10 @@ def extract_bytemap_to_table(satel_name, bm_file, table_class, skip_vars,
                 count += 1
                 if count % 10000 == 0:
                     print('\r{:5f}%'.format((float(count)/total)*100), end='')
-                if j == 120:
-                    et = time.time()
-                    print('\ntime: %s' % (et - st))
-                    breakpoint()
+                # if j == 120:
+                #     et = time.time()
+                #     print('\ntime: %s' % (et - st))
+                #     breakpoint()
                 if not valid_func(vars, i, j, k):
                     continue
                 table_row = table_class()
@@ -1121,15 +1121,14 @@ def get_class_by_tablename(engine, table_fullname):
 
 
 def add_column(mysql_connector, engine, table_name, column):
-    breakpoint()
     column_name = column.compile(dialect=engine.dialect)
     column_type = column.type.compile(engine.dialect)
-    # connection = engine.connect()
-    # result = connection.execute('ALTER TABLE %s ADD COLUMN %s %s' % (table_name, column_name, column_type))
-    # connection.close()
-    use_database(mysql_connector, 'SWFusion')
-    cursor = mysql_connector.cursor()
-    cursor.execute('ALTER TABLE %s ADD COLUMN %s %s' % (table_name, column_name, column_type))
+    connection = engine.connect()
+    result = connection.execute('ALTER TABLE %s ADD COLUMN %s %s' % (table_name, column_name, column_type))
+    connection.close()
+    # use_database(mysql_connector, 'SWFusion')
+    # cursor = mysql_connector.cursor()
+    # cursor.execute('ALTER TABLE %s ADD COLUMN %s %s' % (table_name, column_name, column_type))
 
 def get_mysql_connector(the_class):
     DB_CONFIG = the_class.CONFIG['database']

@@ -179,11 +179,8 @@ class ERA5Manager(object):
 
             table_name, sa_table, ERA5Table = self.get_era5_table_class(
                 row.sid, tc_datetime, lat_index, lon_index)
-            breakpoint()
-            # it NAME ?
             era5_table_entity = self._gen_whole_era5_table_entity(
                 ERA5Table, lat1, lat2, lon1, lon2)
-            breakpoint()
             read_hit_count = 0
 
             # read out variables
@@ -200,10 +197,8 @@ class ERA5Manager(object):
                 # extract corresponding data matrix in ERA5 reanalysis file
                 read_hit = self._read_data_matrix(era5_table_entity, grb,
                                                   lat1, lat2, lon1, lon2)
-                breakpoint()
                 if read_hit:
                     read_hit_count += 1
-            breakpoint()
             if not read_hit_count:
                 continue
             if sa_table is not None:
@@ -246,7 +241,6 @@ class ERA5Manager(object):
     def _read_data_matrix(self, era5, grb, lat1, lat2, lon1, lon2):
         data, lats, lons = grb.data(lat1, lat2, lon1, lon2)
 
-        breakpoint()
         # CHECK whether data.shape is [lat, lon] or [lon, lat]
         name = grb.name.replace(" ", "_").lower()
         z = self.pres_lvl.index(str(grb.level))
