@@ -99,6 +99,8 @@ class IBTrACS(object):
         for i in range(storm_num):
             if int(vars['season'][i]) not in self.years:
                 count += date_time_num
+                self.logger.info((f'Skipping No.{i+1} TC in '
+                                  + f'season {vars["season"][i]}'))
                 continue
             sid = vars['sid'][i].tostring().decode('utf-8')
 
