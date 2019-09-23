@@ -49,7 +49,7 @@ class IBTrACS(object):
         self.read()
 
     def create_tc_table(self):
-        table_name = 'tc_wp_wmo'
+        table_name = self.CONFIG['ibtracs']['table_name']
 
         class WMOWPTC(object):
             pass
@@ -190,7 +190,6 @@ class IBTrACS(object):
                 row.pres = int(pres) if pres is not MASKED else None
                 row.wind = int(wind) if wind is not MASKED else None
 
-                breakpoint()
                 dirs = ['ne', 'se', 'sw', 'nw']
                 radii = dict()
                 for r in ['r34', 'r50', 'r64']:
@@ -201,11 +200,9 @@ class IBTrACS(object):
                             r_d_a = vars[f'{a}_{r}'][i][j][d]
                             if r_d_a is not MASKED:
                                 radii[r][d].append(int(r_d_a))
-                        breakpoint()
                         if len(radii[r][d]):
                             setattr(row, f'{r}_{dirs[d]}',
                                     int(sum(radii[r][d])/len(radii[r][d])))
-                breakpoint()
 
                 row.sid_datetime = f'{sid}_{row.datetime}'
 

@@ -1,12 +1,22 @@
 logging:
   dir: '../log'
 ibtracs:
+  table_name: 'tc_wp'
   urls:
     wp: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.WP.v04r00.nc'
   dirs:
     wp: '../data/ibtracs/'
   data_name_length: 22
 era5:
+  subset_edge_in_degree: 20
+  spatial_resolution: 0.25
+  lat_grid_points_number: 721
+  lon_grid_points_number: 1440
+  main_hours:
+    - 0
+    - 6
+    - 12
+    - 18
   vars:
     - 'geopotential'
     - 'relative_humidity'

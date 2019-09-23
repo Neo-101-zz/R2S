@@ -1,12 +1,15 @@
 import datetime
 import logging
 import os
+import time
 
 import cdsapi
 import pygrib
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Integer, Float, String, DateTime
 from sqlalchemy import Column
+from sqlalchemy.schema import Table, MetaData
+from sqlalchemy.orm import mapper
 
 import ibtracs
 import utils
@@ -26,16 +29,60 @@ class ERA5Manager(object):
 
         self.years = [x for x in range(self.period[0].year,
                                        self.period[1].year+1)]
-        self.main_hours = [0, 6, 12, 18]
-        self.lat_grid_p = [y*0.25-90 for y in range(721)]
-        self.lon_grid_p = [x*0.25-90 for x in range(1440)]
+        self.main_hours = self.CONFIG['era5']['main_hours']
+        self.edge = self.CONFIG['era5']['subset_edge_in_degree']
 
         self.cdsapi_client = cdsapi.Client()
         self.vars = self.CONFIG['era5']['vars']
         self.pres_lvl = self.CONFIG['era5']['pres_lvl']
+
+        self.spa_resolu = self.CONFIG['era5']['spatial_resolution']
+        self.lat_grid_points = [y * self.spa_resolu - 90 for y in range(
+            self.CONFIG['era5']['lat_grid_points_number'])]
+        self.lon_grid_points = [x * self.spa_resolu - 90 for x in range(
+            self.CONFIG['era5']['lon_grid_points_number'])]
+        # Size of 3D grid points around TC center
+        self.grid_3d = dict()
+        self.grid_3d['length'] = self.grid_3d['width'] = int(
+            self.edge/self.spa_resolu + 1)
+        self.grid_3d['height'] = len(self.pres_lvl)
+
         utils.setup_database(self, Base)
         # self.download_and_read()
         self.read('/Users/lujingze/Downloads/download.grib')
+
+    def get_era5_table_class(self, sid, dt, lat_index, lon_index):
+        dt_str = dt.strftime('%Y%m%d%H%M%S')
+        table_name = f'era5_tc_{sid}_{dt_str}_{lat_index}_{lon_index}'
+
+        class ERA5(object):
+            pass
+
+        if self.engine.dialect.has_table(self.engine, table_name):
+            metadata = MetaData(bind=self.engine, reflect=True)
+            t = metadata.tables[table_name]
+            mapper(ERA5, t)
+
+            return table_name, None, ERA5
+
+        cols = []
+        cols.append(Column('key', Integer, primary_key=True))
+        cols.append(Column('x', Integer, nullable=False))
+        cols.append(Column('y', Integer, nullable=False))
+        cols.append(Column('z', Integer, nullable=False))
+        cols.append(Column('lat', Float, nullable=False))
+        cols.append(Column('lon', Float, nullable=False))
+        cols.append(Column('pres_lvl', Integer, nullable=False))
+        for var in self.vars:
+            cols.append(Column(var, Float))
+        cols.append(Column('x_y_z', String(20), nullable=False,
+                           unique=True))
+
+        metadata = MetaData(bind=self.engine)
+        t = Table(table_name, metadata, *cols)
+        mapper(ERA5, t)
+
+        return table_name, t, ERA5
 
     def download_majority(self, file_path, year, month):
         self.cdsapi_client.retrieve(
@@ -102,42 +149,42 @@ class ERA5Manager(object):
         # load grib file
         grbs = pygrib.open(file_path)
         # Alter TC table
-        tc_table_name = ibtracs.WMOWPTC.__tablename__
-        TCTable = utils.get_class_by_tablename(self.engine,
-                                               tc_table_name)
-        has_add = set()
-        for m in range(grbs.messages):
-            grb = grbs.message(m+1)
-            message_name = grb.name.replace(' ', '_').lower()
-            col_name = f'{message_name}_{grb.level}'
-            if col_name not in has_add and not hasattr(TCTable, col_name):
-                breakpoint()
-                mysql_connector = utils.get_mysql_connector(self)
-                col = Column(col_name, Float())
-                self.logger.info((f'Adding column {col_name} '
-                                  + f'to table {tc_table_name}'))
-                utils.add_column(mysql_connector,
-                                 self.engine, tc_table_name, col)
-                has_add.add(col_name)
-                mysql_connector.close()
-        # Update TC table
-        self.session.commit()
+        tc_table_name = self.CONFIG['ibtracs']['table_name']
         # loop TC table
         TCTable = utils.get_class_by_tablename(self.engine,
                                                tc_table_name)
         tc_query = self.session.query(TCTable)
         total = tc_query.count()
+        del tc_query
         count = 0
         info = f'Reading reanalysis data of TC records'
         self.logger.info(info)
         # get lat and lon of row
-        for row in tc_query:
+        for row in self.session.query(TCTable).yield_per(
+            self.CONFIG['database']['batch_size']['query']):
+
             # Get range of matching cell
-            lat1, lat2, lon1, lon2 = self._get_subset_range_of_grib(
-                row.lat, row.lon)
+            hit, lat1, lat2, lon1, lon2 = \
+                    self._get_subset_range_of_grib(row.lat, row.lon)
+            if not hit:
+                continue
+
             tc_datetime = row.datetime
             count += 1
             print(f'\r{info} {count}/{total}', end='')
+
+            lat_index, lon_index = \
+                    self._get_latlon_index_of_closest_grib_point(
+                        row.lat, row.lon)
+
+            table_name, sa_table, ERA5Table = self.get_era5_table_class(
+                row.sid, tc_datetime, lat_index, lon_index)
+            breakpoint()
+            # it NAME ?
+            era5_table_entity = self._gen_whole_era5_table_entity(
+                ERA5Table, lat1, lat2, lon1, lon2)
+            breakpoint()
+            read_hit_count = 0
 
             # read out variables
             for m in range(grbs.messages):
@@ -150,25 +197,83 @@ class ERA5Manager(object):
                 if tc_datetime != grb_datetime:
                     continue
 
-                # extract corresponding cell in ERA5 reanalysis file
-                data, lats, lons = grb.data(lat1, lat2, lon1, lon2)
-                data = utils.convert_dtype(data)
-                if data == grb.missingValue:
-                    continue
-                name = f'{grb.name.replace(" ", "_").lower()}_{grb.level}'
-                # Add column value
-                setattr(row, name, data)
-        # write into DB
-        self.session.commit()
+                # extract corresponding data matrix in ERA5 reanalysis file
+                read_hit = self._read_data_matrix(era5_table_entity, grb,
+                                                  lat1, lat2, lon1, lon2)
+                breakpoint()
+                if read_hit:
+                    read_hit_count += 1
+            breakpoint()
+            if not read_hit_count:
+                continue
+            if sa_table is not None:
+                # Create table of ERA5 data cube
+                sa_table.create(self.engine)
+                self.session.commit()
+            # write into DB
+            start = time.process_time()
+            utils.bulk_insert_avoid_duplicate_unique(
+                era5_table_entity,
+                int(self.CONFIG['database']['batch_size']['insert']/10),
+                ERA5Table, ['x_y_z'], self.session,
+                check_self=True)
+            end = time.process_time()
+
+            self.logger.debug((f'Bulk inserting ERA5 data into '
+                               + f'{table_name} in {end-start:2f} s'))
         utils.delete_last_lines()
         print('Done')
 
-    def _get_subset_range_of_grib(self, lat, lon):
-        lat_ae = [abs(lat-y) for y in self.lat_grid_p]
-        lon_ae = [abs(lon-x) for x in self.lon_grid_p]
+    def _gen_whole_era5_table_entity(self, ERA5Table,
+                                     lat1, lat2, lon1, lon2):
+        entity = []
 
-        lat_match = self.lat_grid_p[lat_ae.index(min(lat_ae))]
-        lon_match = self.lon_grid_p[lon_ae.index(min(lon_ae))]
+        for x in range(self.grid_3d['length']):
+            for y in range(self.grid_3d['width']):
+                for z in range(self.grid_3d['height']):
+                    pt = ERA5Table()
+                    pt.x, pt.y, pt.z = x, y, z
+                    pt.x_y_z = f'{x}_{y}_{z}'
+
+                    pt.lat = lat1 + x * self.spa_resolu
+                    pt.lon = (lon1 + y * self.spa_resolu) % 360
+                    pt.pres_lvl = int(self.pres_lvl[z])
+
+                    entity.append(pt)
+
+        return entity
+
+    def _read_data_matrix(self, era5, grb, lat1, lat2, lon1, lon2):
+        data, lats, lons = grb.data(lat1, lat2, lon1, lon2)
+
+        breakpoint()
+        # CHECK whether data.shape is [lat, lon] or [lon, lat]
+        name = grb.name.replace(" ", "_").lower()
+        z = self.pres_lvl.index(str(grb.level))
+        hit_count = 0
+
+        for x in range(self.grid_3d['length']):
+            for y in range(self.grid_3d['width']):
+                value = utils.convert_dtype(data[x][y])
+                if value == grb.missingValue:
+                    continue
+                hit_count += 1
+                index = (x * self.grid_3d['width'] * self.grid_3d['height']
+                         + y * self.grid_3d['height']
+                         + z)
+                setattr(era5[index], name, value)
+
+        if hit_count:
+            return True
+        else:
+            return False
+
+    def _get_subset_range_of_grib_point(self, lat, lon):
+        lat_ae = [abs(lat-y) for y in self.lat_grid_points]
+        lon_ae = [abs(lon-x) for x in self.lon_grid_points]
+
+        lat_match = self.lat_grid_points[lat_ae.index(min(lat_ae))]
+        lon_match = self.lon_grid_points[lon_ae.index(min(lon_ae))]
 
         lat1 = lat_match if lat > lat_match else lat
         lat2 = lat_match if lat < lat_match else lat
@@ -176,6 +281,34 @@ class ERA5Manager(object):
         lon2 = lon_match if lon < lon_match else lon
 
         return lat1, lat2, lon1, lon2
+
+    def _get_latlon_index_of_closest_grib_point(self, lat, lon):
+        lat_ae = [abs(lat-y) for y in self.lat_grid_points]
+        lon_ae = [abs(lon-x) for x in self.lon_grid_points]
+
+        lat_match_index = lat_ae.index(min(lat_ae))
+        lon_match_index = lon_ae.index(min(lon_ae))
+
+        return lat_match_index, lon_match_index
+
+    def _get_subset_range_of_grib(self, lat, lon):
+        lat_ae = [abs(lat-y) for y in self.lat_grid_points]
+        lon_ae = [abs(lon-x) for x in self.lon_grid_points]
+
+        lat_match = self.lat_grid_points[lat_ae.index(min(lat_ae))]
+        lon_match = self.lon_grid_points[lon_ae.index(min(lon_ae))]
+
+        half_edge = self.edge / 2
+
+        if lat_match - half_edge < -90 or lat_match + half_edge > 90 :
+            return False, 0, 0, 0, 0
+
+        lat1 = lat_match - half_edge
+        lat2 = lat_match + half_edge
+        lon1 = (lon_match - half_edge + 360) % 360
+        lon2 = (lon_match + half_edge) % 360
+
+        return True, lat1, lat2, lon1, lon2
 
     def _update_majority_datetime_dict(self, dt_dict, year, month, day, hour):
         day_str = str(day).zfill(2)
@@ -205,12 +338,15 @@ class ERA5Manager(object):
         dt_dict[year][month][day_str].add(time_str)
 
     def _get_target_datetime(self):
-        tc_query = self.session.query(ibtracs.WMOWPTC)
-
+        tc_table_name = self.CONFIG['ibtracs']['table_name']
+        TCTable = utils.get_class_by_tablename(self.engine,
+                                               tc_table_name)
         dt_majority = dict()
         dt_minority = dict()
 
-        for row in tc_query:
+        for row in self.session.query(TCTable).yield_per(
+            self.CONFIG['database']['batch_size']['query']):
+
             year, month = row.datetime.year, row.datetime.month
             day, hour = row.datetime.day, row.datetime.hour
             if hour in self.main_hours:
