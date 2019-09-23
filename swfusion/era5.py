@@ -31,18 +31,11 @@ class ERA5Manager(object):
         self.lon_grid_p = [x*0.25-90 for x in range(1440)]
 
         self.cdsapi_client = cdsapi.Client()
-        self.vars = [
-            'geopotential','relative_humidity','temperature',
-            'u_component_of_wind','v_component_of_wind'
-        ]
-        self.pres_lvl = [
-            '100','200','300',
-            '400','500','600',
-            '700','800','850',
-            '925','975','1000'
-        ]
+        self.vars = self.CONFIG['era5']['vars']
+        self.pres_lvl = self.CONFIG['era5']['pres_lvl']
         utils.setup_database(self, Base)
-        self.download_and_read()
+        # self.download_and_read()
+        self.read('/Users/lujingze/Downloads/download.grib')
 
     def download_majority(self, file_path, year, month):
         self.cdsapi_client.retrieve(

@@ -28,7 +28,7 @@ def work_flow():
 
     # period = [datetime(2016, 5, 27, 0, 0, 0),
     #           datetime(2016, 5, 27, 23, 59, 59)]
-    period = [datetime(2012, 10, 1, 0, 0, 0),
+    period = [datetime(2000, 1, 1, 0, 0, 0),
               datetime(2016, 12, 31, 23, 59, 59)]
     logger.info(f'Period: {period}')
     # Region
@@ -43,7 +43,7 @@ def work_flow():
     # Download and read
     try:
         ibtracs_ = ibtracs.IBTrACS(CONFIG, period, region, passwd)
-        era5_ = era5.ERA5Manager(CONFIG, period, region, passwd)
+        # era5_ = era5.ERA5Manager(CONFIG, period, region, passwd)
         # cwind_ = cwind.CwindManager(CONFIG, period, region, passwd)
         # stdmet_ = stdmet.StdmetManager(CONFIG, period, region, passwd)
         # sfmr_ = sfmr.SfmrManager(CONFIG, period, region, passwd)

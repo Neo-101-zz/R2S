@@ -7,6 +7,25 @@ ibtracs:
     wp: '../data/ibtracs/'
   data_name_length: 22
 era5:
+  vars:
+    - 'geopotential'
+    - 'relative_humidity'
+    - 'temperature'
+    - 'u_component_of_wind'
+    - 'v_component_of_wind'
+  pres_lvl:
+    - '100'
+    - '200'
+    - '300'
+    - '400'
+    - '500'
+    - '600'
+    - '700'
+    - '800'
+    - '850'
+    - '925'
+    - '975'
+    - '1000'
   dirs:
     rea_pres_lvl_maj: '../data/era5/reanalysis_pressure_levels/majority/'
     rea_pres_lvl_min: '../data/era5/reanalysis_pressure_levels/minority/'

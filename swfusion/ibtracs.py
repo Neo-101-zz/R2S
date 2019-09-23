@@ -18,8 +18,9 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, Integer, Float, String, DateTime, Date
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import tuple_
-from sqlalchemy.schema import Table
+from sqlalchemy.schema import Table, MetaData
 from netCDF4 import Dataset
+from sqlalchemy.orm import mapper
 
 import utils
 import netcdf_util
@@ -27,17 +28,6 @@ import netcdf_util
 MASKED = np.ma.core.masked
 Base = declarative_base()
 
-class WMOWPTC(Base):
-    __tablename__ = 'tc_wp_wmo'
-
-    key = Column(Integer, primary_key=True)
-    sid = Column(String(13), nullable=False)
-    datetime = Column(DateTime, nullable=False)
-    lat = Column(Float, nullable=False)
-    lon = Column(Float, nullable=False)
-    pres = Column(Integer)
-    wind = Column(Integer)
-    sid_datetime = Column(String(50), nullable=False, unique=True)
 
 class IBTrACS(object):
     def __init__(self, CONFIG, period, region, passwd):
@@ -57,6 +47,55 @@ class IBTrACS(object):
         utils.reset_signal_handler()
         utils.setup_database(self, Base)
         self.read()
+
+    def create_tc_table(self):
+        table_name = 'tc_wp_wmo'
+
+        class WMOWPTC(object):
+            pass
+
+        if self.engine.dialect.has_table(self.engine, table_name):
+            metadata = MetaData(bind=self.engine, reflect=True)
+            t = metadata.tables[table_name]
+            mapper(WMOWPTC, t)
+
+            return WMOWPTC
+
+        cols = []
+        # IBTrACS columns
+        cols.append(Column('key', Integer, primary_key=True))
+        cols.append(Column('sid', String(13), nullable=False))
+        cols.append(Column('datetime', DateTime, nullable=False))
+        cols.append(Column('lat', Float, nullable=False))
+        cols.append(Column('lon', Float, nullable=False))
+        cols.append(Column('pres', Integer))
+        cols.append(Column('wind', Integer))
+
+        cols.append(Column('r34_ne', Integer))
+        cols.append(Column('r34_se', Integer))
+        cols.append(Column('r34_sw', Integer))
+        cols.append(Column('r34_nw', Integer))
+
+        cols.append(Column('r50_ne', Integer))
+        cols.append(Column('r50_se', Integer))
+        cols.append(Column('r50_sw', Integer))
+        cols.append(Column('r50_nw', Integer))
+
+        cols.append(Column('r64_ne', Integer))
+        cols.append(Column('r64_se', Integer))
+        cols.append(Column('r64_sw', Integer))
+        cols.append(Column('r64_nw', Integer))
+
+        cols.append(Column('sid_datetime', String(50), nullable=False,
+                           unique=True))
+
+        metadata = MetaData(bind=self.engine)
+        t = Table(table_name, metadata, *cols)
+        metadata.create_all()
+        mapper(WMOWPTC, t)
+        self.session.commit()
+
+        return WMOWPTC
 
     def download(self):
         self.logger.info('Downloading IBTrACS')
@@ -85,21 +124,26 @@ class IBTrACS(object):
 
         wmo_shape = wmo_pres.shape
         storm_num, date_time_num = wmo_shape[0], wmo_shape[1]
-        wmo_wp_tcs = []
 
-        total = storm_num * date_time_num
-        count = 0
         have_read = dict()
         for year in self.years:
             have_read[year] = dict()
             for m in range(12):
                 have_read[year][m+1] = False
+
         info = f'Reading WMO records in {self.wp_file_path.split("/")[-1]}'
+        self._read_detail(vars, storm_num, date_time_num, have_read, info)
+
+    def _read_detail(self, vars, storm_num, date_time_num, have_read, info):
+        total = storm_num * date_time_num
+        count = 0
+        wmo_wp_tcs = []
+        WMOWPTC = self.create_tc_table()
 
         for i in range(storm_num):
             if int(vars['season'][i]) not in self.years:
                 count += date_time_num
-                self.logger.info((f'Skipping No.{i+1} TC in '
+                self.logger.debug((f'Skipping No.{i+1} TC in '
                                   + f'season {vars["season"][i]}'))
                 continue
             sid = vars['sid'][i].tostring().decode('utf-8')
@@ -127,7 +171,7 @@ class IBTrACS(object):
                             WMOWPTC, ['sid_datetime'], self.session,
                             check_self=True)
                         wmo_wp_tcs = []
-                    self.logger.info((f'Reading WMO records of '
+                    self.logger.debug((f'Reading WMO records of '
                                       + f'{year}-{str(month).zfill(2)}'))
                     have_read[year][month] = True
 
@@ -145,6 +189,24 @@ class IBTrACS(object):
                 row.lon = float(lon)
                 row.pres = int(pres) if pres is not MASKED else None
                 row.wind = int(wind) if wind is not MASKED else None
+
+                breakpoint()
+                dirs = ['ne', 'se', 'sw', 'nw']
+                radii = dict()
+                for r in ['r34', 'r50', 'r64']:
+                    radii[r] = dict()
+                    for d in range(4):
+                        radii[r][d] = []
+                        for a in ['bom', 'reunion', 'usa']:
+                            r_d_a = vars[f'{a}_{r}'][i][j][d]
+                            if r_d_a is not MASKED:
+                                radii[r][d].append(int(r_d_a))
+                        breakpoint()
+                        if len(radii[r][d]):
+                            setattr(row, f'{r}_{dirs[d]}',
+                                    int(sum(radii[r][d])/len(radii[r][d])))
+                breakpoint()
+
                 row.sid_datetime = f'{sid}_{row.datetime}'
 
                 wmo_wp_tcs.append(row)
