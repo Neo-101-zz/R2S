@@ -1,3 +1,7 @@
+"""Download and read IBTrACS.
+https://www.ncdc.noaa.gov/ibtracs/index.php
+
+"""
 import datetime
 import gzip
 import logging
@@ -28,8 +32,11 @@ import netcdf_util
 MASKED = np.ma.core.masked
 Base = declarative_base()
 
+class IBTrACSManager(object):
+    """Manage features of IBTrACS that are not related to other data
+    sources.
 
-class IBTrACS(object):
+    """
     def __init__(self, CONFIG, period, region, passwd):
         self.CONFIG = CONFIG
         self.period = period
@@ -49,11 +56,15 @@ class IBTrACS(object):
         self.read()
 
     def create_tc_table(self):
+        """Create the table which represents TC records from IBTrACS.
+
+        """
         table_name = self.CONFIG['ibtracs']['table_name']
 
         class WMOWPTC(object):
             pass
 
+        # Return TC table if it exists
         if self.engine.dialect.has_table(self.engine, table_name):
             metadata = MetaData(bind=self.engine, reflect=True)
             t = metadata.tables[table_name]
@@ -66,6 +77,7 @@ class IBTrACS(object):
         cols.append(Column('key', Integer, primary_key=True))
         cols.append(Column('sid', String(13), nullable=False))
         cols.append(Column('datetime', DateTime, nullable=False))
+        cols.append(Column('basin', String(2), nullable=False))
         cols.append(Column('lat', Float, nullable=False))
         cols.append(Column('lon', Float, nullable=False))
         cols.append(Column('pres', Integer))
@@ -98,24 +110,32 @@ class IBTrACS(object):
         return WMOWPTC
 
     def download(self):
+        """Download IBTrACS data.
+
+        """
         self.logger.info('Downloading IBTrACS')
         utils.setup_signal_handler()
         utils.set_format_custom_text(
             self.CONFIG['ibtracs']['data_name_length'])
 
-        url = self.CONFIG['ibtracs']['urls']['wp']
+        url = self.CONFIG['ibtracs']['urls']['since1980']
         file = url.split('/')[-1]
         file = file[:-3].replace('.', '_') + '.nc'
-        dir = self.CONFIG["ibtracs"]["dirs"]["wp"]
+        dir = self.CONFIG['ibtracs']['dirs']
         os.makedirs(dir, exist_ok=True)
         self.wp_file_path = f'{dir}{file}'
 
         utils.download(url, self.wp_file_path, progress=True)
 
     def read(self):
+        """Read IBTrACS data into TC table.
+
+        """
         self.logger.info('Reading IBTrACS')
+        # Read NetCDF file of IBTrACS
         dataset = Dataset(self.wp_file_path)
         vars = dataset.variables
+        # Use data from official WMO agency
         wmo_pres = vars['wmo_pres']
         wmo_wind = vars['wmo_wind']
 
@@ -123,8 +143,10 @@ class IBTrACS(object):
             self.logger.error('shape of wmo_pres is not equal to wmo_wind')
 
         wmo_shape = wmo_pres.shape
+        # Get two dimensions of IBTrACS data
         storm_num, date_time_num = wmo_shape[0], wmo_shape[1]
 
+        # Record whether each month in each year has been read
         have_read = dict()
         for year in self.years:
             have_read[year] = dict()
@@ -132,15 +154,22 @@ class IBTrACS(object):
                 have_read[year][m+1] = False
 
         info = f'Reading WMO records in {self.wp_file_path.split("/")[-1]}'
+        # Read detail of IBTrACS data
         self._read_detail(vars, storm_num, date_time_num, have_read, info)
 
     def _read_detail(self, vars, storm_num, date_time_num, have_read, info):
+        """Read detail of IBTrACS data.
+
+        """
         total = storm_num * date_time_num
         count = 0
+        # List to record all details
         wmo_wp_tcs = []
         WMOWPTC = self.create_tc_table()
 
         for i in range(storm_num):
+
+            # Skip this loop if season (year) of TC not in period
             if int(vars['season'][i]) not in self.years:
                 count += date_time_num
                 self.logger.debug((f'Skipping No.{i+1} TC in '
@@ -153,6 +182,8 @@ class IBTrACS(object):
                 print(f'\r{info} {count}/{total}', end='')
 
                 row = WMOWPTC()
+
+                # Read ISO time and check whether record is in period
                 iso_time = vars['iso_time'][i][j]
                 if iso_time[0] is MASKED:
                     continue
@@ -161,8 +192,10 @@ class IBTrACS(object):
                     iso_time_str, '%Y-%m-%d %H:%M:%S')
                 if not utils.check_period(row.datetime, self.period):
                     continue
-                year, month = row.datetime.year, row.datetime.month
 
+                # Insert rows which have read to TC table until
+                # find next unread month
+                year, month = row.datetime.year, row.datetime.month
                 if not have_read[year][month]:
                     if len(wmo_wp_tcs):
                         utils.bulk_insert_avoid_duplicate_unique(
@@ -175,6 +208,11 @@ class IBTrACS(object):
                                       + f'{year}-{str(month).zfill(2)}'))
                     have_read[year][month] = True
 
+                # Read basin of TC
+                row.basin = vars['basin'][i][j].tostring().decode('utf-8')
+
+                # Read latitude, longitude, minimal centeral pressure,
+                # maximum sustained wind speed from official WMO agency
                 lat = vars['lat'][i][j]
                 lon = vars['lon'][i][j]
                 if lat is MASKED or lon is MASKED:
@@ -184,12 +222,16 @@ class IBTrACS(object):
                 if pres is MASKED or wind is MASKED:
                     continue
 
+                # Set attributes of row
                 row.sid = sid
                 row.lat = float(lat)
                 row.lon = float(lon)
                 row.pres = int(pres) if pres is not MASKED else None
                 row.wind = int(wind) if wind is not MASKED else None
+                row.sid_datetime = f'{sid}_{row.datetime}'
 
+                # Average radius of 34/50/64 knot winds in four directoins
+                # (ne, se, sw, nw) from three agencies (bom, reunion, usa)
                 dirs = ['ne', 'se', 'sw', 'nw']
                 radii = dict()
                 for r in ['r34', 'r50', 'r64']:
@@ -204,10 +246,7 @@ class IBTrACS(object):
                             setattr(row, f'{r}_{dirs[d]}',
                                     int(sum(radii[r][d])/len(radii[r][d])))
 
-                row.sid_datetime = f'{sid}_{row.datetime}'
-
                 wmo_wp_tcs.append(row)
-
 
         utils.delete_last_lines()
         print('Done')

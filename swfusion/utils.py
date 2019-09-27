@@ -1120,15 +1120,12 @@ def get_class_by_tablename(engine, table_fullname):
         return None
 
 
-def add_column(mysql_connector, engine, table_name, column):
+def add_column(engine, table_name, column):
     column_name = column.compile(dialect=engine.dialect)
     column_type = column.type.compile(engine.dialect)
     connection = engine.connect()
     result = connection.execute('ALTER TABLE %s ADD COLUMN %s %s' % (table_name, column_name, column_type))
     connection.close()
-    # use_database(mysql_connector, 'SWFusion')
-    # cursor = mysql_connector.cursor()
-    # cursor.execute('ALTER TABLE %s ADD COLUMN %s %s' % (table_name, column_name, column_type))
 
 def get_mysql_connector(the_class):
     DB_CONFIG = the_class.CONFIG['database']
@@ -1207,3 +1204,47 @@ def convert_10(wspd, height):
 
     return con_wspd
 
+def get_subset_range_of_grib_point(lat, lon, lat_grid_points,
+                                   lon_grid_points):
+    lat_ae = [abs(lat-y) for y in lat_grid_points]
+    lon_ae = [abs(lon-x) for x in lon_grid_points]
+
+    lat_match = lat_grid_points[lat_ae.index(min(lat_ae))]
+    lon_match = lon_grid_points[lon_ae.index(min(lon_ae))]
+
+    lat1 = lat_match if lat > lat_match else lat
+    lat2 = lat_match if lat < lat_match else lat
+    lon1 = lon_match if lon > lon_match else lon
+    lon2 = lon_match if lon < lon_match else lon
+
+    return lat1, lat2, lon1, lon2
+
+def get_latlon_index_of_closest_grib_point(lat, lon, lat_grid_points,
+                                           lon_grid_points):
+    lat_ae = [abs(lat-y) for y in lat_grid_points]
+    lon_ae = [abs(lon-x) for x in lon_grid_points]
+
+    lat_match_index = lat_ae.index(min(lat_ae))
+    lon_match_index = lon_ae.index(min(lon_ae))
+
+    return lat_match_index, lon_match_index
+
+def get_subset_range_of_grib(lat, lon, lat_grid_points,
+                             lon_grid_points, edge):
+    lat_ae = [abs(lat-y) for y in lat_grid_points]
+    lon_ae = [abs(lon-x) for x in lon_grid_points]
+
+    lat_match = lat_grid_points[lat_ae.index(min(lat_ae))]
+    lon_match = lon_grid_points[lon_ae.index(min(lon_ae))]
+
+    half_edge = float(edge / 2)
+
+    if lat_match - half_edge < -90 or lat_match + half_edge > 90 :
+        return False, 0, 0, 0, 0
+
+    lat1 = lat_match - half_edge
+    lat2 = lat_match + half_edge
+    lon1 = (lon_match - half_edge + 360) % 360
+    lon2 = (lon_match + half_edge) % 360
+
+    return True, lat1, lat2, lon1, lon2

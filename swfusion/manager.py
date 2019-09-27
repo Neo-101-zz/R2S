@@ -1,3 +1,6 @@
+"""Manager of tropical cyclone ocean surface wind reanalysis system.
+
+"""
 from datetime import datetime
 import logging
 import os
@@ -13,6 +16,8 @@ import load_configs
 import utils
 
 def work_flow():
+    """The work flow of blending several TC OSW.
+    """
     load_configs.setup_logging()
     logger = logging.getLogger(__name__)
     # CONFIG
@@ -42,13 +47,13 @@ def work_flow():
     passwd = '39cnj971hw-'
     # Download and read
     try:
-        # ibtracs_ = ibtracs.IBTrACS(CONFIG, period, region, passwd)
+        # ibtracs_ = ibtracs.IBTrACSManager(CONFIG, period, region, passwd)
         era5_ = era5.ERA5Manager(CONFIG, period, region, passwd)
         # cwind_ = cwind.CwindManager(CONFIG, period, region, passwd)
         # stdmet_ = stdmet.StdmetManager(CONFIG, period, region, passwd)
         # sfmr_ = sfmr.SfmrManager(CONFIG, period, region, passwd)
-        # satel_ = satel.SatelManager(CONFIG, period, region, passwd,
-        #                             spatial_window, temporal_window)
+        satel_ = satel.SatelManager(CONFIG, period, region, passwd,
+                                    spatial_window, temporal_window)
         # compare_ = compare_offshore.CompareCCMPWithInStu(
         #     CONFIG, period, region, passwd)
     except Exception as msg:

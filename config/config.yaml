@@ -1,12 +1,18 @@
 logging:
   dir: '../log'
 ibtracs:
-  table_name: 'tc_wp'
+  table_name: 'ibtracs'
   urls:
     wp: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.WP.v04r00.nc'
-  dirs:
-    wp: '../data/ibtracs/'
+    since1980: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.since1980.v04r00.nc'
+  dirs: '../data/ibtracs/'
   data_name_length: 22
+rss:
+  subset_edge_in_degree: 20
+  spatial_resolution: 0.25
+  lat_grid_points_number: 720
+  lon_grid_points_number: 1440
+  missing_value: -999.0
 era5:
   subset_edge_in_degree: 20
   spatial_resolution: 0.25
