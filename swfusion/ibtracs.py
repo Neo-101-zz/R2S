@@ -76,7 +76,8 @@ class IBTrACSManager(object):
         # IBTrACS columns
         cols.append(Column('key', Integer, primary_key=True))
         cols.append(Column('sid', String(13), nullable=False))
-        cols.append(Column('datetime', DateTime, nullable=False))
+        cols.append(Column('name', String(50)))
+        cols.append(Column('date_time', DateTime, nullable=False))
         cols.append(Column('basin', String(2), nullable=False))
         cols.append(Column('lat', Float, nullable=False))
         cols.append(Column('lon', Float, nullable=False))
@@ -98,7 +99,7 @@ class IBTrACSManager(object):
         cols.append(Column('r64_sw', Integer))
         cols.append(Column('r64_nw', Integer))
 
-        cols.append(Column('sid_datetime', String(50), nullable=False,
+        cols.append(Column('sid_date_time', String(50), nullable=False,
                            unique=True))
 
         metadata = MetaData(bind=self.engine)
@@ -168,14 +169,38 @@ class IBTrACSManager(object):
         WMOWPTC = self.create_tc_table()
 
         for i in range(storm_num):
-
+            skip_storm = False
             # Skip this loop if season (year) of TC not in period
             if int(vars['season'][i]) not in self.years:
+                skip_storm = True
+            if not skip_storm:
+                # Skip this loop is datetime of first record is earlier than
+                # start date of period of more than 60 days,
+                # or datetime of first record is later than end date of period
+                first_iso_time = vars['iso_time'][i][0]
+                if first_iso_time[0] is MASKED:
+                    continue
+                first_datetime = datetime.datetime.strptime(
+                    first_iso_time.tostring().decode('utf-8'),
+                    '%Y-%m-%d %H:%M:%S')
+                if first_datetime < (self.period[0] -
+                                     datetime.timedelta(days=60)):
+                    skip_strom = True
+                elif first_datetime > self.period[1]:
+                    skip_strom = True
+
+            if skip_storm:
                 count += date_time_num
                 self.logger.debug((f'Skipping No.{i+1} TC in '
                                   + f'season {vars["season"][i]}'))
                 continue
+
+            self.logger.debug((f'Reading No.{i+1} TC in '
+                              + f'season {vars["season"][i]}'))
+
             sid = vars['sid'][i].tostring().decode('utf-8')
+            name = vars['name'][i]
+            name = name[name.mask == False].tostring().decode('utf-8')
 
             for j in range(date_time_num):
                 count += 1
@@ -188,25 +213,25 @@ class IBTrACSManager(object):
                 if iso_time[0] is MASKED:
                     continue
                 iso_time_str = iso_time.tostring().decode('utf-8')
-                row.datetime = datetime.datetime.strptime(
+                row.date_time = datetime.datetime.strptime(
                     iso_time_str, '%Y-%m-%d %H:%M:%S')
-                if not utils.check_period(row.datetime, self.period):
+                if not utils.check_period(row.date_time, self.period):
                     continue
 
                 # Insert rows which have read to TC table until
                 # find next unread month
-                year, month = row.datetime.year, row.datetime.month
-                if not have_read[year][month]:
-                    if len(wmo_wp_tcs):
-                        utils.bulk_insert_avoid_duplicate_unique(
-                            wmo_wp_tcs, self.CONFIG['database']\
-                            ['batch_size']['insert'],
-                            WMOWPTC, ['sid_datetime'], self.session,
-                            check_self=True)
-                        wmo_wp_tcs = []
-                    self.logger.debug((f'Reading WMO records of '
-                                      + f'{year}-{str(month).zfill(2)}'))
-                    have_read[year][month] = True
+                # year, month = row.date_time.year, row.date_time.month
+                # if not have_read[year][month]:
+                #     if len(wmo_wp_tcs):
+                #         utils.bulk_insert_avoid_duplicate_unique(
+                #             wmo_wp_tcs, self.CONFIG['database']\
+                #             ['batch_size']['insert'],
+                #             WMOWPTC, ['sid_date_time'], self.session,
+                #             check_self=True)
+                #         wmo_wp_tcs = []
+                #     self.logger.debug((f'Reading WMO records of '
+                #                       + f'{year}-{str(month).zfill(2)}'))
+                #     have_read[year][month] = True
 
                 # Read basin of TC
                 row.basin = vars['basin'][i][j].tostring().decode('utf-8')
@@ -224,11 +249,13 @@ class IBTrACSManager(object):
 
                 # Set attributes of row
                 row.sid = sid
+                if name != 'NOT_NAMED':
+                    row.name = name
                 row.lat = float(lat)
                 row.lon = float(lon)
                 row.pres = int(pres) if pres is not MASKED else None
                 row.wind = int(wind) if wind is not MASKED else None
-                row.sid_datetime = f'{sid}_{row.datetime}'
+                row.sid_date_time = f'{sid}_{row.date_time}'
 
                 # Average radius of 34/50/64 knot winds in four directoins
                 # (ne, se, sw, nw) from three agencies (bom, reunion, usa)
@@ -247,6 +274,13 @@ class IBTrACSManager(object):
                                     int(sum(radii[r][d])/len(radii[r][d])))
 
                 wmo_wp_tcs.append(row)
+
+        if len(wmo_wp_tcs):
+            utils.bulk_insert_avoid_duplicate_unique(
+                wmo_wp_tcs, self.CONFIG['database']\
+                ['batch_size']['insert'],
+                WMOWPTC, ['sid_date_time'], self.session,
+                check_self=True)
 
         utils.delete_last_lines()
         print('Done')

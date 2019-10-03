@@ -1,5 +1,23 @@
 logging:
   dir: '../log'
+match:
+  temporal_window: 360
+hwind:
+  data_link_text:
+    gridded: 'GriddedData'
+    shapefile: 'Shapefiles'
+  table_name: 'hwind'
+  url: 'https://www.rms.com/perils/hwind/legacy-archive/storms'
+  data_url_prefix: 'https://www.rms.com'
+  dirs:
+    gridded: '../data/hwind/gridded/'
+    shapefile: '../data/hwind/shapefile/'
+  pickle:
+    year_tc: '../data/hwind/variable/year_tc.pkl'
+  basin_map:
+    Atlantic Basin: 'NA'
+    East Pacific Basin: 'EP'
+    West Pacific Basin: 'WP'
 ibtracs:
   table_name: 'ibtracs'
   urls:
@@ -136,6 +154,19 @@ sfmr:
         Reading general record of hurricanes which have SFMR data
       read_hurr_sfmr: |-
         Reading hurricane SFMR data
+amsr2:
+  urls: 'http://data.remss.com/amsr2/bmaps_v08/'
+  period_limit:
+    start: 2012-07-02 00:00:00
+    end: 9999-12-31 23:59:59
+  data_name_length: 20
+  missing_value: -999.0
+  dirs:
+    bmaps: '../data/satel/amsr2_bmaps/'
+  data_prefix: 'f34'
+  data_suffix: 'v8.gz'
+  files_path:
+    missing_dates: '../data/satel/amsr2_missing_dates.pkl'
 ascat:
   urls: 'http://data.remss.com/ascat/metopa/bmaps_v02.1/'
   period_limit:
@@ -145,7 +176,7 @@ ascat:
   missing_value: -999.0
   dirs:
     bmaps: '../data/satel/ascat_bmaps/'
-    pickle: '../data/satel/ascat_pickle/'
+  data_prefix: 'ascat'
   data_suffix: '_v02.1.gz'
   files_path:
     missing_dates: '../data/satel/ascat_missing_dates.pkl'
@@ -164,7 +195,7 @@ qscat:
   missing_value: -999.0
   dirs:
     bmaps: '../data/satel/qscat_bmaps/'
-    pickle: '../data/satel/qscat_pickle/'
+  data_prefix: 'qscat'
   data_suffix: 'v4.gz'
   files_path:
     missing_dates: '../data/satel/qscat_missing_dates.pkl'
@@ -183,7 +214,7 @@ wsat:
   missing_value: -999.0
   dirs:
     bmaps: '../data/satel/windsat_bmaps/'
-    pickle: '../data/satel/windsat_pickle/'
+  data_prefix: 'wsat'
   data_suffix: 'v7.0.1.gz'
   files_path:
     missing_dates: '../data/satel/wsat_missing_dates.pkl'

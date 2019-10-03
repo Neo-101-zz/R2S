@@ -12,6 +12,7 @@ import satel
 import compare_offshore
 import ibtracs
 import era5
+import hwind
 import load_configs
 import utils
 
@@ -33,8 +34,8 @@ def work_flow():
 
     # period = [datetime(2016, 5, 27, 0, 0, 0),
     #           datetime(2016, 5, 27, 23, 59, 59)]
-    period = [datetime(2000, 1, 1, 0, 0, 0),
-              datetime(2016, 12, 31, 23, 59, 59)]
+    period = [datetime(2018, 7, 1, 0, 0, 0),
+              datetime(2018, 7, 1, 23, 59, 59)]
     logger.info(f'Period: {period}')
     # Region
     # region = utils.input_region(CONFIG)
@@ -48,7 +49,8 @@ def work_flow():
     # Download and read
     try:
         # ibtracs_ = ibtracs.IBTrACSManager(CONFIG, period, region, passwd)
-        era5_ = era5.ERA5Manager(CONFIG, period, region, passwd)
+        # hwind_ = hwind.HWindManager(CONFIG, period, region, passwd)
+        # era5_ = era5.ERA5Manager(CONFIG, period, region, passwd)
         # cwind_ = cwind.CwindManager(CONFIG, period, region, passwd)
         # stdmet_ = stdmet.StdmetManager(CONFIG, period, region, passwd)
         # sfmr_ = sfmr.SfmrManager(CONFIG, period, region, passwd)

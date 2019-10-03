@@ -159,7 +159,7 @@ class StdmetManager(object):
 
         cols = []
         cols.append(Column('key', Integer(), primary_key=True))
-        cols.append(Column('datetime', DateTime(), nullable=False,
+        cols.append(Column('date_time', DateTime(), nullable=False,
                            unique=True))
         cols.append(Column('wspd', Float(), nullable=False))
         cols.append(Column('wspd_10', Float(), nullable=False))
@@ -230,7 +230,7 @@ class StdmetManager(object):
                     utils.bulk_insert_avoid_duplicate_unique(
                         records, int(self.CONFIG['database']\
                                      ['batch_size']['insert']/10),
-                        DataOfStation, ['datetime'], self.session,
+                        DataOfStation, ['date_time'], self.session,
                         check_self=True)
                     end = time.process_time()
 

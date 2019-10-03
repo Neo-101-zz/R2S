@@ -63,8 +63,8 @@ class ERA5Manager(object):
         """Get table of ERA5 reanalysis.
 
         """
-        dt_str = dt.strftime('%Y%m%d%H%M%S')
-        table_name = f'era5_tc_{sid}_{dt_str}_{lat_index}_{lon_index}'
+        dt_str = dt.strftime('%Y_%m%d_%H%M')
+        table_name = f'era5_tc_{sid}_{dt_str}_{lon_index}_{lat_index}'
 
         class ERA5(object):
             pass
@@ -307,6 +307,8 @@ class ERA5Manager(object):
         # So need to flip the data matrix along latitude axis
         # to be the same of RSS satellite data matrix arrangement.
         data = np.flip(data, 0)
+        # After fliping, data[0][0] is the data of smallest latitude
+        # and smallest longitude
 
         name = grb.name.replace(" ", "_").lower()
         z = self.pres_lvl.index(str(grb.level))

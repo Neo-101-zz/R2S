@@ -23,6 +23,7 @@ from sqlalchemy import Table, Column, MetaData
 from sqlalchemy.orm import mapper
 from sqlalchemy import tuple_
 
+from amsr2_daily import AMSR2daily
 from ascat_daily import ASCATDaily
 from quikscat_daily_v4 import QuikScatDaily
 from windsat_daily_v7 import WindSatDaily
@@ -201,7 +202,7 @@ def url_exists(url):
         req = requests.head(url)
         if url.endswith('.gz'):
             try:
-                if req.headers['Content-Type'] == 'application/x-gzip':
+                if req.headers['Content-Type'].startswith('application'):
                     return True
                 else:
                     return False
@@ -786,6 +787,8 @@ def dataset_of_daily_satel(satel_name, file_path, missing_val=-999.0):
         dataset = QuikScatDaily(file_path, missing=missing_val)
     elif satel_name == 'wsat':
         dataset = WindSatDaily(file_path, missing=missing_val)
+    elif satel_name == 'amsr2':
+        dataset = AMSR2daily(file_path, missing=missing_val)
     else:
         sys.exit('Invalid satellite name')
 
@@ -1206,6 +1209,8 @@ def convert_10(wspd, height):
 
 def get_subset_range_of_grib_point(lat, lon, lat_grid_points,
                                    lon_grid_points):
+    lon = (lon + 360) % 360
+
     lat_ae = [abs(lat-y) for y in lat_grid_points]
     lon_ae = [abs(lon-x) for x in lon_grid_points]
 
@@ -1221,6 +1226,8 @@ def get_subset_range_of_grib_point(lat, lon, lat_grid_points,
 
 def get_latlon_index_of_closest_grib_point(lat, lon, lat_grid_points,
                                            lon_grid_points):
+    lon = (lon + 360) % 360
+
     lat_ae = [abs(lat-y) for y in lat_grid_points]
     lon_ae = [abs(lon-x) for x in lon_grid_points]
 
@@ -1231,6 +1238,8 @@ def get_latlon_index_of_closest_grib_point(lat, lon, lat_grid_points,
 
 def get_subset_range_of_grib(lat, lon, lat_grid_points,
                              lon_grid_points, edge):
+    lon = (lon + 360) % 360
+
     lat_ae = [abs(lat-y) for y in lat_grid_points]
     lon_ae = [abs(lon-x) for x in lon_grid_points]
 
@@ -1245,6 +1254,6 @@ def get_subset_range_of_grib(lat, lon, lat_grid_points,
     lat1 = lat_match - half_edge
     lat2 = lat_match + half_edge
     lon1 = (lon_match - half_edge + 360) % 360
-    lon2 = (lon_match + half_edge) % 360
+    lon2 = (lon_match + half_edge + 360) % 360
 
     return True, lat1, lat2, lon1, lon2
