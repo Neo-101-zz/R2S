@@ -20,7 +20,6 @@ from sqlalchemy.orm import mapper
 import matplotlib.pyplot as plt
 from mpl_toolkits.basemap import Basemap
 import numpy as np
-from matplotlib.collections import PatchCollection
 from matplotlib.patches import Polygon
 
 import utils
@@ -138,7 +137,8 @@ class SatelManager(object):
         total = tc_query.count()
         del tc_query
         count = 0
-        info = f'Downloading satellite data according to TC records'
+        info = (f'Downloading and reading satellite data according to'
+                + f'TC records')
         self.logger.info(info)
 
         # Loop all TC records
@@ -180,11 +180,14 @@ class SatelManager(object):
                 bytemap_path = self.download(satel_name, tc_datetime)
                 utils.reset_signal_handler()
 
+                if bytemap_path is None:
+                    continue
+
+                # Show the TC area and sateliite data area in the
+                # temporal window
                 self.show_match(lat1, lat2, lon1, lon2, satel_name,
                                 tc_datetime, bytemap_path)
 
-                if bytemap_path is None:
-                    continue
                 # Read satellite data according to TC datetime
                 self.read(satel_name, bytemap_path, tc_datetime,
                           table_name, sa_table, SatelTable,
@@ -193,30 +196,25 @@ class SatelManager(object):
         utils.delete_last_lines()
         print('Done')
 
-    def show_match(self, lat1, lat2, lon1, lon2, satel_name,
-                  tc_datetime, bm_file):
-        dataset = utils.dataset_of_daily_satel(satel_name, bm_file)
-        vars = dataset.variables
+    def draw_tc_area(self, map, lat1, lat2, lon1, lon2, zorder):
 
-        lon1 -= 180
-        lon2 -= 180
         llcrnrlon = lon1
         urcrnrlon = lon2
         llcrnrlat = lat1
         urcrnrlat = lat2
         lower_left = (llcrnrlon, llcrnrlat)
-        lower_right= (urcrnrlon, llcrnrlat)
+        lower_right = (urcrnrlon, llcrnrlat)
         upper_left = (llcrnrlon, urcrnrlat)
-        upper_right= (urcrnrlon, urcrnrlat)
+        upper_right = (urcrnrlon, urcrnrlat)
 
-        map = Basemap(llcrnrlon=-180.0, llcrnrlat=-90.0, urcrnrlon=180.0,
-                      urcrnrlat=90.0)
-        map.drawcoastlines()
-        map.drawmapboundary(fill_color='aqua')
-        map.fillcontinents(color='coral', lake_color='aqua')
-        map.drawmeridians(np.arange(0, 360, 30))
-        map.drawparallels(np.arange(-90, 90, 30))
         self.plot_rec(map, lower_left, upper_left, lower_right, upper_right, 10)
+
+    def draw_satel_coverage(self, tc_datetime, satel_name, bm_file):
+        dataset = utils.dataset_of_daily_satel(satel_name, bm_file)
+        vars = dataset.variables
+
+        bm_file_name = bm_file.split('/')[-1]
+        date_str = bm_file_name.split('_')[1][:8]
 
         for i in [0, 1]:
             for j in range(720):
@@ -225,23 +223,19 @@ class SatelManager(object):
                         continue
 
                     if 'mingmt' in vars.keys():
-                        if vars['mingmt'][0][j][k] == vars['mingmt'][1][j][k]:
-                            continue
+                        # if vars['mingmt'][0][j][k] == \
+                        #    vars['mingmt'][1][j][k]:
+                        #     continue
 
                         # Process the datetime and skip if necessary
                         time_str ='{:02d}{:02d}00'.format(
                             *divmod(int(vars['mingmt'][i][j][k]), 60))
-
                     elif 'time' in vars.keys():
-                        if vars['time'][0][j][k] == vars['time'][1][j][k]:
-                            continue
-
+                        # if vars['time'][0][j][k] == vars['time'][1][j][k]:
+                        #     continue
                         # Process the datetime and skip if necessary
                         time_str ='{:02d}{:02d}00'.format(
                             *divmod(int(60*vars['time'][i][j][k]), 60))
-
-                    bm_file_name = bm_file.split('/')[-1]
-                    date_str = bm_file_name.split('_')[1][:8]
 
                     try:
                         if time_str.startswith('24'):
@@ -258,7 +252,6 @@ class SatelManager(object):
                         breakpoint()
                         exit(msg)
 
-
                     # Calculate the time delta between satellite datetime
                     # and TC datetime
                     if tc_datetime > datetime_:
@@ -267,24 +260,41 @@ class SatelManager(object):
                         delta = datetime_ - tc_datetime
                     # Skip this turn of loop if timedelta is largers than
                     # presetted temporal window
-                    if delta.seconds > self.CONFIG['match']['temporal_window']:
+                    if delta.seconds > \
+                       self.CONFIG['match']['temporal_window']:
                         continue
 
                     lat = vars['latitude'][j]
-                    if abs(lat) > 10:
-                        continue
                     lon = vars['longitude'][k] - 180
 
                     lat1, lat2 = lat-0.125, lat+0.125
                     lon1, lon2 = lon-0.125, lon+0.125
                     lats = np.array([lat1, lat2, lat2, lat1])
                     lons = np.array([lon1, lon1, lon2, lon2])
-                    self.draw_cloud_pixel(lats, lons, map)
+                    self.draw_cloud_pixel(lats, lons, map, 'white')
 
-        plt.show()
-        breakpoint()
+    def show_match(self, lat1, lat2, lon1, lon2, satel_name,
+                  tc_datetime, bm_file):
 
-    def draw_cloud_pixel(self, lats, lons, mapplot):
+        map = Basemap(llcrnrlon=-180.0, llcrnrlat=-90.0, urcrnrlon=180.0,
+                      urcrnrlat=90.0)
+        map.drawcoastlines()
+        map.drawmapboundary(fill_color='aqua')
+        map.fillcontinents(color='coral', lake_color='aqua')
+        map.drawmeridians(np.arange(0, 360, 30))
+        map.drawparallels(np.arange(-90, 90, 30))
+
+        self.draw_tc_area(map, lat1, lat2, lon1, lon2, 10)
+
+        self.draw_satel_coverage(tc_datetime, satel_name, bm_file)
+
+        fig_name = f'data_match_on_{tc_datetime}_{satel_name}.png'
+        self.logger.debug(f'Drawing {fig_name}')
+        plt.savefig((f'{self.CONFIG["result"]["dirs"]["fig"]}'
+                     + fig_name))
+        plt.clf()
+
+    def draw_cloud_pixel(self, lats, lons, mapplot, color):
         """Draw a pixel on the map. The fill color alpha level depends on the cloud index, 
         ranging from 0.1 (almost fully transparent) for confidently clear pixels to 1 (fully opaque)
         for confidently cloudy pixels.
@@ -309,7 +319,7 @@ class SatelManager(object):
         for i in range(len(lats)):
             pixel.append([lons[i], lats[i]])
 
-        poly = Polygon(pixel, facecolor='white')
+        poly = Polygon(pixel, facecolor=color)
         plt.gca().add_patch(poly)
 
     def plot_rec(self, bmap, lower_left, upper_left, lower_right,

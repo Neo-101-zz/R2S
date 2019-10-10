@@ -184,7 +184,7 @@ class IBTrACSManager(object):
                     first_iso_time.tostring().decode('utf-8'),
                     '%Y-%m-%d %H:%M:%S')
                 if first_datetime < (self.period[0] -
-                                     datetime.timedelta(days=60)):
+                                     datetime.timedelta(days=45)):
                     skip_strom = True
                 elif first_datetime > self.period[1]:
                     skip_strom = True
@@ -211,7 +211,8 @@ class IBTrACSManager(object):
                 # Read ISO time and check whether record is in period
                 iso_time = vars['iso_time'][i][j]
                 if iso_time[0] is MASKED:
-                    continue
+                    break
+
                 iso_time_str = iso_time.tostring().decode('utf-8')
                 row.date_time = datetime.datetime.strptime(
                     iso_time_str, '%Y-%m-%d %H:%M:%S')

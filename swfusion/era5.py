@@ -3,6 +3,7 @@
 """
 import datetime
 import logging
+import math
 import os
 import time
 
@@ -14,11 +15,18 @@ from sqlalchemy import Integer, Float, String, DateTime
 from sqlalchemy import Column
 from sqlalchemy.schema import Table, MetaData
 from sqlalchemy.orm import mapper
+import numpy as np
+from mpl_toolkits.basemap import Basemap
+from matplotlib import patches as mpatches
+import matplotlib.pyplot as plt
 
 import ibtracs
 import utils
 
 Base = declarative_base()
+DEGREE_OF_ONE_NMILE = float(1)/60
+KM_OF_ONE_NMILE = 1.852
+KM_OF_ONE_DEGREE = KM_OF_ONE_NMILE / DEGREE_OF_ONE_NMILE
 
 class ERA5Manager(object):
     """Manage features of ERA5 that are not related to other data
@@ -41,30 +49,37 @@ class ERA5Manager(object):
         self.edge = self.CONFIG['era5']['subset_edge_in_degree']
 
         self.cdsapi_client = cdsapi.Client()
-        self.vars = self.CONFIG['era5']['vars']
-        self.pres_lvl = self.CONFIG['era5']['pres_lvl']
+        self.threeD_vars = self.CONFIG['era5']['vars']
+        self.threeD_pres_lvl = self.CONFIG['era5']['pres_lvl']
+        self.surface_vars = ['u_component_of_wind', 'v_component_of_wind']
+        self.surface_pres_lvl = '1000'
 
         self.spa_resolu = self.CONFIG['era5']['spatial_resolution']
         self.lat_grid_points = [y * self.spa_resolu - 90 for y in range(
             self.CONFIG['era5']['lat_grid_points_number'])]
         self.lon_grid_points = [x * self.spa_resolu for x in range(
             self.CONFIG['era5']['lon_grid_points_number'])]
-        # Size of 3D grid points around TC center
-        self.grid_3d = dict()
-        self.grid_3d['lat_axis'] = self.grid_3d['lon_axis'] = int(
+        # Size of threeD grid points around TC center
+        self.threeD_grid = dict()
+        self.threeD_grid['lat_axis'] = self.threeD_grid['lon_axis'] = int(
             self.edge/self.spa_resolu)
-        self.grid_3d['height'] = len(self.pres_lvl)
+        self.threeD_grid['height'] = len(self.threeD_pres_lvl)
+
+        self.twoD_grid = dict()
+        self.twoD_grid['lat_axis'] = self.twoD_grid['lon_axis'] = int(
+            self.edge/self.spa_resolu)
+
+        self.wind_radii = self.CONFIG['wind_radii']
 
         utils.setup_database(self, Base)
-        self.download_and_read()
-        # self.read('/Users/lujingze/Downloads/download.grib')
+        self.download_and_read('surface')
 
-    def get_era5_table_class(self, sid, dt, lat_index, lon_index):
+    def get_era5_table_class(self, mode, sid, dt, lat_index, lon_index):
         """Get table of ERA5 reanalysis.
 
         """
         dt_str = dt.strftime('%Y_%m%d_%H%M')
-        table_name = f'era5_tc_{sid}_{dt_str}_{lon_index}_{lat_index}'
+        table_name = f'era5_tc_{mode}_{sid}_{dt_str}_{lon_index}_{lat_index}'
 
         class ERA5(object):
             pass
@@ -80,15 +95,21 @@ class ERA5Manager(object):
         cols.append(Column('key', Integer, primary_key=True))
         cols.append(Column('x', Integer, nullable=False))
         cols.append(Column('y', Integer, nullable=False))
-        cols.append(Column('z', Integer, nullable=False))
+        if mode == 'threeD':
+            cols.append(Column('z', Integer, nullable=False))
         cols.append(Column('lon', Float, nullable=False))
         cols.append(Column('lat', Float, nullable=False))
-        cols.append(Column('pres_lvl', Integer, nullable=False))
-        cols.append(Column('x_y_z', String(20), nullable=False,
-                           unique=True))
-
-        for var in self.vars:
-            cols.append(Column(var, Float))
+        if mode == 'threeD':
+            cols.append(Column('pres_lvl', Integer, nullable=False))
+            cols.append(Column('x_y_z', String(20), nullable=False,
+                               unique=True))
+            for var in self.threeD_vars:
+                cols.append(Column(var, Float))
+        elif mode == 'surface':
+            cols.append(Column('x_y', String(20), nullable=False,
+                               unique=True))
+            for var in self.surface_vars:
+                cols.append(Column(var, Float))
 
         metadata = MetaData(bind=self.engine)
         t = Table(table_name, metadata, *cols)
@@ -96,81 +117,326 @@ class ERA5Manager(object):
 
         return table_name, t, ERA5
 
-    def download_majority(self, file_path, year, month):
-        """Download majority of ERA5 data which consists of main hour
+    def download_major(self, mode, file_path, year, month):
+        """Download major of ERA5 data which consists of main hour
         (0, 6, 12, 18 h) data in one month.
 
         """
+        if os.path.exists(file_path):
+            return
+
+        request = {
+            'product_type':'reanalysis',
+            'format':'grib',
+            'year':f'{year}',
+            'month':str(month).zfill(2),
+            'day':list(self.dt_major[year][month]['day']),
+            'time':list(self.dt_major[year][month]['time'])
+        }
+
+        if mode == 'threeD':
+            request['variable'] = self.threeD_vars
+            request['pressure_level'] = self.threeD_pres_lvl
+        elif mode == 'surface':
+            request['variable'] = self.surface_vars
+            request['pressure_level'] = self.surface_pres_lvl
+
         self.cdsapi_client.retrieve(
             'reanalysis-era5-pressure-levels',
-            {
-                'product_type':'reanalysis',
-                'format':'grib',
-                'variable':self.vars,
-                'pressure_level':self.pres_lvl,
-                'year':f'{year}',
-                'month':str(month).zfill(2),
-                'day':list(self.dt_majority[year][month]['day']),
-                'time':list(self.dt_majority[year][month]['time'])
-            },
+            request,
             file_path)
 
-    def download_minority(self, file_path, year, month, day_str):
-        """Download minority of ERA5 data which consists of hours except
+    def download_minor(self, mode, file_path, year, month, day_str):
+        """Download minor of ERA5 data which consists of hours except
         (0, 6, 12, 18 h) data in one day.
 
         """
+        if os.path.exists(file_path):
+            return
+
+        request = {
+            'product_type':'reanalysis',
+            'format':'grib',
+            'year':f'{year}',
+            'month':str(month).zfill(2),
+            'day':day_str,
+            'time':list(self.dt_minor[year][month][day_str])
+        }
+
+        if mode == 'threeD':
+            request['variable'] = self.threeD_vars
+            request['pressure_level'] = self.threeD_pres_lvl
+        elif mode == 'surface':
+            request['variable'] = self.surface_vars
+            request['pressure_level'] = self.surface_pres_lvl
+
         self.cdsapi_client.retrieve(
             'reanalysis-era5-pressure-levels',
-            {
-                'product_type':'reanalysis',
-                'format':'grib',
-                'variable':self.vars,
-                'pressure_level':self.pres_lvl,
-                'year':f'{year}',
-                'month':str(month).zfill(2),
-                'day':day_str,
-                'time':list(self.dt_minority[year][month][day_str])
-            },
+            request,
             file_path)
 
-    def download_and_read(self):
+    def download_and_read(self, mode):
         """Download and read ERA5 data.
 
         """
-        self.logger.info('Downloading and reading ERA5 reanalysis')
+        self.logger.info((f'Downloading and reading ERA5 reanalysis: '
+                          + f'{mode} mode'))
         self._get_target_datetime()
-        majority_dir = self.CONFIG['era5']['dirs']['rea_pres_lvl_maj']
-        minority_dir = self.CONFIG['era5']['dirs']['rea_pres_lvl_min']
-        os.makedirs(majority_dir, exist_ok=True)
-        os.makedirs(minority_dir, exist_ok=True)
 
-        # Download and read majority of ERA5
-        for year in self.dt_majority.keys():
-            for month in self.dt_majority[year].keys():
-                file_path = f'{majority_dir}{year}{str(month).zfill(2)}.grib'
-                self.logger.info(f'Downloading majority {file_path}')
+        if mode == 'threeD':
+            major_dir = self.CONFIG['era5']['dirs']['threeD']['major']
+            minor_dir = self.CONFIG['era5']['dirs']['threeD']['minor']
+        elif mode == 'surface':
+            major_dir = self.CONFIG['era5']['dirs']['surface']['major']
+            minor_dir = self.CONFIG['era5']['dirs']['surface']['minor']
+
+        os.makedirs(major_dir, exist_ok=True)
+        os.makedirs(minor_dir, exist_ok=True)
+
+        # Download and read major of ERA5
+        for year in self.dt_major.keys():
+            for month in self.dt_major[year].keys():
+                file_path = (f'{major_dir}{year}'
+                             + f'{str(month).zfill(2)}.grib')
+                self.logger.info(f'Downloading major {file_path}')
+
                 if not os.path.exists(file_path):
-                    self.download_majority(file_path, year, month)
-                self.logger.info(f'Reading majority {file_path}')
-                self.read(file_path)
-                os.remove(file_path)
+                    self.download_major(mode, file_path, year, month)
 
-        # Download and read minority of ERA5
-        for year in self.dt_minority.keys():
-            for month in self.dt_minority[year].keys():
-                for day_str in self.dt_minority[year][month].keys():
-                    file_path =\
-                            (f'{minority_dir}{year}{str(month).zfill(2)}'
-                             + f'{day_str}.grib')
-                    self.logger.info(f'Downloading minority {file_path}')
+                self.logger.info(f'Reading major {file_path}')
+                self.read(mode, file_path)
+                # os.remove(file_path)
+
+        # Download and read minor of ERA5
+        for year in self.dt_minor.keys():
+            for month in self.dt_minor[year].keys():
+                for day_str in self.dt_minor[year][month].keys():
+                    file_path = (f'{minor_dir}{year}'
+                                 + f'{str(month).zfill(2)}'
+                                 + f'{day_str}.grib')
+                    self.logger.info(f'Downloading minor {file_path}')
+
                     if not os.path.exists(file_path):
-                        self.download_minority(file_path, year, month, day_str)
-                    self.logger.info(f'Reading minority {file_path}')
-                    self.read(file_path)
-                    os.remove(file_path)
+                        self.download_minor(mode, file_path, year, month,
+                                            day_str)
 
-    def read(self, file_path):
+                    self.logger.info(f'Reading minor {file_path}')
+                    self.read(mode, file_path)
+                    # os.remove(file_path)
+
+    def _get_radii_from_tc_row(self, tc_row):
+        r34 = dict()
+        r34['nw'], r34['sw'], r34['se'], r34['ne'] = \
+                tc_row.r34_nw, tc_row.r34_sw, tc_row.r34_se, tc_row.r34_ne
+
+        r50 = dict()
+        r50['nw'], r50['sw'], r50['se'], r50['ne'] = \
+                tc_row.r50_nw, tc_row.r50_sw, tc_row.r50_se, tc_row.r50_ne
+
+        r64 = dict()
+        r64['nw'], r64['sw'], r64['se'], r64['ne'] = \
+                tc_row.r64_nw, tc_row.r64_sw, tc_row.r64_se, tc_row.r64_ne
+
+        radii = {34: r34, 50: r50, 64: r64}
+
+        return radii
+
+    def _set_compare_zorders(self):
+        self.zorders = {
+            'coastlines': 4,
+            'mapboundary': 0,
+            'contour': 3,
+            'contourf': 2,
+            'wedge': 7,
+            'grid': 10
+        }
+
+    def _get_compare_latlon(self, surface):
+        lons = set()
+        lats = set()
+        for pt in surface:
+            lons.add(pt.lon)
+            lats.add(pt.lat)
+        lons = sorted(list(lons))
+        lats = sorted(list(lats))
+
+        return lats, lons
+
+    def _draw_ibtracs_radii(self, ax, center, radii):
+        radii_color = {34: 'yellow', 50: 'orange', 64: 'red'}
+        dirs = ['ne', 'se', 'sw', 'nw']
+        ibtracs_area = []
+
+        for r in self.wind_radii:
+            area_in_radii = 0
+            for idx, dir in enumerate(dirs):
+                if radii[r][dir] is None:
+                    continue
+
+                ax.add_patch(
+                    mpatches.Wedge(
+                        center,
+                        r=radii[r][dir]*DEGREE_OF_ONE_NMILE,
+                        theta1=idx*90, theta2=(idx+1)*90,
+                        zorder=self.zorders['wedge'],
+                        color=radii_color[r], alpha=0.6)
+                )
+
+                radii_in_km = radii[r][dir] * KM_OF_ONE_NMILE
+                area_in_radii += math.pi * (radii_in_km)**2 / 4
+
+            ibtracs_area.append(area_in_radii)
+
+        return ibtracs_area
+
+    def _draw_compare_basemap(self, ax, lon1, lon2, lat1, lat2):
+        map = Basemap(llcrnrlon=lon1, llcrnrlat=lat1, urcrnrlon=lon2,
+                      urcrnrlat=lat2, ax=ax)
+        map.drawcoastlines(linewidth=3.0,
+                           zorder=self.zorders['coastlines'])
+        map.drawmapboundary(zorder=self.zorders['mapboundary'])
+        # draw parallels and meridians.
+        # label parallels on right and top
+        # meridians on bottom and left
+        parallels = np.arange(int(lat1), int(lat2), 2.)
+        # labels = [left,right,top,bottom]
+        map.drawparallels(parallels,labels=[False,True,True,False])
+        meridians = np.arange(int(lon1), int(lon2), 2.)
+        map.drawmeridians(meridians,labels=[True,False,False,True])
+
+    def _get_compare_era5_windspd(self, surface, lats, lons):
+        windspd = np.ndarray(shape=(len(lats), len(lons)),
+                             dtype=float)
+        for pt in surface:
+            lon_idx = lons.index(pt.lon)
+            lat_idx = lats.index(pt.lat)
+
+            windspd[lat_idx][lon_idx] = 1.94384 * math.sqrt(
+                pt.u_component_of_wind**2 + pt.v_component_of_wind**2)
+
+        return windspd
+
+    def _draw_era5_windspd(self, ax, lats, lons, windspd):
+        # Plot windspd in knots with matplotlib's contour
+        X, Y = np.meshgrid(lons, lats)
+        Z = windspd
+
+        windspd_levels = [5*x for x in range(15)]
+
+        cs = ax.contour(X, Y, Z, levels=windspd_levels,
+                        zorder=self.zorders['contour'], colors='k')
+        ax.clabel(cs, inline=1, colors='k', fontsize=10)
+        ax.contourf(X, Y, Z, levels=windspd_levels,
+                    zorder=self.zorders['contourf'],
+                    cmap=plt.cm.rainbow)
+
+    def _get_era5_area(self, ax, lats, lons, windspd):
+        X, Y = np.meshgrid(lons, lats)
+        Z = windspd
+
+        cs = ax.contour(X, Y, Z, levels=self.wind_radii)
+        era5_area = []
+        for i in range(len(self.wind_radii)):
+            if windspd.max() < self.wind_radii[i]:
+                era5_area.append(0)
+                continue
+
+            contour = cs.collections[i]
+            paths = contour.get_paths()
+
+            if not len(paths):
+                continue
+
+            vs = paths[0].vertices
+            # Compute area enclosed by vertices.
+            era5_area.append(abs(
+                utils.area_of_contour(vs) * (KM_OF_ONE_DEGREE)**2))
+
+        return era5_area
+
+    def _set_basemap_title(self, ax, tc_row):
+        title_prefix = (f'IBTrACS wind radii and ERA5 ocean surface wind '
+                        + f'speed of'
+                        + f'\n{tc_row.sid}')
+        if tc_row.name is not None:
+            tc_name =  f'({tc_row.name}) '
+        title_suffix = f'on {tc_row.date_time}'
+        ax.set_title(f'{title_prefix} {tc_name} {title_suffix}')
+
+    def _set_bar_title_and_so_on(self, ax, tc_row, labels, x):
+        title_prefix = (f'Area within wind radii of IBTrACS '
+                        + f'and area within corresponding contour of ERA5'
+                        + f'\n of {tc_row.sid}')
+        if tc_row.name is not None:
+            tc_name =  f'({tc_row.name}) '
+        title_suffix = f'on {tc_row.date_time}'
+
+        ax.set_title(f'{title_prefix} {tc_name} {title_suffix}')
+        ax.set_ylabel('Area')
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels)
+        ax.legend()
+
+    def _draw_compare_area_bar(self, ax, ibtracs_area, era5_area, tc_row):
+        labels = ['R34 area', 'R50 area', 'R64 area']
+        x = np.arange(len(labels))  # the label locations
+        width = 0.35  # the width of the bars
+        rects1 = ax.bar(x - width/2, ibtracs_area, width,
+                         label='IBTrACS')
+        rects2 = ax.bar(x + width/2, era5_area, width, label='ERA5')
+
+        self._set_bar_title_and_so_on(ax, tc_row, labels, x)
+
+        utils.autolabel(ax, rects1)
+        utils.autolabel(ax, rects2)
+
+    def compare_ibtracs_era5(self, mode, ibtracs_table_row, ERA5Table):
+        self._set_compare_zorders()
+        tc_row = ibtracs_table_row
+        lon_converted = tc_row.lon + 360 if tc_row.lon < 0 else tc_row.lon
+        radii = self._get_radii_from_tc_row(tc_row)
+
+        if mode == 'threeD':
+            surface = self.session.query(ERA5Table).filter(
+                ERA5Table.z == 11)
+        elif mode == 'surface':
+            surface = self.session.query(ERA5Table)
+
+        lats, lons = self._get_compare_latlon(surface)
+        lon1, lon2 = min(lons), max(lons)
+        lat1, lat2 = min(lats), max(lats)
+
+        fig = plt.figure()
+        fig.set_size_inches(25, 10)
+
+        # Draw ax1 to compare IBTrACS wind radii with ERA5 wind speed contour
+        ax1 = fig.add_subplot(121, aspect='equal')
+        ax1.axis([lon1, lon2, lat1, lat2])
+
+        self._draw_compare_basemap(ax1, lon1, lon2, lat1, lat2)
+        self._set_basemap_title(ax1, tc_row)
+
+        center = (lon_converted, tc_row.lat)
+        windspd = self._get_compare_era5_windspd(surface, lats, lons)
+        self._draw_era5_windspd(ax1, lats, lons, windspd)
+
+        ibtracs_area = self._draw_ibtracs_radii(ax1, center, radii)
+        era5_area = self._get_era5_area(ax1, lats, lons, windspd)
+
+        # Draw ax2 to compare area within IBTrACS wind radii with
+        # corresponding area of ERA5 wind speed contour
+        ax2 = fig.add_subplot(122)
+        self._draw_compare_area_bar(ax2, ibtracs_area, era5_area, tc_row)
+
+        fig.tight_layout()
+        fig_path = (f'{self.CONFIG["result"]["dirs"]["fig"]}'
+                    + f'ibtracs_vs_era5_{tc_row.sid}_'
+                    + f'{tc_row.name}_{tc_row.date_time}_'
+                    + f'{lon_converted}_{tc_row.lat}.png')
+        fig.savefig(fig_path, dpi=300)
+        plt.close(fig)
+
+    def read(self, mode, file_path):
         # load grib file
         grbs = pygrib.open(file_path)
 
@@ -190,7 +456,7 @@ class ERA5Manager(object):
             self.CONFIG['database']['batch_size']['query']):
 
             # Get TC datetime
-            tc_datetime = row.datetime
+            tc_datetime = row.date_time
 
             # Get hit result and range of ERA5 data matrix near
             # TC center
@@ -204,6 +470,18 @@ class ERA5Manager(object):
             count += 1
             print(f'\r{info} {count}/{total}', end='')
 
+            dirs = ['nw', 'sw', 'se', 'ne']
+            r34 = dict()
+            r34['nw'], r34['sw'], r34['se'], r34['ne'] = \
+                    row.r34_nw, row.r34_sw, row.r34_se, row.r34_ne
+            skip_compare = False
+            for dir in dirs:
+                if r34[dir] is None:
+                    skip_compare = True
+                    break
+            if skip_compare:
+                continue
+
             # Get index of latitude and longitude of closest grib
             # point near TC center
             lat_index, lon_index = \
@@ -214,11 +492,11 @@ class ERA5Manager(object):
             # Get name, sqlalchemy Table class and python original class
             # of ERA5 table
             table_name, sa_table, ERA5Table = self.get_era5_table_class(
-                row.sid, tc_datetime, lat_index, lon_index)
+                mode, row.sid, tc_datetime, lat_index, lon_index)
 
             # Create entity of ERA5 table
             era5_table_entity = self._gen_whole_era5_table_entity(
-                ERA5Table, lat1, lat2, lon1, lon2)
+                mode, ERA5Table, lat1, lat2, lon1, lon2)
 
             # Record number of successfully reading data matrix of ERA5
             # grib file near TC center
@@ -239,8 +517,9 @@ class ERA5Manager(object):
                     continue
 
                 # extract corresponding data matrix in ERA5 reanalysis
-                read_hit = self._read_data_matrix(era5_table_entity, grb,
-                                                  lat1, lat2, lon1, lon2)
+                read_hit = self._read_grb_matrix(mode, era5_table_entity,
+                                                 grb, lat1, lat2, lon1,
+                                                 lon2)
                 if read_hit:
                     read_hit_count += 1
 
@@ -257,43 +536,65 @@ class ERA5Manager(object):
 
             # Write extracted data matrix into DB
             start = time.process_time()
-            utils.bulk_insert_avoid_duplicate_unique(
-                era5_table_entity,
-                int(self.CONFIG['database']['batch_size']['insert']/10),
-                ERA5Table, ['x_y_z'], self.session,
-                check_self=True)
+            if mode == 'threeD':
+                utils.bulk_insert_avoid_duplicate_unique(
+                    era5_table_entity,
+                    int(self.CONFIG['database']['batch_size']['insert']/10),
+                    ERA5Table, ['x_y_z'], self.session,
+                    check_self=True)
+            elif mode == 'surface':
+                utils.bulk_insert_avoid_duplicate_unique(
+                    era5_table_entity,
+                    int(self.CONFIG['database']['batch_size']['insert']/10),
+                    ERA5Table, ['x_y'], self.session,
+                    check_self=True)
             end = time.process_time()
 
             self.logger.debug((f'Bulk inserting ERA5 data into '
                                + f'{table_name} in {end-start:2f} s'))
+
+            self.compare_ibtracs_era5(mode, row, ERA5Table)
         utils.delete_last_lines()
         print('Done')
 
-    def _gen_whole_era5_table_entity(self, ERA5Table,
+    def _gen_whole_era5_table_entity(self, mode, ERA5Table,
                                      lat1, lat2, lon1, lon2):
-        """Generate entity of ERA5 table. It represents a 3D grid of
+        """Generate entity of ERA5 table. It represents a threeD grid of
         which center of bottom is the closest grid point near TC
         center.
 
         """
         entity = []
 
-        for x in range(self.grid_3d['lon_axis']):
-            for y in range(self.grid_3d['lat_axis']):
-                for z in range(self.grid_3d['height']):
+        if mode == 'threeD':
+            for x in range(self.threeD_grid['lon_axis']):
+                for y in range(self.threeD_grid['lat_axis']):
+                    for z in range(self.threeD_grid['height']):
+                        pt = ERA5Table()
+                        pt.x, pt.y, pt.z = x, y, z
+                        pt.x_y_z = f'{x}_{y}_{z}'
+
+                        pt.lat = lat1 + (y+0.5) * self.spa_resolu
+                        pt.lon = (lon1 + (x+0.5) * self.spa_resolu) % 360
+                        pt.pres_lvl = int(self.threeD_pres_lvl[z])
+
+                        entity.append(pt)
+
+        elif mode == 'surface':
+            for x in range(self.threeD_grid['lon_axis']):
+                for y in range(self.threeD_grid['lat_axis']):
                     pt = ERA5Table()
-                    pt.x, pt.y, pt.z = x, y, z
-                    pt.x_y_z = f'{x}_{y}_{z}'
+                    pt.x, pt.y = x, y
+                    pt.x_y= f'{x}_{y}'
 
                     pt.lat = lat1 + (y+0.5) * self.spa_resolu
                     pt.lon = (lon1 + (x+0.5) * self.spa_resolu) % 360
-                    pt.pres_lvl = int(self.pres_lvl[z])
 
                     entity.append(pt)
 
         return entity
 
-    def _read_data_matrix(self, era5, grb, lat1, lat2, lon1, lon2):
+    def _read_grb_matrix(self, mode, era5, grb, lat1, lat2, lon1, lon2):
         """Read data matrix of ERA5 of particular variable in particular
         pressure level.
 
@@ -301,21 +602,24 @@ class ERA5Manager(object):
         data, lats, lons = grb.data(lat1, lat2, lon1, lon2)
 
         # Shape of data is (lat_grid_num, lon_grid_num).
-        # In the extracted subset of ERA5 data, 
+        # In the extracted subset of ERA5 data,
         # lats[0] is latitude of the northest horizontal line,
         # lons[0] is longitude of the northest horizontal line.
         # So need to flip the data matrix along latitude axis
         # to be the same of RSS satellite data matrix arrangement.
         data = np.flip(data, 0)
+        lats = np.flip(lats, 0)
+        lons = np.flip(lons, 0)
         # After fliping, data[0][0] is the data of smallest latitude
         # and smallest longitude
 
         name = grb.name.replace(" ", "_").lower()
-        z = self.pres_lvl.index(str(grb.level))
+        if mode == 'threeD':
+            z = self.threeD_pres_lvl.index(str(grb.level))
         hit_count = 0
 
-        for x in range(self.grid_3d['lon_axis']):
-            for y in range(self.grid_3d['lat_axis']):
+        for x in range(self.threeD_grid['lon_axis']):
+            for y in range(self.threeD_grid['lat_axis']):
                 # ERA5 grid starts from (lat=-90, lon=0),
                 # while RSS grid starts from (lat=-89.875, lon=0.125).
                 # So ERA5 grid points is the corners of RSS grid cells.
@@ -323,6 +627,7 @@ class ERA5Manager(object):
                 # to get the value of a cell, have to get its 4 corners
                 # first: ul=upper_left, ll=lower_left, lr=lower_right,
                 # ur=upper_right
+
                 value_ll = utils.convert_dtype(data[y][x])
                 value_ul = utils.convert_dtype(data[y+1][x])
                 value_lr = utils.convert_dtype(data[y][x+1])
@@ -339,9 +644,14 @@ class ERA5Manager(object):
                 value = sum(values)/float(len(values))
 
                 hit_count += 1
-                index = (x * self.grid_3d['lat_axis'] * self.grid_3d['height']
-                         + y * self.grid_3d['height']
-                         + z)
+                if mode == 'threeD':
+                    index = ((x * self.threeD_grid['lat_axis'] * \
+                              self.threeD_grid['height'])
+                             + y * self.threeD_grid['height']
+                             + z)
+                elif mode == 'surface':
+                    index = x * self.threeD_grid['lat_axis'] + y
+
                 setattr(era5[index], name, value)
 
         if hit_count:
@@ -349,8 +659,8 @@ class ERA5Manager(object):
         else:
             return False
 
-    def _update_majority_datetime_dict(self, dt_dict, year, month, day, hour):
-        """Update majority datetime dictionary.
+    def _update_major_datetime_dict(self, dt_dict, year, month, day, hour):
+        """Update major datetime dictionary.
 
         """
         day_str = str(day).zfill(2)
@@ -366,8 +676,8 @@ class ERA5Manager(object):
         dt_dict[year][month]['day'].add(day_str)
         dt_dict[year][month]['time'].add(time_str)
 
-    def _update_minority_datetime_dict(self, dt_dict, year, month, day, hour):
-        """Update minority datetime dictionary.
+    def _update_minor_datetime_dict(self, dt_dict, year, month, day, hour):
+        """Update minor datetime dictionary.
 
         """
         day_str = str(day).zfill(2)
@@ -383,27 +693,39 @@ class ERA5Manager(object):
         dt_dict[year][month][day_str].add(time_str)
 
     def _get_target_datetime(self):
-        """Get majority datetime dictionary and minority datetime
+        """Get major datetime dictionary and minor datetime
         dictionary.
 
         """
         tc_table_name = self.CONFIG['ibtracs']['table_name']
         TCTable = utils.get_class_by_tablename(self.engine,
                                                tc_table_name)
-        dt_majority = dict()
-        dt_minority = dict()
+        dt_major = dict()
+        dt_minor = dict()
 
         for row in self.session.query(TCTable).yield_per(
             self.CONFIG['database']['batch_size']['query']):
 
-            year, month = row.datetime.year, row.datetime.month
-            day, hour = row.datetime.day, row.datetime.hour
+            dirs = ['nw', 'sw', 'se', 'ne']
+            r34 = dict()
+            r34['nw'], r34['sw'], r34['se'], r34['ne'] = \
+                    row.r34_nw, row.r34_sw, row.r34_se, row.r34_ne
+            skip_compare = False
+            for dir in dirs:
+                if r34[dir] is None:
+                    skip_compare = True
+                    break
+            if skip_compare:
+                continue
+
+            year, month = row.date_time.year, row.date_time.month
+            day, hour = row.date_time.day, row.date_time.hour
             if hour in self.main_hours:
-                self._update_majority_datetime_dict(dt_majority, year,
+                self._update_major_datetime_dict(dt_major, year,
                                                     month, day, hour)
             else:
-                self._update_minority_datetime_dict(dt_minority, year,
+                self._update_minor_datetime_dict(dt_minor, year,
                                                     month, day, hour)
 
-        self.dt_majority = dt_majority
-        self.dt_minority = dt_minority
+        self.dt_major = dt_major
+        self.dt_minor = dt_minor
