@@ -74,12 +74,12 @@ class ERA5Manager(object):
         utils.setup_database(self, Base)
         self.download_and_read('surface')
 
-    def get_era5_table_class(self, mode, sid, dt, lat_index, lon_index):
+    def get_era5_table_class(self, mode, sid, dt):
         """Get table of ERA5 reanalysis.
 
         """
         dt_str = dt.strftime('%Y_%m%d_%H%M')
-        table_name = f'era5_tc_{mode}_{sid}_{dt_str}_{lon_index}_{lat_index}'
+        table_name = f'era5_tc_{mode}_{sid}_{dt_str}'
 
         class ERA5(object):
             pass
@@ -423,6 +423,8 @@ class ERA5Manager(object):
         ibtracs_area = self._draw_ibtracs_radii(ax1, center, radii)
         era5_area = self._get_era5_area(ax1, lats, lons, windspd)
 
+        self.write_area_compare(tc_row, ibtracs_area, era5_area)
+
         # Draw ax2 to compare area within IBTrACS wind radii with
         # corresponding area of ERA5 wind speed contour
         ax2 = fig.add_subplot(122)
@@ -435,6 +437,65 @@ class ERA5Manager(object):
                     + f'{lon_converted}_{tc_row.lat}.png')
         fig.savefig(fig_path, dpi=300)
         plt.close(fig)
+
+    def write_area_compare(self, tc_row, ibtracs_area, era5_area):
+        area = {
+            'ibtracs': ibtracs_area,
+            'era5': era5_area
+        }
+
+        CompareTable = self.create_area_compare_table()
+        row = CompareTable()
+        # Write area and metrics into row
+        row.sid = tc_row.sid
+        row.date_time = tc_row.date_time
+
+        for type in ['ibtracs', 'era5']:
+            for idx, r in enumerate(self.wind_radii):
+                setattr(row, f'{type}_r{r}_area', float(area[type][idx]))
+        row.sid_date_time = f'{tc_row.sid}_{tc_row.date_time}'
+
+        utils.bulk_insert_avoid_duplicate_unique(
+            [row], self.CONFIG['database']\
+            ['batch_size']['insert'],
+            CompareTable, ['sid_date_time'], self.session,
+            check_self=True)
+
+    def create_area_compare_table(self):
+        """Get table of ERA5 reanalysis.
+
+        """
+        table_name = f'wind_radii_area_compare'
+
+        class WindRadiiAreaCompare(object):
+            pass
+
+        if self.engine.dialect.has_table(self.engine, table_name):
+            metadata = MetaData(bind=self.engine, reflect=True)
+            t = metadata.tables[table_name]
+            mapper(WindRadiiAreaCompare, t)
+
+            return WindRadiiAreaCompare
+
+        cols = []
+        cols.append(Column('key', Integer, primary_key=True))
+        cols.append(Column('sid', String(13), nullable=False))
+        cols.append(Column('date_time', DateTime, nullable=False))
+        for type in ['ibtracs', 'era5']:
+            for r in self.wind_radii:
+                col_name = f'{type}_r{r}_area'
+                cols.append(Column(col_name, Float, nullable=False))
+        cols.append(Column('sid_date_time', String(50), nullable=False,
+                           unique=True))
+
+        metadata = MetaData(bind=self.engine)
+        t = Table(table_name, metadata, *cols)
+        mapper(WindRadiiAreaCompare, t)
+
+        metadata.create_all()
+        self.session.commit()
+
+        return WindRadiiAreaCompare
 
     def read(self, mode, file_path):
         # load grib file
@@ -492,7 +553,7 @@ class ERA5Manager(object):
             # Get name, sqlalchemy Table class and python original class
             # of ERA5 table
             table_name, sa_table, ERA5Table = self.get_era5_table_class(
-                mode, row.sid, tc_datetime, lat_index, lon_index)
+                mode, row.sid, tc_datetime)
 
             # Create entity of ERA5 table
             era5_table_entity = self._gen_whole_era5_table_entity(

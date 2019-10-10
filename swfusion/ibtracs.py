@@ -106,6 +106,7 @@ class IBTrACSManager(object):
         t = Table(table_name, metadata, *cols)
         metadata.create_all()
         mapper(WMOWPTC, t)
+
         self.session.commit()
 
         return WMOWPTC
