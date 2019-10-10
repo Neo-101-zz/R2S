@@ -187,8 +187,10 @@ class CompareCCMPWithInStu(object):
         plt.grid(True)
 
         plt.tight_layout()
-        plt.savefig((f'{self.CONFIG["result"]["dirs"]["fig"]}'
-                     + f'ccmp_cwind_absolute_error_dis2coast.png'))
+        fig_path = (f'{self.CONFIG["result"]["dirs"]["fig"]}'
+                     + f'ccmp_cwind_absolute_error_dis2coast.png')
+        os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+        plt.savefig(fig_path)
         plt.show()
 
     def _ccmp_near_cwind(self, stn, ccmp_lat, ccmp_lon, uwnd, vwnd):

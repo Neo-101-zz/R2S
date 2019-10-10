@@ -32,6 +32,7 @@ ibtracs:
 rss:
   subset_edge_in_degree: 20
   spatial_resolution: 0.25
+  passes_number: 2
   lat_grid_points_number: 720
   lon_grid_points_number: 1440
   missing_value: -999.0

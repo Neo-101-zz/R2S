@@ -137,7 +137,7 @@ class SatelManager(object):
         total = tc_query.count()
         del tc_query
         count = 0
-        info = (f'Downloading and reading satellite data according to'
+        info = (f'Downloading and reading satellite data according to '
                 + f'TC records')
         self.logger.info(info)
 
@@ -185,8 +185,11 @@ class SatelManager(object):
 
                 # Show the TC area and sateliite data area in the
                 # temporal window
-                self.show_match(lat1, lat2, lon1, lon2, satel_name,
-                                tc_datetime, bytemap_path)
+                hit_count = self.show_match(lat1, lat2, lon1, lon2,
+                                            satel_name, row, bytemap_path,
+                                            draw=False)
+                if not hit_count[self.edge]:
+                    continue
 
                 # Read satellite data according to TC datetime
                 self.read(satel_name, bytemap_path, tc_datetime,
@@ -209,72 +212,168 @@ class SatelManager(object):
 
         self.plot_rec(map, lower_left, upper_left, lower_right, upper_right, 10)
 
-    def draw_satel_coverage(self, tc_datetime, satel_name, bm_file):
+    def get_satel_coverage(self, tc_row, satel_name, bm_file, draw):
         dataset = utils.dataset_of_daily_satel(satel_name, bm_file)
         vars = dataset.variables
 
         bm_file_name = bm_file.split('/')[-1]
         date_str = bm_file_name.split('_')[1][:8]
 
-        for i in [0, 1]:
-            for j in range(720):
-                for k in range(1440):
-                    if vars['nodata'][i][j][k]:
+        lats = []
+        lons = []
+
+        for i in range(self.CONFIG['rss']['passes_number']):
+            for j in range(self.CONFIG['rss']['lat_grid_points_number']):
+                for k in range(self.CONFIG['rss']['lon_grid_points_number']):
+
+                    if not self.check_match(vars, i, j, k,
+                                            tc_row.date_time, date_str):
                         continue
+                    lats.append(vars['latitude'][j])
+                    lons.append(vars['longitude'][k])
 
-                    if 'mingmt' in vars.keys():
-                        # if vars['mingmt'][0][j][k] == \
-                        #    vars['mingmt'][1][j][k]:
-                        #     continue
+                    if draw:
+                        self.draw_coverage_within_window(vars, j, k)
 
-                        # Process the datetime and skip if necessary
-                        time_str ='{:02d}{:02d}00'.format(
-                            *divmod(int(vars['mingmt'][i][j][k]), 60))
-                    elif 'time' in vars.keys():
-                        # if vars['time'][0][j][k] == vars['time'][1][j][k]:
-                        #     continue
-                        # Process the datetime and skip if necessary
-                        time_str ='{:02d}{:02d}00'.format(
-                            *divmod(int(60*vars['time'][i][j][k]), 60))
+        count = self.get_coverage_in_ranges(satel_name, tc_row, lats, lons)
 
-                    try:
-                        if time_str.startswith('24'):
-                            date_ = datetime.datetime.strptime(
-                                date_str + '000000', '%Y%m%d%H%M%S').date()
-                            time_ = datetime.time(0, 0, 0)
-                            date_ = date_ + datetime.timedelta(days=1)
-                            datetime_ = datetime.datetime.combine(
-                                date_, time_)
-                        else:
-                            datetime_ = datetime.datetime.strptime(
-                                date_str + time_str, '%Y%m%d%H%M%S')
-                    except Exception as msg:
-                        breakpoint()
-                        exit(msg)
+        return count
 
-                    # Calculate the time delta between satellite datetime
-                    # and TC datetime
-                    if tc_datetime > datetime_:
-                        delta = tc_datetime - datetime_
-                    else:
-                        delta = datetime_ - tc_datetime
-                    # Skip this turn of loop if timedelta is largers than
-                    # presetted temporal window
-                    if delta.seconds > \
-                       self.CONFIG['match']['temporal_window']:
-                        continue
+    def get_coverage_in_ranges(self, satel_name, tc_row, lats, lons):
+        edges = [20, 16, 12, 8, 4]
+        count = dict()
+        for idx, e in enumerate(edges):
+            count[e] = 0
+            hit, lat1, lat2, lon1, lon2 = utils.get_subset_range_of_grib(
+                tc_row.lat, tc_row.lon, self.lat_grid_points,
+                self.lon_grid_points, e)
+            if not hit:
+                continue
 
-                    lat = vars['latitude'][j]
-                    lon = vars['longitude'][k] - 180
+            for i in range(len(lats)):
+                if (lats[i] > lat1 and lats[i] < lat2
+                    and lons[i] > lon1 and lons[i] < lon2):
+                    count[e] += 1
 
-                    lat1, lat2 = lat-0.125, lat+0.125
-                    lon1, lon2 = lon-0.125, lon+0.125
-                    lats = np.array([lat1, lat2, lat2, lat1])
-                    lons = np.array([lon1, lon1, lon2, lon2])
-                    self.draw_cloud_pixel(lats, lons, map, 'white')
+            if not count[e]:
+                for idx in range(idx+1, len(edges)):
+                    count[edges[idx]] = 0
+                break
+
+            print((f'{satel_name} {tc_row.sid} {tc_row.name} '
+                   + f'{tc_row.date_time} {e}: {count[e]}'))
+
+        Coverage = self.create_satel_coverage_count_table(satel_name,
+                                                          tc_row)
+        row = Coverage()
+        row.sid = tc_row.sid
+        row.date_time = tc_row.date_time
+        for e in edges:
+            setattr(row, f'hit_{e}', count[e])
+        row.sid_date_time = f'{tc_row.sid}_{tc_row.date_time}'
+
+        utils.bulk_insert_avoid_duplicate_unique(
+            [row], self.CONFIG['database']\
+            ['batch_size']['insert'],
+            Coverage, ['sid_date_time'], self.session,
+            check_self=True)
+
+        return count
+
+    def create_satel_coverage_count_table(self, satel_name, tc_row):
+        dt_str = tc_row.date_time.strftime('%Y_%m%d_%H%M')
+        table_name = f'coverage_{satel_name}'
+        edges = [20, 16, 12, 8, 4]
+
+        class Coverage(object):
+            pass
+
+        # Return TC table if it exists
+        if self.engine.dialect.has_table(self.engine, table_name):
+            metadata = MetaData(bind=self.engine, reflect=True)
+            t = metadata.tables[table_name]
+            mapper(Coverage, t)
+
+            return Coverage
+
+        cols = []
+        # IBTrACS columns
+        cols.append(Column('key', Integer, primary_key=True))
+        cols.append(Column('sid', String(13), nullable=False))
+        cols.append(Column('date_time', DateTime, nullable=False))
+
+        for e in edges:
+            cols.append(Column(f'hit_{e}', Integer, nullable=False))
+
+        cols.append(Column('sid_date_time', String(50), nullable=False,
+                           unique=True))
+
+        metadata = MetaData(bind=self.engine)
+        t = Table(table_name, metadata, *cols)
+        metadata.create_all()
+        mapper(Coverage, t)
+
+        self.session.commit()
+
+        return Coverage
+
+    def draw_coverage_within_window(self, vars, j, k):
+        lat = vars['latitude'][j]
+        lon = vars['longitude'][k] - 180
+
+        grid_half_edge = (0.5 * self.CONFIG['rss']\
+                          ['spatial_resolution'])
+
+        lat1, lat2 = lat - grid_half_edge, lat + grid_half_edge
+        lon1, lon2 = lon - grid_half_edge, lon + grid_half_edge
+        lats = np.array([lat1, lat2, lat2, lat1])
+        lons = np.array([lon1, lon1, lon2, lon2])
+        self.draw_cloud_pixel(lats, lons, map, 'white')
+
+    def check_match(self, vars, i, j, k, tc_datetime, date_str):
+        if vars['nodata'][i][j][k]:
+            return False
+
+        if 'mingmt' in vars.keys():
+            # Process the datetime and skip if necessary
+            time_str ='{:02d}{:02d}00'.format(
+                *divmod(int(vars['mingmt'][i][j][k]), 60))
+        elif 'time' in vars.keys():
+            # Process the datetime and skip if necessary
+            time_str ='{:02d}{:02d}00'.format(
+                *divmod(int(60*vars['time'][i][j][k]), 60))
+
+        try:
+            if time_str.startswith('24'):
+                date_ = datetime.datetime.strptime(
+                    date_str + '000000', '%Y%m%d%H%M%S').date()
+                time_ = datetime.time(0, 0, 0)
+                date_ = date_ + datetime.timedelta(days=1)
+                datetime_ = datetime.datetime.combine(
+                    date_, time_)
+            else:
+                datetime_ = datetime.datetime.strptime(
+                    date_str + time_str, '%Y%m%d%H%M%S')
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
+
+        # Calculate the time delta between satellite datetime
+        # and TC datetime
+        if tc_datetime > datetime_:
+            delta = tc_datetime - datetime_
+        else:
+            delta = datetime_ - tc_datetime
+        # Skip this turn of loop if timedelta is largers than
+        # presetted temporal window
+        if delta.seconds > \
+           self.CONFIG['match']['temporal_window']:
+            return False
+
+        return True
 
     def show_match(self, lat1, lat2, lon1, lon2, satel_name,
-                  tc_datetime, bm_file):
+                   tc_row, bm_file, draw):
 
         map = Basemap(llcrnrlon=-180.0, llcrnrlat=-90.0, urcrnrlon=180.0,
                       urcrnrlat=90.0)
@@ -286,13 +385,19 @@ class SatelManager(object):
 
         self.draw_tc_area(map, lat1, lat2, lon1, lon2, 10)
 
-        self.draw_satel_coverage(tc_datetime, satel_name, bm_file)
+        count = self.get_satel_coverage(tc_row, satel_name, bm_file,
+                                        draw)
+        if not draw:
+            return count
 
-        fig_name = f'data_match_on_{tc_datetime}_{satel_name}.png'
-        self.logger.debug(f'Drawing {fig_name}')
-        plt.savefig((f'{self.CONFIG["result"]["dirs"]["fig"]}'
-                     + fig_name))
+        fig_path = (f'{self.CONFIG["result"]["dirs"]["fig"]}'
+                     + f'data_match_on_{tc_row.date_time}_{satel_name}.png')
+        self.logger.debug(f'Drawing {fig_path}')
+        os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+        plt.savefig(fig_path)
         plt.clf()
+
+        return count
 
     def draw_cloud_pixel(self, lats, lons, mapplot, color):
         """Draw a pixel on the map. The fill color alpha level depends on the cloud index, 

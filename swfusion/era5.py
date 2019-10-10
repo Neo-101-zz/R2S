@@ -390,7 +390,8 @@ class ERA5Manager(object):
         utils.autolabel(ax, rects1)
         utils.autolabel(ax, rects2)
 
-    def compare_ibtracs_era5(self, mode, ibtracs_table_row, ERA5Table):
+    def compare_ibtracs_era5(self, mode, ibtracs_table_row, ERA5Table,
+                             draw):
         self._set_compare_zorders()
         tc_row = ibtracs_table_row
         lon_converted = tc_row.lon + 360 if tc_row.lon < 0 else tc_row.lon
@@ -425,6 +426,10 @@ class ERA5Manager(object):
 
         self.write_area_compare(tc_row, ibtracs_area, era5_area)
 
+        if not draw:
+            plt.close(fig)
+            return
+
         # Draw ax2 to compare area within IBTrACS wind radii with
         # corresponding area of ERA5 wind speed contour
         ax2 = fig.add_subplot(122)
@@ -435,6 +440,7 @@ class ERA5Manager(object):
                     + f'ibtracs_vs_era5_{tc_row.sid}_'
                     + f'{tc_row.name}_{tc_row.date_time}_'
                     + f'{lon_converted}_{tc_row.lat}.png')
+        os.makedirs(os.path.dirname(fig_path), exist_ok=True)
         fig.savefig(fig_path, dpi=300)
         plt.close(fig)
 
@@ -614,7 +620,7 @@ class ERA5Manager(object):
             self.logger.debug((f'Bulk inserting ERA5 data into '
                                + f'{table_name} in {end-start:2f} s'))
 
-            self.compare_ibtracs_era5(mode, row, ERA5Table)
+            self.compare_ibtracs_era5(mode, row, ERA5Table, draw=False)
         utils.delete_last_lines()
         print('Done')
 
