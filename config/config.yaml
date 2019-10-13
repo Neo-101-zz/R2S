@@ -52,6 +52,23 @@ era5:
     - 'temperature'
     - 'u_component_of_wind'
     - 'v_component_of_wind'
+  all_vars:
+    - 'divergence'
+    - 'fraction_of_cloud_cover'
+    - 'geopotential'
+    - 'ozone_mass_mixing_ratio'
+    - 'potential_vorticity'
+    - 'relative_humidity'
+    - 'specific_cloud_ice_water_content'
+    - 'specific_cloud_liquid_water_content'
+    - 'specific_humidity'
+    - 'specific_rain_water_content'
+    - 'specific_snow_water_content'
+    - 'temperature'
+    - 'u_component_of_wind'
+    - 'v_component_of_wind'
+    - 'vertical_velocity'
+    - 'vorticity'
   pres_lvl:
     - '100'
     - '200'
@@ -72,6 +89,7 @@ era5:
     surface:
       major: '../data/era5/reanalysis_pressure_levels/surface/major/'
       minor: '../data/era5/reanalysis_pressure_levels/surface/minor/'
+    surface_all_vars: '../data/era5/reanalysis_pressure_levels/surface_all_vars/'
 stdmet:
   urls:
     data: 'https://www.ndbc.noaa.gov/data/historical/stdmet/'
@@ -163,6 +181,19 @@ sfmr:
         Reading general record of hurricanes which have SFMR data
       read_hurr_sfmr: |-
         Reading hurricane SFMR data
+smap:
+  urls: 'http://data.remss.com/smap/wind/L3/v01.0/daily/FINAL/'
+  period_limit:
+    start: 2015-04-01 00:00:00
+    end: 9999-12-31 23:59:59
+  data_name_length: 40
+  missing_value: -9999.0
+  dirs:
+    bmaps: '../data/satel/smap_ncs/'
+  data_prefix: 'RSS_smap_wind_daily_'
+  data_suffix: '_v01.0.nc'
+  files_path:
+    missing_dates: '../data/satel/smap_missing_dates.pkl'
 amsr2:
   urls: 'http://data.remss.com/amsr2/bmaps_v08/'
   period_limit:

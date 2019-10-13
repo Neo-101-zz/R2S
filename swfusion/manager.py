@@ -50,7 +50,7 @@ def work_flow():
     try:
         # ibtracs_ = ibtracs.IBTrACSManager(CONFIG, period, region, passwd)
         # hwind_ = hwind.HWindManager(CONFIG, period, region, passwd)
-        # era5_ = era5.ERA5Manager(CONFIG, period, region, passwd)
+        # era5_ = era5.ERA5Manager(CONFIG, period, region, passwd, work=False)
         # cwind_ = cwind.CwindManager(CONFIG, period, region, passwd)
         # stdmet_ = stdmet.StdmetManager(CONFIG, period, region, passwd)
         # sfmr_ = sfmr.SfmrManager(CONFIG, period, region, passwd)

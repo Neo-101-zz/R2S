@@ -33,7 +33,7 @@ class ERA5Manager(object):
     sources except TC table from IBTrACS.
 
     """
-    def __init__(self, CONFIG, period, region, passwd):
+    def __init__(self, CONFIG, period, region, passwd, work):
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
@@ -49,6 +49,7 @@ class ERA5Manager(object):
         self.edge = self.CONFIG['era5']['subset_edge_in_degree']
 
         self.cdsapi_client = cdsapi.Client()
+        self.all_vars = self.CONFIG['era5']['all_vars']
         self.threeD_vars = self.CONFIG['era5']['vars']
         self.threeD_pres_lvl = self.CONFIG['era5']['pres_lvl']
         self.surface_vars = ['u_component_of_wind', 'v_component_of_wind']
@@ -71,8 +72,20 @@ class ERA5Manager(object):
 
         self.wind_radii = self.CONFIG['wind_radii']
 
-        utils.setup_database(self, Base)
-        self.download_and_read('surface')
+        if work:
+            utils.setup_database(self, Base)
+            self.download_and_read('surface')
+
+    def get_era5_columns(self):
+        cols = []
+
+        cols.append(Column('mins_diff', Integer, nullable=False))
+        for var in self.all_vars:
+            if var == 'vorticity':
+                var = 'vorticity_relative'
+            cols.append(Column(var, Float, nullable=False))
+
+        return cols
 
     def get_era5_table_class(self, mode, sid, dt):
         """Get table of ERA5 reanalysis.
@@ -116,6 +129,33 @@ class ERA5Manager(object):
         mapper(ERA5, t)
 
         return table_name, t, ERA5
+
+    def download_all_surface_vars_of_whole_day(self, target_datetime):
+        file_path = (f'{self.CONFIG["era5"]["dirs"]["surface_all_vars"]}'
+                     + target_datetime.strftime('%Y_%m%d.grib'))
+        if os.path.exists(file_path):
+            return file_path
+
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        whole_day_times = [f'{str(x).zfill(2)}:00' for x in range(24)]
+
+        request = {
+            'product_type':'reanalysis',
+            'format':'grib',
+            'variable': self.all_vars,
+            'pressure_level':'1000',
+            'year':f'{target_datetime.year}',
+            'month':str(target_datetime.month).zfill(2),
+            'day':str(target_datetime.day).zfill(2),
+            'time':whole_day_times
+        }
+
+        self.cdsapi_client.retrieve(
+            'reanalysis-era5-pressure-levels',
+            request,
+            file_path)
+
+        return file_path
 
     def download_major(self, mode, file_path, year, month):
         """Download major of ERA5 data which consists of main hour
@@ -796,3 +836,4 @@ class ERA5Manager(object):
 
         self.dt_major = dt_major
         self.dt_minor = dt_minor
+
