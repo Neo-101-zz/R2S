@@ -77,7 +77,18 @@ class SatelManager(object):
         self.grid_2d = dict()
         self.grid_2d['lat_axis'] = self.grid_2d['lon_axis'] = int(
             self.edge/self.spa_resolu)
-        self.missing_value = self.CONFIG['rss']['missing_value']
+
+        self.missing_value = dict()
+        for satel_name in self.satel_names:
+            if satel_name != 'smap':
+                self.missing_value[satel_name] = \
+                        self.CONFIG[satel_name]['missing_value']
+            else:
+                self.missing_value[satel_name] = dict()
+                self.missing_value[satel_name]['minute'] = \
+                        self.CONFIG[satel_name]['missing_value']['minute']
+                self.missing_value[satel_name]['wind'] = \
+                        self.CONFIG[satel_name]['missing_value']['wind']
 
         utils.setup_database(self, Base)
         # self.download_and_read_tc_oriented()
@@ -253,6 +264,9 @@ class SatelManager(object):
     def _get_smap_part(self, satel_data_path, SatelERA5):
         smap_part = []
         dataset = netCDF4.Dataset(satel_data_path)
+        # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which faster
+        # than 1 m/s, so must disable auto mask
+        dataset.set_auto_mask(False)
         vars = dataset.variables
 
         date_str = satel_data_path.split(
@@ -260,26 +274,50 @@ class SatelManager(object):
                 .replace('_', '')
 
         for y in range(self.CONFIG['rss']['lat_grid_points_number']):
+            if not (y % 100):
+                print(f'\r{y+1}/720', end='')
 
-            if not np.ma.MaskedArray.count(vars['minute'][y]):
+            skip = False
+            new_vars = dict()
+            # Transfer ndarray to masked array
+            for var in ['minute', 'wind']:
+                temp = np.ma.array(vars[var][y])
+                temp[temp == self.missing_value['smap'][var]] = MASKED
+                new_vars[var] = temp
+
+                if not np.ma.MaskedArray.count(temp):
+                    skip = True
+                    break
+
+            if skip:
                 continue
 
+            # if new_vars['wind'].max() > 29.23:
+            #     breakpoint()
+
             time_lon_index, time_iasc_index = np.ma.nonzero(
-                vars['minute'][y])
+                new_vars['minute'])
             wind_lon_index, wind_iasc_index = np.ma.nonzero(
-                vars['wind'][y])
-            valid_lon_index, time_index, wind_index = np.intersect1d(
-                time_lon_index, wind_lon_index, return_indices=True)
+                new_vars['wind'])
 
-            for idx in wind_index:
-                x = wind_lon_index[idx]
-                i = wind_iasc_index[idx]
+            if len(np.setdiff1d(time_lon_index, wind_lon_index)):
+                self.logger.error(f'SMAP nonzeros of minute and wind are '
+                                  + f'the same: {satel_data_path} '
+                                  + f'lat index = {y}')
 
+            # Do not use numpy.intersect1d, because it returns unique
+            # values. And there may be duplicate value in lon index
+            # of nonzero minute and wind
+
+            for x, i in zip(time_lon_index, time_iasc_index):
+                # if new_vars['wind'].max() > 29.23:
+                #     if x == 1092 and i == 1:
+                #         breakpoint()
                 row = SatelERA5()
 
                 # Process the datetime and skip if necessary
                 time_str ='{:02d}{:02d}00'.format(
-                    *divmod(int(vars['minute'][y][x][i]), 60))
+                    *divmod(int(new_vars['minute'][x][i]), 60))
 
                 if time_str.startswith('24'):
                     date_ = datetime.datetime.strptime(
@@ -296,10 +334,12 @@ class SatelManager(object):
                 row.lat = float(vars['lat'][y])
                 row.satel_datetime_lon_lat = (f'{row.satel_datetime}_'
                                               + f'{row.lon}_{row.lat}')
-                row.windspd = float(vars['wind'][y][x][i])
+                row.windspd = float(new_vars['wind'][x][i])
 
                 smap_part.append(row)
 
+        utils.delete_last_lines()
+        print('Done')
         return smap_part
 
     def _get_hourtime_row_dict(self, smap_part):
@@ -366,6 +406,8 @@ class SatelManager(object):
 
                     lat1, lat2, lon1, lon2 = self._get_corners_of_cell(
                         row.lon, row.lat)
+                    if lon2 == 360:
+                        lon2 = 0
                     corners = []
                     for lat in [lat1, lat2]:
                         for lon in [lon1, lon2]:
@@ -516,13 +558,25 @@ class SatelManager(object):
 
         for y in range(self.CONFIG['rss']['lat_grid_points_number']):
 
-            if not np.ma.MaskedArray.count(vars['minute'][y]):
+            skip = False
+            new_vars = dict()
+            # Transfer ndarray to masked array
+            for var in ['minute', 'wind']:
+                temp = np.ma.array(vars[var][y])
+                temp[temp == self.missing_value['smap']] = MASKED
+                new_vars[var] = temp
+
+                if not np.ma.MaskedArray.count(temp):
+                    skip = True
+                    break
+
+            if skip:
                 continue
 
             time_lon_index, time_iasc_index = np.ma.nonzero(
-                vars['minute'][y])
+                new_vars['minute'])
             wind_lon_index, wind_iasc_index = np.ma.nonzero(
-                vars['wind'][y])
+                new_vars['wind'])
             valid_lon_index, time_index, wind_index = np.intersect1d(
                 time_lon_index, wind_lon_index, return_indices=True)
 

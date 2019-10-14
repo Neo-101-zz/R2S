@@ -5,6 +5,7 @@ from datetime import datetime
 import logging
 import os
 
+import regression
 import cwind
 import stdmet
 import sfmr
@@ -48,6 +49,7 @@ def work_flow():
     passwd = '39cnj971hw-'
     # Download and read
     try:
+        # regression_ = regression.Regression(CONFIG, period, region, passwd)
         # ibtracs_ = ibtracs.IBTrACSManager(CONFIG, period, region, passwd)
         # hwind_ = hwind.HWindManager(CONFIG, period, region, passwd)
         # era5_ = era5.ERA5Manager(CONFIG, period, region, passwd, work=False)

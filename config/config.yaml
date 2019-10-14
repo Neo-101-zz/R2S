@@ -187,7 +187,9 @@ smap:
     start: 2015-04-01 00:00:00
     end: 9999-12-31 23:59:59
   data_name_length: 40
-  missing_value: -9999.0
+  missing_value:
+    minute: -9999
+    wind: -99.99
   dirs:
     bmaps: '../data/satel/smap_ncs/'
   data_prefix: 'RSS_smap_wind_daily_'
