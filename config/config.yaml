@@ -1,7 +1,10 @@
 logging:
   dir: '../log'
 match:
-  temporal_window: 360
+  temporal_window:
+  - 3600
+  - 7200
+  - 10800
 wind_radii:
   - 34
   - 50
@@ -30,14 +33,14 @@ ibtracs:
   dirs: '../data/ibtracs/'
   data_name_length: 22
 rss:
-  subset_edge_in_degree: 20
+  subset_edge_in_degree: 12
   spatial_resolution: 0.25
   passes_number: 2
   lat_grid_points_number: 720
   lon_grid_points_number: 1440
   missing_value: -999.0
 era5:
-  subset_edge_in_degree: 20
+  subset_edge_in_degree: 12
   spatial_resolution: 0.25
   lat_grid_points_number: 721
   lon_grid_points_number: 1440

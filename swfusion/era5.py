@@ -79,7 +79,7 @@ class ERA5Manager(object):
     def get_era5_columns(self):
         cols = []
 
-        cols.append(Column('mins_diff', Integer, nullable=False))
+        cols.append(Column('satel_era5_diff_mins', Integer, nullable=False))
         for var in self.all_vars:
             if var == 'vorticity':
                 var = 'vorticity_relative'
@@ -477,7 +477,7 @@ class ERA5Manager(object):
 
         fig.tight_layout()
         fig_path = (f'{self.CONFIG["result"]["dirs"]["fig"]}'
-                    + f'ibtracs_vs_era5_{tc_row.sid}_'
+                    + f'era5_vs_ibtracs_{tc_row.sid}_'
                     + f'{tc_row.name}_{tc_row.date_time}_'
                     + f'{lon_converted}_{tc_row.lat}.png')
         os.makedirs(os.path.dirname(fig_path), exist_ok=True)

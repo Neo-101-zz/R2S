@@ -46,7 +46,7 @@ def work_flow():
     spatial_window = 0.125 # degree
     temporal_window = 5*60 # second
     # MySQL Server root password
-    passwd = '39cnj971hw-'
+    passwd = '399710'
     # Download and read
     try:
         # regression_ = regression.Regression(CONFIG, period, region, passwd)
