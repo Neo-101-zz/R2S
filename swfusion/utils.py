@@ -1138,11 +1138,12 @@ def get_mysql_connector(the_class):
     # password_ = input(PROMPT['input']['db_root_password'])
     password_ = the_class.db_root_passwd
     HOST = DB_CONFIG['host']
+    PORT = DB_CONFIG['port']
     DB_NAME = DB_CONFIG['db_name']
     ARGS = DB_CONFIG['args']
 
     cnx = mysql.connector.connect(user=USER, password=password_,
-                                       host=HOST, use_pure=True)
+                                  host=HOST, port=PORT, use_pure=True)
     return cnx
 
 def setup_database(the_class, Base):

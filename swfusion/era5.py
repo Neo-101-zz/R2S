@@ -5,6 +5,7 @@ import datetime
 import logging
 import math
 import os
+import sys
 import time
 
 import cdsapi
@@ -33,13 +34,14 @@ class ERA5Manager(object):
     sources except TC table from IBTrACS.
 
     """
-    def __init__(self, CONFIG, period, region, passwd, work):
+    def __init__(self, CONFIG, period, region, passwd, work, save_disk):
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
         self.db_root_passwd = passwd
         self.engine = None
         self.session = None
+        self.save_disk = save_disk
 
         self.logger = logging.getLogger(__name__)
 
@@ -245,7 +247,8 @@ class ERA5Manager(object):
 
                 self.logger.info(f'Reading major {file_path}')
                 self.read(mode, file_path)
-                # os.remove(file_path)
+                if self.save_disk:
+                    os.remove(file_path)
 
         # Download and read minor of ERA5
         for year in self.dt_minor.keys():
@@ -262,7 +265,8 @@ class ERA5Manager(object):
 
                     self.logger.info(f'Reading minor {file_path}')
                     self.read(mode, file_path)
-                    # os.remove(file_path)
+                    if self.save_disk:
+                        os.remove(file_path)
 
     def _get_radii_from_tc_row(self, tc_row):
         r34 = dict()
@@ -810,7 +814,9 @@ class ERA5Manager(object):
         dt_major = dict()
         dt_minor = dict()
 
-        for row in self.session.query(TCTable).yield_per(
+        for row in self.session.query(TCTable).filter(
+            TCTable.date_time >= self.period[0],
+            TCTable.date_time <= self.period[1]).yield_per(
             self.CONFIG['database']['batch_size']['query']):
 
             dirs = ['nw', 'sw', 'se', 'ne']
@@ -829,10 +835,10 @@ class ERA5Manager(object):
             day, hour = row.date_time.day, row.date_time.hour
             if hour in self.main_hours:
                 self._update_major_datetime_dict(dt_major, year,
-                                                    month, day, hour)
+                                                 month, day, hour)
             else:
                 self._update_minor_datetime_dict(dt_minor, year,
-                                                    month, day, hour)
+                                                 month, day, hour)
 
         self.dt_major = dt_major
         self.dt_minor = dt_minor

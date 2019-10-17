@@ -39,8 +39,7 @@ class SatelManager(object):
 
     """
 
-    def __init__(self, CONFIG, period, region, passwd,
-                 spatial_window, temporal_window):
+    def __init__(self, CONFIG, period, region, passwd, save_disk):
         self.logger = logging.getLogger(__name__)
         self.satel_names = ['smap', 'amsr2', 'ascat', 'qscat', 'wsat']
         self.CONFIG = CONFIG
@@ -49,8 +48,7 @@ class SatelManager(object):
         self.db_root_passwd = passwd
         self.engine = None
         self.session = None
-        self.spatial_window = spatial_window
-        self.temporal_window = temporal_window
+        self.save_disk = save_disk
 
         self.years = [x for x in range(self.period[0].year,
                                        self.period[1].year+1)]
@@ -190,7 +188,8 @@ class SatelManager(object):
             satel_cols.append(Column('windspd', Float, nullable=False))
 
         era5_ = era5.ERA5Manager(self.CONFIG, self.period, self.region,
-                                 self.db_root_passwd, work=False)
+                                 self.db_root_passwd, work=False,
+                                 save_disk=self.save_disk)
         era5_cols = era5_.get_era5_columns()
         cols = satel_cols + era5_cols
 
@@ -228,7 +227,8 @@ class SatelManager(object):
                 era5_ = era5.ERA5Manager(self.CONFIG, self.period,
                                          self.region,
                                          self.db_root_passwd,
-                                         work=False)
+                                         work=False,
+                                         save_disk=self.save_disk)
                 era5_data_path = \
                         era5_.download_all_surface_vars_of_whole_day(
                             target_datetime)
@@ -242,8 +242,8 @@ class SatelManager(object):
                                    + f'{target_datetime.date()}'))
                 self.read_satel_era5(satel_name, satel_data_path,
                                      era5_data_path, SatelERA5)
-                breakpoint()
-                os.remove(era5_data_path)
+                if self.save_disk:
+                    os.remove(era5_data_path)
 
     def read_satel_era5(self, satel_name, satel_data_path,
                         era5_data_path, SatelERA5):
@@ -251,6 +251,8 @@ class SatelManager(object):
         if satel_name == 'smap':
             satel_era5_data = self.extract_smap_era5(
                 satel_data_path, era5_data_path, SatelERA5)
+        if satel_era5_data is None:
+            return
         # Insert into table
         utils.bulk_insert_avoid_duplicate_unique(
             satel_era5_data, self.CONFIG['database']\
@@ -263,10 +265,13 @@ class SatelManager(object):
         # Get SMAP part first
         self.logger.debug(f'Getting SMAP part from {satel_data_path}')
         smap_part = self._get_smap_part(satel_data_path, SatelERA5)
+        if not len(smap_part):
+            return None
 
         # Then add ERA5 part
         self.logger.debug(f'Adding ERA5 part from {era5_data_path}')
         smap_era5_data = self._add_era5_part(smap_part, era5_data_path)
+
         return smap_era5_data
 
     def _get_smap_part(self, satel_data_path, SatelERA5):
@@ -316,17 +321,35 @@ class SatelManager(object):
         TCTable = utils.get_class_by_tablename(self.engine, tc_table_name)
 
         candidate_tcs = []
+        candidate_tc_grids = []
+        step = self.CONFIG['rss']['spatial_resolution']
         for the_day in [today, yesterday, tomorrow]:
             for tc_row in self.session.query(TCTable).filter(
                 extract('year', TCTable.date_time) == the_day.year,
                 extract('month', TCTable.date_time) == the_day.month,
                 extract('day', TCTable.date_time) == the_day.day):
-                #
+
                 candidate_tcs.append(tc_row)
 
+                hit, lat1, lat2, lon1, lon2 = \
+                        utils.get_subset_range_of_grib(
+                            tc_row.lat, tc_row.lon, self.lat_grid_points,
+                            self.lon_grid_points, self.edge)
+                if not hit:
+                    continue
+
+                grid = dict()
+                grid['lons'] = np.arange(lon1, lon2 + step, step)
+                grid['lats'] = np.arange(lat1, lat2 + step, step)
+                candidate_tc_grids.append(grid)
+
+        # Key is the_minute
         temporal_match_tc_idx = dict()
         temporal_match_tc_windows = dict()
         temporal_matched_tcs = dict()
+
+        half_edge_indices = (self.CONFIG['rss']['subset_edge_in_degree']
+                             / 2 / step)
 
         for y in range(self.CONFIG['rss']['lat_grid_points_number']):
             print(f'\r{y+1}/720', end='')
@@ -358,23 +381,23 @@ class SatelManager(object):
             # values. And there may be duplicate value in lon index
             # of nonzero minute and wind
             for x, i in zip(time_lon_index, time_iasc_index):
-                row = SatelERA5()
                 the_minute = new_vars['minute'][x][i]
+                row = SatelERA5()
 
                 # Process the datetime and skip if necessary
                 time_str ='{:02d}{:02d}00'.format(
                     *divmod(int(the_minute), 60))
 
-                if time_str.startswith('24'):
+                if not time_str.startswith('24'):
+                    row.satel_datetime = datetime.datetime.strptime(
+                        date_str + time_str, '%Y%m%d%H%M%S')
+                else:
                     date_ = datetime.datetime.strptime(
                         date_str + '000000', '%Y%m%d%H%M%S').date()
                     time_ = datetime.time(0, 0, 0)
                     date_ = date_ + datetime.timedelta(days=1)
                     row.satel_datetime = datetime.datetime.combine(
                         date_, time_)
-                else:
-                    row.satel_datetime = datetime.datetime.strptime(
-                        date_str + time_str, '%Y%m%d%H%M%S')
 
                 row.lon = float(vars['lon'][x])
                 row.lat = float(vars['lat'][y])
@@ -402,16 +425,49 @@ class SatelManager(object):
 
                 if temporal_match_tc_idx[the_minute] is None:
                     continue
-                # Then check whether SMAP data point is in the
-                # spatial window of TCs in temporal list.
-                spatial_hit, row, match_idx = \
-                        self.check_match_by_spatial_window_and_update(
-                            row, temporal_matched_tcs[the_minute])
-                if not spatial_hit:
+
+                spatial_match = False
+                spatial_match_idx_of_candidate_tcs = None
+                spatial_match_idx_of_temporal_match_indices = None
+                for idx, match_idx in enumerate(
+                    temporal_match_tc_idx[the_minute]):
+
+                    spatial_hit, row_x, row_y = \
+                            self.check_match_by_spatial_window_and_update_2(
+                                row, candidate_tc_grids[match_idx])
+                    if spatial_hit:
+                        spatial_match = True
+                        spatial_match_idx_of_candidate_tcs = match_idx
+                        spatial_match_idx_of_temporal_match_indices = idx
+                        break
+                if not spatial_match:
                     continue
 
-                row.temporal_window_mins = \
-                        temporal_match_tc_windows[the_minute][match_idx]/60
+                # Then check whether SMAP data point is in the
+                # spatial window of TCs in temporal list.
+                # spatial_hit, row, match_idx = \
+                #         self.check_match_by_spatial_window_and_update(
+                #             row, temporal_matched_tcs[the_minute])
+                # if not spatial_hit:
+                #     continue
+
+                tc_row = candidate_tcs[spatial_match_idx_of_candidate_tcs]
+                # Based on temporal match, spatial match means entirely match
+                row.x = row_x - half_edge_indices
+                row.y = row_y - half_edge_indices
+
+                row.match_sid = tc_row.sid
+                row.tc_datetime = tc_row.date_time
+                row.satel_tc_diff_mins = (row.satel_datetime
+                                          - tc_row.date_time).seconds / 60
+                try:
+                    row.temporal_window_mins = (
+                        temporal_match_tc_windows[the_minute]\
+                        [spatial_match_idx_of_temporal_match_indices] / 60
+                    )
+                except Exception as msg:
+                    breakpoint()
+                    exit(msg)
 
                 smap_part.append(row)
 
@@ -441,13 +497,16 @@ class SatelManager(object):
             # Remove satel data which outside the temporal window
             for temporal_window in reversed(
                 self.CONFIG['match']['temporal_window']):
-                if delta.seconds <= temporal_window:
+                if delta.seconds > temporal_window:
+                    break
+                else:
                     match = True
                     for_sort[idx] = delta.seconds
                     match_tcs[idx]['AE'] = delta.seconds
                     match_tcs[idx]['window'] = temporal_window
-                else:
-                    break
+
+        if not match:
+            return False, None, None
 
         sorted_match_tcs_idx = list(dict(sorted(for_sort.items(),
                                        key=operator.itemgetter(1))).keys())
@@ -456,6 +515,17 @@ class SatelManager(object):
             sorted_match_tc_windows.append(match_tcs[idx]['window'])
 
         return match, sorted_match_tcs_idx, sorted_match_tc_windows
+
+    def check_match_by_spatial_window_and_update_2(
+        self, row, lons_lats_dict):
+
+        try:
+            x = int(np.where(lons_lats_dict['lons'] == row.lon)[0][0])
+            y = int(np.where(lons_lats_dict['lats'] == row.lat)[0][0])
+        except IndexError:
+            return False, None, None
+
+        return True, x, y
 
     def check_match_by_spatial_window_and_update(self, row,
                                                  temporal_matched_tcs):
@@ -543,7 +613,7 @@ class SatelManager(object):
                 continue
 
             grb_time = hourtime
-            if grb_time == '0':
+            if grb_time == 0:
                 grb_time = '000'
             grb_datetime = datetime.datetime.strptime(
                 f'{grb_date_str}{grb_time}', '%Y%m%d%H%M%S')
@@ -707,78 +777,6 @@ class SatelManager(object):
                                              temporal_restrict)
 
         return count
-
-    def get_valid_smap_data(self, data_path, SatelERA5):
-        satel_data = []
-
-        dataset = netCDF4.Dataset(data_path)
-        # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which faster
-        # than 1 m/s, so must disable auto mask
-        dataset.set_auto_mask(False)
-        vars = dataset.variables
-
-        date_str = data_path.split(
-            self.CONFIG['smap']['data_prefix'])[1][:10]\
-                .replace('_', '')
-
-        for y in range(self.CONFIG['rss']['lat_grid_points_number']):
-            skip = False
-            new_vars = dict()
-            # Transfer ndarray to masked array
-            for var in ['minute', 'wind']:
-                temp = np.ma.array(vars[var][y])
-                temp[temp == self.missing_value['smap'][var]] = MASKED
-                new_vars[var] = temp
-
-                if not np.ma.MaskedArray.count(temp):
-                    skip = True
-                    break
-            if skip:
-                continue
-
-            time_lon_index, time_iasc_index = np.ma.nonzero(
-                new_vars['minute'])
-            wind_lon_index, wind_iasc_index = np.ma.nonzero(
-                new_vars['wind'])
-
-            if len(np.setdiff1d(time_lon_index, wind_lon_index)):
-                self.logger.error(f'SMAP nonzeros of minute and wind are '
-                                  + f'not the same: {data_path} '
-                                  + f'lat index = {y}')
-                continue
-            # Do not use numpy.intersect1d, because it returns unique
-            # values. And there may be duplicate value in lon index
-            # of nonzero minute and wind
-            for x, i in zip(time_lon_index, time_iasc_index):
-                # Process the datetime and skip if necessary
-                time_str ='{:02d}{:02d}00'.format(
-                    *divmod(int(new_vars['minute'][x][i]), 60))
-
-                if time_str.startswith('24'):
-                    date_ = datetime.datetime.strptime(
-                        date_str + '000000', '%Y%m%d%H%M%S').date()
-                    time_ = datetime.time(0, 0, 0)
-                    date_ = date_ + datetime.timedelta(days=1)
-                    datetime_ = datetime.datetime.combine(date_, time_)
-                else:
-                    datetime_ = datetime.datetime.strptime(
-                        date_str + time_str, '%Y%m%d%H%M%S')
-
-                row = SatelERA5()
-                row.satel_datetime = datetime_
-                row.lon = float(vars['lon'][x])
-                row.lat = float(vars['lat'][y])
-                row.satel_datetime_lon_lat = (
-                    f'{row.satel_datetime}_{row.lon}_{row.lat}')
-                row.windspd = float(new_vars['wind'][x][i])
-
-                if (not self.check_match_by_temporal_window(row, tc_row)
-                    or not self.check_match_by_center_change(row, tc_row)
-                    or not self.check_match_by_intensity_change(
-                        row, tc_row)):
-                    continue
-
-        return satel_data
 
     def simply_get_netcdf_coverage(self, map, tc_row, satel_name, data_path,
                             draw, temporal_restrict):

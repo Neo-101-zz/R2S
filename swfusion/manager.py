@@ -29,39 +29,40 @@ def work_flow():
         logger.exception('Exception occurred when loading config.')
     os.makedirs(CONFIG['logging']['dir'], exist_ok=True)
     # Period
-    # period = utils.input_period(CONFIG)
-    # period = [datetime(1996, 10, 6, 0, 0, 0),
-    #           datetime(1996, 10, 6, 23, 59, 59)]
-
-    # period = [datetime(2016, 5, 27, 0, 0, 0),
-    #           datetime(2016, 5, 27, 23, 59, 59)]
-    period = [datetime(2018, 6, 30, 0, 0, 0),
-              datetime(2018, 7, 2, 18, 0, 0)]
-    logger.info(f'Period: {period}')
+    train_period = [datetime(2018, 6, 30, 0, 0, 0),
+                    datetime(2018, 7, 2, 18, 0, 0)]
+    logger.info(f'Period: {train_period}')
     # Region
-    # region = utils.input_region(CONFIG)
     region = [-90, 90, 0, 360]
     logger.info(f'Region: {region}')
-    # Spatial and temporal window size
-    spatial_window = 0.125 # degree
-    temporal_window = 5*60 # second
     # MySQL Server root password
     passwd = '399710'
     # Download and read
     try:
-        # regression_ = regression.Regression(CONFIG, period, region, passwd)
-        # ibtracs_ = ibtracs.IBTrACSManager(CONFIG, period, region, passwd)
-        # hwind_ = hwind.HWindManager(CONFIG, period, region, passwd)
-        # era5_ = era5.ERA5Manager(CONFIG, period, region, passwd, work=False)
-        # cwind_ = cwind.CwindManager(CONFIG, period, region, passwd)
-        # stdmet_ = stdmet.StdmetManager(CONFIG, period, region, passwd)
-        # sfmr_ = sfmr.SfmrManager(CONFIG, period, region, passwd)
-        satel_ = satel.SatelManager(CONFIG, period, region, passwd,
-                                    spatial_window, temporal_window)
+        # regression_ = regression.Regression(CONFIG, train_period, region, passwd)
+        # ibtracs_ = ibtracs.IBTrACSManager(CONFIG, train_period, region, passwd)
+        # cwind_ = cwind.CwindManager(CONFIG, train_period, region, passwd)
+        # stdmet_ = stdmet.StdmetManager(CONFIG, train_period, region, passwd)
+        # sfmr_ = sfmr.SfmrManager(CONFIG, train_period, region, passwd)
+        satel_ = satel.SatelManager(CONFIG, train_period, region, passwd,
+                                    save_disk=False)
         # compare_ = compare_offshore.CompareCCMPWithInStu(
-        #     CONFIG, period, region, passwd)
+        #     CONFIG, train_period, region, passwd)
     except Exception as msg:
         logger.exception('Exception occured when downloading and reading')
+    """
+    test_period = [datetime(2018, 6, 30, 0, 0, 0),
+                   datetime(2018, 7, 2, 18, 0, 0)]
+    try:
+        ibtracs_ = ibtracs.IBTrACSManager(CONFIG, test_period,
+                                          region, passwd)
+        hwind_ = hwind.HWindManager(CONFIG, test_period, region, passwd)
+        era5_ = era5.ERA5Manager(CONFIG, test_period, region, passwd,
+                                 work=True, save_disk=False)
+    except Exception as msg:
+        logger.exception('Exception occured when downloading and reading')
+    """
+    logger.info('SWFusion complete.')
     # Match
     # Validate
     # Fusion
