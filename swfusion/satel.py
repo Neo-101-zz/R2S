@@ -253,6 +253,7 @@ class SatelManager(object):
                 satel_data_path, era5_data_path, SatelERA5)
         if satel_era5_data is None:
             return
+
         # Insert into table
         utils.bulk_insert_avoid_duplicate_unique(
             satel_era5_data, self.CONFIG['database']\
@@ -342,6 +343,9 @@ class SatelManager(object):
                 grid['lons'] = np.arange(lon1, lon2 + step, step)
                 grid['lats'] = np.arange(lat1, lat2 + step, step)
                 candidate_tc_grids.append(grid)
+
+        if not len(candidate_tcs):
+            return []
 
         # Key is the_minute
         temporal_match_tc_idx = dict()
