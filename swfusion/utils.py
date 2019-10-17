@@ -1122,7 +1122,6 @@ def get_class_by_tablename(engine, table_fullname):
         logger.error(f'{table_fullname} not exists')
         return None
 
-
 def add_column(engine, table_name, column):
     column_name = column.compile(dialect=engine.dialect)
     column_type = column.type.compile(engine.dialect)

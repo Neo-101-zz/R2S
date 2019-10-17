@@ -55,6 +55,9 @@ era5:
     - 'temperature'
     - 'u_component_of_wind'
     - 'v_component_of_wind'
+  wind_vars:
+    - 'u_component_of_wind'
+    - 'v_component_of_wind'
   all_vars:
     - 'divergence'
     - 'fraction_of_cloud_cover'
@@ -89,10 +92,13 @@ era5:
     threeD:
       major: '../data/era5/reanalysis_pressure_levels/threeD/major/'
       minor: '../data/era5/reanalysis_pressure_levels/threeD/minor/'
-    surface:
-      major: '../data/era5/reanalysis_pressure_levels/surface/major/'
-      minor: '../data/era5/reanalysis_pressure_levels/surface/minor/'
-    surface_all_vars: '../data/era5/reanalysis_pressure_levels/surface_all_vars/'
+    surface_wind:
+      major: '../data/era5/reanalysis_pressure_levels/surface_wind/major/'
+      minor: '../data/era5/reanalysis_pressure_levels/surface_wind/minor/'
+    surface_all_vars:
+      to_match_smap: '../data/era5/reanalysis_pressure_levels/surface_all_vars/to_match_smap/'
+      major: '../data/era5/reanalysis_pressure_levels/surface_all_vars/major/'
+      minor: '../data/era5/reanalysis_pressure_levels/surface_all_vars/minor/'
 stdmet:
   urls:
     data: 'https://www.ndbc.noaa.gov/data/historical/stdmet/'

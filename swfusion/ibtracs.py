@@ -163,50 +163,58 @@ class IBTrACSManager(object):
         """Read detail of IBTrACS data.
 
         """
-        total = storm_num * date_time_num
-        count = 0
+        total = storm_num
         # List to record all details
         wmo_wp_tcs = []
         WMOWPTC = self.create_tc_table()
 
+        skip_storm = False
         for i in range(storm_num):
-            skip_storm = False
-            # Skip this loop if season (year) of TC not in period
-            if int(vars['season'][i]) not in self.years:
-                skip_storm = True
-            if not skip_storm:
-                # Skip this loop is datetime of first record is earlier than
-                # start date of period of more than 60 days,
-                # or datetime of first record is later than end date of period
-                first_iso_time = vars['iso_time'][i][0]
-                if first_iso_time[0] is MASKED:
-                    continue
-                first_datetime = datetime.datetime.strptime(
-                    first_iso_time.tostring().decode('utf-8'),
-                    '%Y-%m-%d %H:%M:%S')
-                if first_datetime < (self.period[0] -
-                                     datetime.timedelta(days=45)):
-                    skip_strom = True
-                elif first_datetime > self.period[1]:
-                    skip_strom = True
+            print(f'\r{info} {i+1}/{total}', end='')
+            # Season is not just the year
+            # if int(vars['season'][i]) not in self.years:
+            #     skip_storm = True
+            # Skip this loop is datetime of first record is earlier than
+            # start date of period of more than 60 days,
+            # or datetime of first record is later than end date of period
+            iso_times = vars['iso_time'][i]
+            not_masked_count = np.count_nonzero(iso_times.count(1))
 
-            if skip_storm:
-                count += date_time_num
-                self.logger.debug((f'Skipping No.{i+1} TC in '
-                                  + f'season {vars["season"][i]}'))
+            if not not_masked_count:
+                self.logger.debug((f'Skipping No.{i+1} TC because its '
+                                   + f'iso_time field is all masked'))
                 continue
 
-            self.logger.debug((f'Reading No.{i+1} TC in '
-                              + f'season {vars["season"][i]}'))
+            last_iso_time = iso_times[not_masked_count - 1]
+            last_datetime = datetime.datetime.strptime(
+                last_iso_time.tostring().decode('utf-8'),
+                '%Y-%m-%d %H:%M:%S')
+            if last_datetime < self.period[0]:
+                self.logger.debug((f'Skipping No.{i+1} TC because its '
+                                   + f'last datetime is earlier than '
+                                   + f'starting datetime of period: '
+                                   + f'{last_datetime}'))
+                continue
+
+            first_iso_time = iso_times[0]
+            first_datetime = datetime.datetime.strptime(
+                first_iso_time.tostring().decode('utf-8'),
+                '%Y-%m-%d %H:%M:%S')
+            if first_datetime > self.period[1]:
+                self.logger.debug((f'Skipping No.{i+1} TC because its '
+                                   + f'first datetime is later than '
+                                   + f'ending datetime of period: '
+                                   + f'{first_datetime}'))
+                continue
+
+            self.logger.debug((f'Reading No.{i+1} TC which lived from '
+                               + f'{first_datetime} to {last_datetime}'))
 
             sid = vars['sid'][i].tostring().decode('utf-8')
             name = vars['name'][i]
             name = name[name.mask == False].tostring().decode('utf-8')
 
             for j in range(date_time_num):
-                count += 1
-                print(f'\r{info} {count}/{total}', end='')
-
                 row = WMOWPTC()
 
                 # Read ISO time and check whether record is in period

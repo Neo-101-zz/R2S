@@ -62,17 +62,67 @@ class Regression(object):
         self.make_DNN()
         self.train_DNN()
 
-    def _get_table_class_by_name(self, table_name):
+    def _get_era5_table_name(self):
+        # Get TC table and count its row number
+        tc_table_name = self.CONFIG['ibtracs']['table_name']
+        TCTable = utils.get_class_by_tablename(self.engine,
+                                               tc_table_name)
+        tc_query = self.session.query(TCTable)
+        total = tc_query.count()
+        del tc_query
+        count = 0
+        info = f'Reading reanalysis data of TC records'
+        self.logger.info(info)
 
-        class Target(object):
-            pass
+        # Loop all row of TC table
+        for row in self.session.query(TCTable).filter(
+            TCTable.date_time >= self.period[0],
+            TCTable.date_time <= self.period[1]).yield_per(
+            self.CONFIG['database']['batch_size']['query']):
 
-        if self.engine.dialect.has_table(self.engine, table_name):
-            metadata = MetaData(bind=self.engine, reflect=True)
-            t = metadata.tables[table_name]
-            mapper(Target, t)
+            # Get TC datetime
+            tc_datetime = row.date_time
 
-            return Target
+            # Get hit result and range of ERA5 data matrix near
+            # TC center
+            hit, lat1, lat2, lon1, lon2 = \
+                    utils.get_subset_range_of_grib(
+                        row.lat, row.lon, self.lat_grid_points,
+                        self.lon_grid_points, self.edge)
+            if not hit:
+                continue
+
+            count += 1
+            print(f'\r{info} {count}/{total}', end='')
+
+            dirs = ['nw', 'sw', 'se', 'ne']
+            r34 = dict()
+            r34['nw'], r34['sw'], r34['se'], r34['ne'] = \
+                    row.r34_nw, row.r34_sw, row.r34_se, row.r34_ne
+            skip_compare = False
+            for dir in dirs:
+                if r34[dir] is None:
+                    skip_compare = True
+                    break
+            if skip_compare:
+                continue
+
+            # Get index of latitude and longitude of closest grib
+            # point near TC center
+            lat_index, lon_index = \
+                    utils.get_latlon_index_of_closest_grib_point(
+                        row.lat, row.lon, self.lat_grid_points,
+                        self.lon_grid_points)
+
+            # Get name, sqlalchemy Table class and python original class
+            # of ERA5 table
+            table_name, sa_table, ERA5Table = self.get_era5_table_class(
+                mode, row.sid, tc_datetime)
+
+    def predict(self):
+        # Read ERA5 dataframe
+        # Predict SMAP windspd
+        pass
 
     def train_DNN(self):
         # self.NN_model.fit(self.train, self.target, epochs=self.epochs,

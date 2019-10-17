@@ -44,15 +44,16 @@ def work_flow():
         # cwind_ = cwind.CwindManager(CONFIG, train_period, region, passwd)
         # stdmet_ = stdmet.StdmetManager(CONFIG, train_period, region, passwd)
         # sfmr_ = sfmr.SfmrManager(CONFIG, train_period, region, passwd)
-        satel_ = satel.SatelManager(CONFIG, train_period, region, passwd,
-                                    save_disk=False)
+        # satel_ = satel.SatelManager(CONFIG, train_period, region, passwd,
+        #                             save_disk=False)
         # compare_ = compare_offshore.CompareCCMPWithInStu(
         #     CONFIG, train_period, region, passwd)
+        pass
     except Exception as msg:
         logger.exception('Exception occured when downloading and reading')
-    """
-    test_period = [datetime(2018, 6, 30, 0, 0, 0),
-                   datetime(2018, 7, 2, 18, 0, 0)]
+
+    test_period = [datetime(2013, 6, 6, 0, 0, 0),
+                   datetime(2013, 6, 6, 23, 0, 0)]
     try:
         ibtracs_ = ibtracs.IBTrACSManager(CONFIG, test_period,
                                           region, passwd)
@@ -61,7 +62,7 @@ def work_flow():
                                  work=True, save_disk=False)
     except Exception as msg:
         logger.exception('Exception occured when downloading and reading')
-    """
+
     logger.info('SWFusion complete.')
     # Match
     # Validate

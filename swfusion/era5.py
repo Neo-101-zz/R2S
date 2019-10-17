@@ -54,7 +54,7 @@ class ERA5Manager(object):
         self.all_vars = self.CONFIG['era5']['all_vars']
         self.threeD_vars = self.CONFIG['era5']['vars']
         self.threeD_pres_lvl = self.CONFIG['era5']['pres_lvl']
-        self.surface_vars = ['u_component_of_wind', 'v_component_of_wind']
+        self.wind_vars = self.CONFIG['era5']['wind_vars']
         self.surface_pres_lvl = '1000'
 
         self.spa_resolu = self.CONFIG['era5']['spatial_resolution']
@@ -76,7 +76,7 @@ class ERA5Manager(object):
 
         if work:
             utils.setup_database(self, Base)
-            self.download_and_read('surface')
+            self.download_and_read('surface_all_vars')
 
     def get_era5_columns(self):
         cols = []
@@ -110,20 +110,30 @@ class ERA5Manager(object):
         cols.append(Column('key', Integer, primary_key=True))
         cols.append(Column('x', Integer, nullable=False))
         cols.append(Column('y', Integer, nullable=False))
+
         if mode == 'threeD':
             cols.append(Column('z', Integer, nullable=False))
+
         cols.append(Column('lon', Float, nullable=False))
         cols.append(Column('lat', Float, nullable=False))
+
         if mode == 'threeD':
             cols.append(Column('pres_lvl', Integer, nullable=False))
             cols.append(Column('x_y_z', String(20), nullable=False,
                                unique=True))
             for var in self.threeD_vars:
                 cols.append(Column(var, Float))
-        elif mode == 'surface':
+
+        elif mode == 'surface_wind':
             cols.append(Column('x_y', String(20), nullable=False,
                                unique=True))
-            for var in self.surface_vars:
+            for var in self.wind_vars:
+                cols.append(Column(var, Float))
+
+        elif mode == 'surface_all_vars':
+            cols.append(Column('x_y', String(20), nullable=False,
+                               unique=True))
+            for var in self.all_vars:
                 cols.append(Column(var, Float))
 
         metadata = MetaData(bind=self.engine)
@@ -179,8 +189,11 @@ class ERA5Manager(object):
         if mode == 'threeD':
             request['variable'] = self.threeD_vars
             request['pressure_level'] = self.threeD_pres_lvl
-        elif mode == 'surface':
-            request['variable'] = self.surface_vars
+        elif mode == 'surface_wind':
+            request['variable'] = self.wind_vars
+            request['pressure_level'] = self.surface_pres_lvl
+        elif mode == 'surface_all_vars':
+            request['variable'] = self.all_vars
             request['pressure_level'] = self.surface_pres_lvl
 
         self.cdsapi_client.retrieve(
@@ -208,8 +221,11 @@ class ERA5Manager(object):
         if mode == 'threeD':
             request['variable'] = self.threeD_vars
             request['pressure_level'] = self.threeD_pres_lvl
-        elif mode == 'surface':
-            request['variable'] = self.surface_vars
+        elif mode == 'surface_wind':
+            request['variable'] = self.wind_vars
+            request['pressure_level'] = self.surface_pres_lvl
+        elif mode == 'surface_all_vars':
+            request['variable'] = self.all_vars
             request['pressure_level'] = self.surface_pres_lvl
 
         self.cdsapi_client.retrieve(
@@ -228,9 +244,12 @@ class ERA5Manager(object):
         if mode == 'threeD':
             major_dir = self.CONFIG['era5']['dirs']['threeD']['major']
             minor_dir = self.CONFIG['era5']['dirs']['threeD']['minor']
-        elif mode == 'surface':
-            major_dir = self.CONFIG['era5']['dirs']['surface']['major']
-            minor_dir = self.CONFIG['era5']['dirs']['surface']['minor']
+        elif mode == 'surface_wind':
+            major_dir = self.CONFIG['era5']['dirs']['surface_wind']['major']
+            minor_dir = self.CONFIG['era5']['dirs']['surface_wind']['minor']
+        elif mode == 'surface_all_vars':
+            major_dir = self.CONFIG['era5']['dirs']['surface_all_vars']['major']
+            minor_dir = self.CONFIG['era5']['dirs']['surface_all_vars']['minor']
 
         os.makedirs(major_dir, exist_ok=True)
         os.makedirs(minor_dir, exist_ok=True)
@@ -444,7 +463,7 @@ class ERA5Manager(object):
         if mode == 'threeD':
             surface = self.session.query(ERA5Table).filter(
                 ERA5Table.z == 11)
-        elif mode == 'surface':
+        elif mode == 'surface_wind' or mode == 'surface_all_vars':
             surface = self.session.query(ERA5Table)
 
         lats, lons = self._get_compare_latlon(surface)
@@ -653,7 +672,7 @@ class ERA5Manager(object):
                     int(self.CONFIG['database']['batch_size']['insert']/10),
                     ERA5Table, ['x_y_z'], self.session,
                     check_self=True)
-            elif mode == 'surface':
+            elif mode == 'surface_wind' or mode == 'surface_all_vars':
                 utils.bulk_insert_avoid_duplicate_unique(
                     era5_table_entity,
                     int(self.CONFIG['database']['batch_size']['insert']/10),
@@ -691,7 +710,7 @@ class ERA5Manager(object):
 
                         entity.append(pt)
 
-        elif mode == 'surface':
+        elif mode == 'surface_wind' or mode == 'surface_all_vars':
             for x in range(self.threeD_grid['lon_axis']):
                 for y in range(self.threeD_grid['lat_axis']):
                     pt = ERA5Table()
@@ -738,7 +757,7 @@ class ERA5Manager(object):
                 # to get the value of a cell, have to get its 4 corners
                 # first: ul=upper_left, ll=lower_left, lr=lower_right,
                 # ur=upper_right
-
+                """
                 value_ll = utils.convert_dtype(data[y][x])
                 value_ul = utils.convert_dtype(data[y+1][x])
                 value_lr = utils.convert_dtype(data[y][x+1])
@@ -753,6 +772,17 @@ class ERA5Manager(object):
 
                 # Average four corner's data value
                 value = sum(values)/float(len(values))
+                """
+
+                corners = []
+                for tmp_y in [y, y+1]:
+                    for tmp_x in [x, x+1]:
+                        corners.append(data[tmp_y][tmp_x])
+
+                if not len(corners):
+                    continue
+
+                value = float( sum(corners) / len(corners) )
 
                 hit_count += 1
                 if mode == 'threeD':
@@ -760,7 +790,7 @@ class ERA5Manager(object):
                               self.threeD_grid['height'])
                              + y * self.threeD_grid['height']
                              + z)
-                elif mode == 'surface':
+                elif mode == 'surface_wind' or mode == 'surface_all_vars':
                     index = x * self.threeD_grid['lat_axis'] + y
 
                 setattr(era5[index], name, value)
@@ -842,4 +872,3 @@ class ERA5Manager(object):
 
         self.dt_major = dt_major
         self.dt_minor = dt_minor
-
