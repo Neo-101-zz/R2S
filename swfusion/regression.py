@@ -62,18 +62,12 @@ class Regression(object):
         self.make_DNN()
         self.train_DNN()
 
-    def _get_era5_table_name(self):
+    def _get_era5_table_name(self, mode='surface_all_vars'):
+        table_names = []
         # Get TC table and count its row number
         tc_table_name = self.CONFIG['ibtracs']['table_name']
         TCTable = utils.get_class_by_tablename(self.engine,
                                                tc_table_name)
-        tc_query = self.session.query(TCTable)
-        total = tc_query.count()
-        del tc_query
-        count = 0
-        info = f'Reading reanalysis data of TC records'
-        self.logger.info(info)
-
         # Loop all row of TC table
         for row in self.session.query(TCTable).filter(
             TCTable.date_time >= self.period[0],
@@ -92,9 +86,6 @@ class Regression(object):
             if not hit:
                 continue
 
-            count += 1
-            print(f'\r{info} {count}/{total}', end='')
-
             dirs = ['nw', 'sw', 'se', 'ne']
             r34 = dict()
             r34['nw'], r34['sw'], r34['se'], r34['ne'] = \
@@ -107,20 +98,20 @@ class Regression(object):
             if skip_compare:
                 continue
 
-            # Get index of latitude and longitude of closest grib
-            # point near TC center
-            lat_index, lon_index = \
-                    utils.get_latlon_index_of_closest_grib_point(
-                        row.lat, row.lon, self.lat_grid_points,
-                        self.lon_grid_points)
-
             # Get name, sqlalchemy Table class and python original class
             # of ERA5 table
             table_name, sa_table, ERA5Table = self.get_era5_table_class(
                 mode, row.sid, tc_datetime)
 
+            table_names.append(table_name)
+
+        return table_names
+
     def predict(self):
         # Read ERA5 dataframe
+        era5_table_names = self._get_era5_table_name()
+        for table_name in era5_table_names:
+            df = pd.read_sql(f'SELECT * FROM {table_name}', self.engine)
         # Predict SMAP windspd
         pass
 

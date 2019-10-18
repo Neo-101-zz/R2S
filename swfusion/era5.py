@@ -65,12 +65,12 @@ class ERA5Manager(object):
         # Size of threeD grid points around TC center
         self.threeD_grid = dict()
         self.threeD_grid['lat_axis'] = self.threeD_grid['lon_axis'] = int(
-            self.edge/self.spa_resolu)
+            self.edge/self.spa_resolu) + 1
         self.threeD_grid['height'] = len(self.threeD_pres_lvl)
 
         self.twoD_grid = dict()
         self.twoD_grid['lat_axis'] = self.twoD_grid['lon_axis'] = int(
-            self.edge/self.spa_resolu)
+            self.edge/self.spa_resolu) + 1
 
         self.wind_radii = self.CONFIG['wind_radii']
 
@@ -134,6 +134,8 @@ class ERA5Manager(object):
             cols.append(Column('x_y', String(20), nullable=False,
                                unique=True))
             for var in self.all_vars:
+                if var == 'vorticity':
+                    var = 'vorticity_relative'
                 cols.append(Column(var, Float))
 
         metadata = MetaData(bind=self.engine)
@@ -142,8 +144,10 @@ class ERA5Manager(object):
 
         return table_name, t, ERA5
 
-    def download_all_surface_vars_of_whole_day(self, target_datetime):
-        file_path = (f'{self.CONFIG["era5"]["dirs"]["surface_all_vars"]}'
+    def download_all_surface_vars_of_whole_day_to_match_smap(
+        self, target_datetime):
+        file_path = (f'{self.CONFIG["era5"]["dirs"]["surface_all_vars"]\
+                     ["to_match_smap"]}'
                      + target_datetime.strftime('%Y_%m%d.grib'))
         if os.path.exists(file_path):
             return file_path
@@ -454,7 +458,7 @@ class ERA5Manager(object):
         utils.autolabel(ax, rects2)
 
     def compare_ibtracs_era5(self, mode, ibtracs_table_row, ERA5Table,
-                             draw):
+                             draw, draw_map, draw_bar):
         self._set_compare_zorders()
         tc_row = ibtracs_table_row
         lon_converted = tc_row.lon + 360 if tc_row.lon < 0 else tc_row.lon
@@ -471,10 +475,16 @@ class ERA5Manager(object):
         lat1, lat2 = min(lats), max(lats)
 
         fig = plt.figure()
-        fig.set_size_inches(25, 10)
+        if draw_map and draw_bar:
+            fig.set_size_inches(25, 10)
+            map_subplot = 121
+            bar_subplot = 122
+        else:
+            fig.set_size_inches(10, 10)
+            map_subplot = bar_subplot = 111
 
         # Draw ax1 to compare IBTrACS wind radii with ERA5 wind speed contour
-        ax1 = fig.add_subplot(121, aspect='equal')
+        ax1 = fig.add_subplot(map_subplot, aspect='equal')
         ax1.axis([lon1, lon2, lat1, lat2])
 
         self._draw_compare_basemap(ax1, lon1, lon2, lat1, lat2)
@@ -493,10 +503,16 @@ class ERA5Manager(object):
             plt.close(fig)
             return
 
+        if not draw_map:
+            ax1.remove()
+
         # Draw ax2 to compare area within IBTrACS wind radii with
         # corresponding area of ERA5 wind speed contour
-        ax2 = fig.add_subplot(122)
+        ax2 = fig.add_subplot(bar_subplot)
         self._draw_compare_area_bar(ax2, ibtracs_area, era5_area, tc_row)
+
+        if not draw_bar:
+            ax2.remove()
 
         fig.tight_layout()
         fig_path = (f'{self.CONFIG["result"]["dirs"]["fig"]}'
@@ -593,7 +609,8 @@ class ERA5Manager(object):
             hit, lat1, lat2, lon1, lon2 = \
                     utils.get_subset_range_of_grib(
                         row.lat, row.lon, self.lat_grid_points,
-                        self.lon_grid_points, self.edge)
+                        self.lon_grid_points, self.edge, mode='era5',
+                        spatial_resolution=self.spa_resolu)
             if not hit:
                 continue
 
@@ -611,13 +628,6 @@ class ERA5Manager(object):
                     break
             if skip_compare:
                 continue
-
-            # Get index of latitude and longitude of closest grib
-            # point near TC center
-            lat_index, lon_index = \
-                    utils.get_latlon_index_of_closest_grib_point(
-                        row.lat, row.lon, self.lat_grid_points,
-                        self.lon_grid_points)
 
             # Get name, sqlalchemy Table class and python original class
             # of ERA5 table
@@ -683,7 +693,8 @@ class ERA5Manager(object):
             self.logger.debug((f'Bulk inserting ERA5 data into '
                                + f'{table_name} in {end-start:2f} s'))
 
-            self.compare_ibtracs_era5(mode, row, ERA5Table, draw=False)
+            self.compare_ibtracs_era5(mode, row, ERA5Table, draw=True,
+                                      draw_map=True, draw_bar=False)
         utils.delete_last_lines()
         print('Done')
 
@@ -695,14 +706,17 @@ class ERA5Manager(object):
 
         """
         entity = []
+        half_edge_indices = (self.edge / 2 / self.spa_resolu)
 
         if mode == 'threeD':
             for x in range(self.threeD_grid['lon_axis']):
                 for y in range(self.threeD_grid['lat_axis']):
                     for z in range(self.threeD_grid['height']):
                         pt = ERA5Table()
-                        pt.x, pt.y, pt.z = x, y, z
-                        pt.x_y_z = f'{x}_{y}_{z}'
+                        pt.x = x - half_edge_indices
+                        pt.y = y - half_edge_indices
+                        pt.z = z
+                        pt.x_y_z = f'{pt.x}_{pt.y}_{pt.z}'
 
                         pt.lat = lat1 + (y+0.5) * self.spa_resolu
                         pt.lon = (lon1 + (x+0.5) * self.spa_resolu) % 360
@@ -714,8 +728,9 @@ class ERA5Manager(object):
             for x in range(self.threeD_grid['lon_axis']):
                 for y in range(self.threeD_grid['lat_axis']):
                     pt = ERA5Table()
-                    pt.x, pt.y = x, y
-                    pt.x_y= f'{x}_{y}'
+                    pt.x = x - half_edge_indices
+                    pt.y = y - half_edge_indices
+                    pt.x_y = f'{pt.x}_{pt.y}'
 
                     pt.lat = lat1 + (y+0.5) * self.spa_resolu
                     pt.lon = (lon1 + (x+0.5) * self.spa_resolu) % 360
@@ -744,6 +759,8 @@ class ERA5Manager(object):
         # and smallest longitude
 
         name = grb.name.replace(" ", "_").lower()
+        if name == 'vorticity_(relative)':
+            name = 'vorticity_relative'
         if mode == 'threeD':
             z = self.threeD_pres_lvl.index(str(grb.level))
         hit_count = 0
@@ -773,7 +790,6 @@ class ERA5Manager(object):
                 # Average four corner's data value
                 value = sum(values)/float(len(values))
                 """
-
                 corners = []
                 for tmp_y in [y, y+1]:
                     for tmp_x in [x, x+1]:

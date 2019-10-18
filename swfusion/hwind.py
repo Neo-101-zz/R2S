@@ -54,13 +54,13 @@ class HWindManager(object):
                                        self.period[1].year+1)]
 
         utils.setup_database(self, Base)
-        # self.download()
+        self.download()
 
         utils.reset_signal_handler()
         self.read()
 
     def get_hwind_class(self, sid, dt):
-        dt_str = dt.strftime('%Y%_m%d_%H%M')
+        dt_str = dt.strftime('%Y_%m%d_%H%M')
         table_name = (f'{self.CONFIG["hwind"]["table_name"]}'
                       + f'_{sid}_{dt_str}')
 
@@ -320,7 +320,9 @@ class HWindManager(object):
             line_list = file.readlines()
         os.remove(temp_file_name)
 
-        num_pattern = r"[-+]?\d*\.\d+|\d+"
+        # Sometimes there are scientific number in the lines
+        num_pattern = re.compile('-?\ *[0-9]+\.?[0-9]*(?:[Ee]\ *-?\ *[0-9]+)?')
+        # num_pattern = r"[-+]?\d*\.\d+|\d+"
         lons_line_idx = dict()
         lats_line_idx = dict()
         for idx, line in enumerate(line_list):
@@ -354,23 +356,31 @@ class HWindManager(object):
         lon_idx = 0
         lat_idx = 0
 
-        for i in range(wind_line_idx, len(line_list)):
-            uv_wind_in_a_line = re.findall(num_pattern, line_list[i])
-            for idx, value in enumerate(uv_wind_in_a_line):
-                # U component
-                if not idx % 2:
-                    u_wind = float(value)
-                # V component
-                if idx % 2:
-                    v_wind = float(value)
-                    windspd[lat_idx][lon_idx] = math.sqrt(
-                        u_wind**2 + v_wind**2) * 1.94384
-                    winddir[lat_idx][lon_idx] = math.degrees(
-                        math.atan2(u_wind, v_wind))
-                    lon_idx += 1
-                    if lon_idx == lons_num:
-                        lon_idx = 0
-                        lat_idx += 1
+        try:
+            for i in range(wind_line_idx, len(line_list)):
+                uv_wind_in_a_line = re.findall(num_pattern, line_list[i])
+
+                # if i+1 >= 6601 and i+1 <= 6683:
+                #     print(f'{i+1}\t {uv_wind_in_a_line}')
+                for idx, value in enumerate(uv_wind_in_a_line):
+                    # U component
+                    if not idx % 2:
+                        u_wind = float(value)
+                    # V component
+                    if idx % 2:
+                        v_wind = float(value)
+                        windspd[lat_idx][lon_idx] = math.sqrt(
+                            u_wind**2 + v_wind**2) * 1.94384
+                        winddir[lat_idx][lon_idx] = math.degrees(
+                            math.atan2(u_wind, v_wind))
+                        lon_idx += 1
+                        if lon_idx == lons_num:
+                            lon_idx = 0
+                            lat_idx += 1
+                            # print(f'new lat ! line number: {i+1}')
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
 
         for x in range(lons_num):
             for y in range(lats_num):

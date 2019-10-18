@@ -55,9 +55,9 @@ def work_flow():
     test_period = [datetime(2013, 6, 6, 0, 0, 0),
                    datetime(2013, 6, 6, 23, 0, 0)]
     try:
-        ibtracs_ = ibtracs.IBTrACSManager(CONFIG, test_period,
-                                          region, passwd)
-        hwind_ = hwind.HWindManager(CONFIG, test_period, region, passwd)
+        # ibtracs_ = ibtracs.IBTrACSManager(CONFIG, test_period,
+        #                                   region, passwd)
+        # hwind_ = hwind.HWindManager(CONFIG, test_period, region, passwd)
         era5_ = era5.ERA5Manager(CONFIG, test_period, region, passwd,
                                  work=True, save_disk=False)
     except Exception as msg:

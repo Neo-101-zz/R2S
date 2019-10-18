@@ -75,7 +75,7 @@ class SatelManager(object):
         # Size of 3D grid points around TC center
         self.grid_2d = dict()
         self.grid_2d['lat_axis'] = self.grid_2d['lon_axis'] = int(
-            self.edge/self.spa_resolu)
+            self.edge/self.spa_resolu) + 1
 
         self.missing_value = dict()
         for satel_name in self.satel_names:
@@ -230,8 +230,7 @@ class SatelManager(object):
                                          work=False,
                                          save_disk=self.save_disk)
                 era5_data_path = \
-                        era5_.download_all_surface_vars_of_whole_day(
-                            target_datetime)
+                        era5_.download_all_surface_vars_of_whole_day_to_match_smap(target_datetime)
 
                 # Get satellite table
                 SatelERA5 = self._create_satel_era5_table_class(

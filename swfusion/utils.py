@@ -1236,8 +1236,8 @@ def get_latlon_index_of_closest_grib_point(lat, lon, lat_grid_points,
 
     return lat_match_index, lon_match_index
 
-def get_subset_range_of_grib(lat, lon, lat_grid_points,
-                             lon_grid_points, edge):
+def get_subset_range_of_grib(lat, lon, lat_grid_points, lon_grid_points,
+                             edge, mode='rss', spatial_resolution=None):
     lon = (lon + 360) % 360
 
     lat_ae = [abs(lat-y) for y in lat_grid_points]
@@ -1255,6 +1255,10 @@ def get_subset_range_of_grib(lat, lon, lat_grid_points,
     lat2 = lat_match + half_edge
     lon1 = (lon_match - half_edge + 360) % 360
     lon2 = (lon_match + half_edge + 360) % 360
+
+    if mode == 'era5':
+        lat2 += spatial_resolution
+        lon2 += spatial_resolution
 
     return True, lat1, lat2, lon1, lon2
 
