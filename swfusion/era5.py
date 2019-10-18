@@ -146,8 +146,8 @@ class ERA5Manager(object):
 
     def download_all_surface_vars_of_whole_day_to_match_smap(
         self, target_datetime):
-        file_path = (f'{self.CONFIG["era5"]["dirs"]["surface_all_vars"]\
-                     ["to_match_smap"]}'
+        era5_dirs = self.CONFIG['era5']['dirs']
+        file_path = (f'{era5_dirs["surface_all_vars"]["to_match_smap"]}'
                      + target_datetime.strftime('%Y_%m%d.grib'))
         if os.path.exists(file_path):
             return file_path

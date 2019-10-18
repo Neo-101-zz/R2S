@@ -26,10 +26,11 @@ Base = declarative_base()
 
 class Regression(object):
 
-    def __init__(self, CONFIG, period, region, passwd):
+    def __init__(self, CONFIG, train_period, test_period, region, passwd):
         self.logger = logging.getLogger(__name__)
         self.CONFIG = CONFIG
-        self.period = period
+        self.train_period = train_period
+        self.test_period = test_period
         self.region = region
         self.db_root_passwd = passwd
         self.engine = None
@@ -46,12 +47,17 @@ class Regression(object):
                              'specific_snow_water_content', 'temperature',
                              'u_component_of_wind', 'v_component_of_wind',
                              'vertical_velocity', 'vorticity_relative']
-        self.useless_columns = ['key', 'match_sid',
-                                'temporal_window_mins',
-                                'satel_tc_diff_mins', 'tc_datetime',
-                                'satel_datetime', 'era5_datetime',
-                                'satel_datetime_lon_lat',
-                                'satel_era5_diff_mins']
+        self.smap_era5_useless_columns = [
+            'key', 'match_sid',
+            'temporal_window_mins',
+            'satel_tc_diff_mins', 'tc_datetime',
+            'satel_datetime', 'era5_datetime',
+            'satel_datetime_lon_lat',
+            'satel_era5_diff_mins'
+        ]
+        self.era5_useless_columns = [
+            'key', 'x_y'
+        ]
         self.epochs = 500
         self.batch_size = 32
         self.validation_split = 0.2
@@ -70,8 +76,8 @@ class Regression(object):
                                                tc_table_name)
         # Loop all row of TC table
         for row in self.session.query(TCTable).filter(
-            TCTable.date_time >= self.period[0],
-            TCTable.date_time <= self.period[1]).yield_per(
+            TCTable.date_time >= self.test_period[0],
+            TCTable.date_time <= self.test_period[1]).yield_per(
             self.CONFIG['database']['batch_size']['query']):
 
             # Get TC datetime
@@ -112,8 +118,11 @@ class Regression(object):
         era5_table_names = self._get_era5_table_name()
         for table_name in era5_table_names:
             df = pd.read_sql(f'SELECT * FROM {table_name}', self.engine)
-        # Predict SMAP windspd
-        pass
+            df.drop(self.era5_useless_columns, axis=1, inplace=True)
+            breakpoint()
+            # Predict SMAP windspd
+            smap_windspd_pre = self.NN_model.predict(df)
+            breakpoint()
 
     def train_DNN(self):
         # self.NN_model.fit(self.train, self.target, epochs=self.epochs,
@@ -200,7 +209,7 @@ class Regression(object):
     def _get_train_test(self):
         table_name = 'smap_2015'
         df = pd.read_sql('SELECT * FROM smap_2018', self.engine)
-        df.drop(self.useless_columns, axis=1, inplace=True)
+        df.drop(self.smap_era5_useless_columns, axis=1, inplace=True)
         train, test = train_test_split(df, test_size=0.2)
 
         return train, test

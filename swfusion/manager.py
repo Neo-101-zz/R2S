@@ -39,7 +39,6 @@ def work_flow():
     passwd = '399710'
     # Download and read
     try:
-        # regression_ = regression.Regression(CONFIG, train_period, region, passwd)
         # ibtracs_ = ibtracs.IBTrACSManager(CONFIG, train_period, region, passwd)
         # cwind_ = cwind.CwindManager(CONFIG, train_period, region, passwd)
         # stdmet_ = stdmet.StdmetManager(CONFIG, train_period, region, passwd)
@@ -55,11 +54,13 @@ def work_flow():
     test_period = [datetime(2013, 6, 6, 0, 0, 0),
                    datetime(2013, 6, 6, 23, 0, 0)]
     try:
+        regression_ = regression.Regression(CONFIG, train_period,
+                                            test_period, region, passwd)
         # ibtracs_ = ibtracs.IBTrACSManager(CONFIG, test_period,
         #                                   region, passwd)
         # hwind_ = hwind.HWindManager(CONFIG, test_period, region, passwd)
-        era5_ = era5.ERA5Manager(CONFIG, test_period, region, passwd,
-                                 work=True, save_disk=False)
+        # era5_ = era5.ERA5Manager(CONFIG, test_period, region, passwd,
+        #                          work=True, save_disk=False)
     except Exception as msg:
         logger.exception('Exception occured when downloading and reading')
 
