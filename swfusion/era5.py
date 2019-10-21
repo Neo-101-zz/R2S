@@ -191,7 +191,7 @@ class ERA5Manager(object):
 
         return table_name, t, ERA5
 
-    def download_all_surface_vars_of_whole_day_to_match_smap(
+    def download_all_surface_vars_of_whole_day(
         self, target_datetime):
         era5_dirs = self.CONFIG['era5']['dirs']
         file_path = (f'{era5_dirs["surface_all_vars"]["to_match_satel"]}'

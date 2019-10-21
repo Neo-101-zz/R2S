@@ -41,7 +41,7 @@ class ASCATManager(object):
 
     def __init__(self, CONFIG, period, region, passwd, save_disk):
         self.logger = logging.getLogger(__name__)
-        self.satel_names = ['smap', 'amsr2', 'ascat', 'qscat', 'wsat']
+        self.satel_names = ['ascat']
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
@@ -155,6 +155,15 @@ class ASCATManager(object):
                                + datetime.timedelta(days=day))
             self.logger.info((f'Download and reading satel and ERA5 data: '
                               + f'{target_datetime.date()}'))
+
+            era5_ = era5.ERA5Manager(self.CONFIG, self.period,
+                                     self.region,
+                                     self.db_root_passwd,
+                                     work=False,
+                                     save_disk=self.save_disk)
+            era5_data_path = \
+                    era5_.download_all_surface_vars_of_whole_day(
+                        target_datetime)
             for satel_name in self.satel_names:
                 # Download satellite data
                 satel_data_path = self.download(satel_name, target_datetime)
@@ -165,14 +174,6 @@ class ASCATManager(object):
                 self.logger.debug((f'Downloading all surface ERA5 '
                                    + f'data of all hours on '
                                    + f'{target_datetime.date()}'))
-                era5_ = era5.ERA5Manager(self.CONFIG, self.period,
-                                         self.region,
-                                         self.db_root_passwd,
-                                         work=False,
-                                         save_disk=self.save_disk)
-                era5_data_path = \
-                        era5_.download_all_surface_vars_of_whole_day_to_match_smap(
-                            target_datetime)
 
                 # Get satellite table
                 SatelERA5 = self.get_satel_era5_table(satel_name, target_datetime)
@@ -183,9 +184,9 @@ class ASCATManager(object):
                 self.read_satel_era5(satel_name, satel_data_path,
                                      era5_data_path, SatelERA5,
                                      target_datetime.date())
-                if self.save_disk:
-                    os.remove(era5_data_path)
-                breakpoint()
+            if self.save_disk:
+                os.remove(era5_data_path)
+            breakpoint()
 
     def read_satel_era5(self, satel_name, satel_data_path,
                         era5_data_path, SatelERA5i, target_date):
