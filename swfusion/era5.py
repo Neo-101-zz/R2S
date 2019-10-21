@@ -74,8 +74,9 @@ class ERA5Manager(object):
 
         self.wind_radii = self.CONFIG['wind_radii']
 
+        utils.setup_database(self, Base)
+
         if work:
-            utils.setup_database(self, Base)
             self.download_and_read('surface_all_vars')
 
     def get_era5_columns(self):
@@ -88,6 +89,52 @@ class ERA5Manager(object):
             cols.append(Column(var, Float, nullable=False))
 
         return cols
+
+    def get_era5_table_names(self, mode):
+        table_names = []
+        # Get TC table and count its row number
+        tc_table_name = self.CONFIG['ibtracs']['table_name']
+        TCTable = utils.get_class_by_tablename(self.engine,
+                                               tc_table_name)
+        # Loop all row of TC table
+        for row in self.session.query(TCTable).filter(
+            TCTable.date_time >= self.period[0],
+            TCTable.date_time <= self.period[1]).yield_per(
+            self.CONFIG['database']['batch_size']['query']):
+
+            # Get TC datetime
+            tc_datetime = row.date_time
+
+            # Get hit result and range of ERA5 data matrix near
+            # TC center
+            hit, lat1, lat2, lon1, lon2 = \
+                    utils.get_subset_range_of_grib(
+                        row.lat, row.lon, self.lat_grid_points,
+                        self.lon_grid_points, self.edge, mode='era5',
+                        spatial_resolution=self.spa_resolu)
+            if not hit:
+                continue
+
+            dirs = ['nw', 'sw', 'se', 'ne']
+            r34 = dict()
+            r34['nw'], r34['sw'], r34['se'], r34['ne'] = \
+                    row.r34_nw, row.r34_sw, row.r34_se, row.r34_ne
+            skip_compare = False
+            for dir in dirs:
+                if r34[dir] is None:
+                    skip_compare = True
+                    break
+            if skip_compare:
+                continue
+
+            # Get name, sqlalchemy Table class and python original class
+            # of ERA5 table
+            table_name, sa_table, ERA5Table = self.get_era5_table_class(
+                mode, row.sid, tc_datetime)
+
+            table_names.append(table_name)
+
+        return table_names
 
     def get_era5_table_class(self, mode, sid, dt):
         """Get table of ERA5 reanalysis.
@@ -566,7 +613,7 @@ class ERA5Manager(object):
         cols.append(Column('key', Integer, primary_key=True))
         cols.append(Column('sid', String(13), nullable=False))
         cols.append(Column('date_time', DateTime, nullable=False))
-        for type in ['ibtracs', 'era5']:
+        for type in ['ibtracs', 'era5', 'smap']:
             for r in self.wind_radii:
                 col_name = f'{type}_r{r}_area'
                 cols.append(Column(col_name, Float, nullable=False))

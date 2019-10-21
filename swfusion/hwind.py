@@ -370,7 +370,7 @@ class HWindManager(object):
                     if idx % 2:
                         v_wind = float(value)
                         windspd[lat_idx][lon_idx] = math.sqrt(
-                            u_wind**2 + v_wind**2) * 1.94384
+                            u_wind**2 + v_wind**2)
                         winddir[lat_idx][lon_idx] = math.degrees(
                             math.atan2(u_wind, v_wind))
                         lon_idx += 1

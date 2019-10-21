@@ -34,6 +34,10 @@ pbar = None
 format_custom_text = None
 current_file = None
 
+DEGREE_OF_ONE_NMILE = float(1)/60
+KM_OF_ONE_NMILE = 1.852
+KM_OF_ONE_DEGREE = KM_OF_ONE_NMILE / DEGREE_OF_ONE_NMILE
+
 def delete_last_lines(n=1):
     CURSOR_UP_ONE = '\x1b[1A'
     CURSOR_LEFT_HEAD = '\x1b[1G'
@@ -1295,3 +1299,225 @@ def hour_rounder(t):
     # Rounds to nearest hour by adding a timedelta hour if minute >= 30
     return (t.replace(second=0, microsecond=0, minute=0, hour=t.hour)
             + datetime.timedelta(hours=t.minute//30))
+
+def draw_compare_basemap(ax, lon1, lon2, lat1, lat2, zorders):
+    map = Basemap(llcrnrlon=lon1, llcrnrlat=lat1, urcrnrlon=lon2,
+                  urcrnrlat=lat2, ax=ax)
+    map.drawcoastlines(linewidth=3.0,
+                       zorder=zorders['coastlines'])
+    map.drawmapboundary(zorder=zorders['mapboundary'])
+    # draw parallels and meridians.
+    # label parallels on right and top
+    # meridians on bottom and left
+    parallels = np.arange(int(lat1), int(lat2), 2.)
+    # labels = [left,right,top,bottom]
+    map.drawparallels(parallels,labels=[False,True,True,False])
+    meridians = np.arange(int(lon1), int(lon2), 2.)
+    map.drawmeridians(meridians,labels=[True,False,False,True])
+
+def set_basemap_title(ax, tc_row, data_name):
+    title_prefix = (f'IBTrACS wind radii and {data_name} ocean surface'
+                    + f'wind speed of'
+                    + f'\n{tc_row.sid}')
+    if tc_row.name is not None:
+        tc_name =  f'({tc_row.name}) '
+    title_suffix = f'on {tc_row.date_time}'
+    ax.set_title(f'{title_prefix} {tc_name} {title_suffix}')
+
+def draw_windspd(ax, lats, lons, windspd, zorders):
+    # Plot windspd in knots with matplotlib's contour
+    X, Y = np.meshgrid(lons, lats)
+    Z = windspd
+
+    windspd_levels = [5*x for x in range(15)]
+
+    cs = ax.contour(X, Y, Z, levels=windspd_levels,
+                    zorder=zorders['contour'], colors='k')
+    ax.clabel(cs, inline=1, colors='k', fontsize=10)
+    ax.contourf(X, Y, Z, levels=windspd_levels,
+                zorder=zorders['contourf'],
+                cmap=plt.cm.rainbow)
+
+def get_radii_from_tc_row(tc_row):
+    r34 = dict()
+    r34['nw'], r34['sw'], r34['se'], r34['ne'] = \
+            tc_row.r34_nw, tc_row.r34_sw, tc_row.r34_se, tc_row.r34_ne
+
+    r50 = dict()
+    r50['nw'], r50['sw'], r50['se'], r50['ne'] = \
+            tc_row.r50_nw, tc_row.r50_sw, tc_row.r50_se, tc_row.r50_ne
+
+    r64 = dict()
+    r64['nw'], r64['sw'], r64['se'], r64['ne'] = \
+            tc_row.r64_nw, tc_row.r64_sw, tc_row.r64_se, tc_row.r64_ne
+
+    radii = {34: r34, 50: r50, 64: r64}
+
+    return radii
+
+def draw_ibtracs_radii(ax, center, radii, wind_radii, zorders):
+    radii_color = {34: 'yellow', 50: 'orange', 64: 'red'}
+    dirs = ['ne', 'se', 'sw', 'nw']
+    ibtracs_area = []
+
+    for r in wind_radii:
+        area_in_radii = 0
+        for idx, dir in enumerate(dirs):
+            if tc_radii[r][dir] is None:
+                continue
+
+            ax.add_patch(
+                mpatches.Wedge(
+                    center,
+                    r=tc_radii[r][dir]*DEGREE_OF_ONE_NMILE,
+                    theta1=idx*90, theta2=(idx+1)*90,
+                    zorder=zorders['wedge'],
+                    color=radii_color[r], alpha=0.6)
+            )
+
+            radii_in_km = tc_radii[r][dir] * KM_OF_ONE_NMILE
+            area_in_radii += math.pi * (radii_in_km)**2 / 4
+
+        ibtracs_area.append(area_in_radii)
+
+    return ibtracs_area
+
+def get_area_within_radii(ax, lats, lons, windspd, wind_radii):
+    X, Y = np.meshgrid(lons, lats)
+    Z = windspd
+
+    cs = ax.contour(X, Y, Z, levels=wind_radii)
+    area = []
+    for i in range(len(wind_radii)):
+        if windspd.max() < wind_radii[i]:
+            area.append(0)
+            continue
+
+        contour = cs.collections[i]
+        paths = contour.get_paths()
+
+        if not len(paths):
+            continue
+
+        vs = paths[0].vertices
+        # Compute area enclosed by vertices.
+        area.append(abs(
+            area_of_contour(vs) * (KM_OF_ONE_DEGREE)**2))
+
+    return area
+
+def create_area_compare_table(the_class):
+    """Get table of ERA5 reanalysis.
+
+    """
+    table_name = f'wind_radii_area_compare'
+
+    class WindRadiiAreaCompare(object):
+        pass
+
+    if the_class.engine.dialect.has_table(the_class.engine, table_name):
+        metadata = MetaData(bind=the_class.engine, reflect=True)
+        t = metadata.tables[table_name]
+        mapper(WindRadiiAreaCompare, t)
+
+        return WindRadiiAreaCompare
+
+    cols = []
+    cols.append(Column('key', Integer, primary_key=True))
+    cols.append(Column('sid', String(13), nullable=False))
+    cols.append(Column('date_time', DateTime, nullable=False))
+    for type in ['ibtracs', 'era5', 'smap']:
+        for r in the_class.wind_radii:
+            col_name = f'{type}_r{r}_area'
+            cols.append(Column(col_name, Float, nullable=False))
+    cols.append(Column('sid_date_time', String(50), nullable=False,
+                       unique=True))
+
+    metadata = MetaData(bind=the_class.engine)
+    t = Table(table_name, metadata, *cols)
+    mapper(WindRadiiAreaCompare, t)
+
+    metadata.create_all()
+    the_class.session.commit()
+
+    return WindRadiiAreaCompare
+
+def write_area_compare(the_class, tc_row, ibtracs_area,
+                       area_type, area_to_compare):
+    area = {
+        'ibtracs': ibtracs_area,
+        area_type: area_to_compare
+    }
+
+    CompareTable = create_area_compare_table(the_class)
+    row = CompareTable()
+    # Write area and metrics into row
+    row.sid = tc_row.sid
+    row.date_time = tc_row.date_time
+
+    for type in ['ibtracs', area_type]:
+        for idx, r in enumerate(the_class.wind_radii):
+            setattr(row, f'{type}_r{r}_area', float(area[type][idx]))
+    row.sid_date_time = f'{tc_row.sid}_{tc_row.date_time}'
+
+    utils.bulk_insert_avoid_duplicate_unique(
+        [row], the_class.CONFIG['database']\
+        ['batch_size']['insert'],
+        CompareTable, ['sid_date_time'], the_class.session,
+        check_self=True)
+
+def draw_compare_area_bar(ax, ibtracs_area, area_to_compare, data_name,
+                          tc_row):
+    labels = ['R34 area', 'R50 area', 'R64 area']
+    x = np.arange(len(labels))  # the label locations
+    width = 0.35  # the width of the bars
+    rects1 = ax.bar(x - width/2, ibtracs_area, width,
+                     label='IBTrACS')
+    rects2 = ax.bar(x + width/2, area_to_compare, width,
+                    label=data_name)
+
+    set_bar_title_and_so_on(ax, tc_row, labels, x, data_name)
+
+    utils.autolabel(ax, rects1)
+    utils.autolabel(ax, rects2)
+
+def set_bar_title_and_so_on(ax, tc_row, labels, x, data_name):
+    title_prefix = (f'Area within wind radii of IBTrACS '
+                    + f'and area within corresponding contour of '
+                    + f'{data_name}\n of {tc_row.sid}')
+    if tc_row.name is not None:
+        tc_name =  f'({tc_row.name}) '
+    title_suffix = f'on {tc_row.date_time}'
+
+    ax.set_title(f'{title_prefix} {tc_name} {title_suffix}')
+    ax.set_ylabel('Area')
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.legend()
+
+def get_basic_satel_columns():
+    cols = []
+    cols.append(Column('key', Integer, primary_key=True))
+    cols.append(Column('date_time', DateTime, nullable=False))
+    cols.append(Column('x', Integer, nullable=False))
+    cols.append(Column('y', Integer, nullable=False))
+    cols.append(Column('lon', Float, nullable=False))
+    cols.append(Column('lat', Float, nullable=False))
+    cols.append(Column('datetime_x_y', String(20), nullable=False,
+                       unique=True))
+
+    return cols
+
+def get_basic_satel_era5_columns():
+    cols = []
+    cols.append(Column('key', Integer, primary_key=True))
+    cols.append(Column('satel_datetime', DateTime, nullable=False))
+    cols.append(Column('era5_datetime', DateTime, nullable=False))
+    cols.append(Column('x', Integer, nullable=False))
+    cols.append(Column('y', Integer, nullable=False))
+    cols.append(Column('lon', Float, nullable=False))
+    cols.append(Column('lat', Float, nullable=False))
+    cols.append(Column('satel_datetime_x_y', String(50), nullable=False,
+                       unique=True))
+
+    return cols

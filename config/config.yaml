@@ -1,5 +1,13 @@
 logging:
   dir: '../log'
+plot:
+  compare_zorders:
+    coastlines: 4
+    mapboundary: 0
+    contour: 3
+    contourf: 2
+    wedge: 7
+    grid: 10
 match:
   temporal_window:
   - 3600
