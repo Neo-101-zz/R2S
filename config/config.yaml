@@ -104,7 +104,7 @@ era5:
       major: '../data/era5/reanalysis_pressure_levels/surface_wind/major/'
       minor: '../data/era5/reanalysis_pressure_levels/surface_wind/minor/'
     surface_all_vars:
-      to_match_smap: '../data/era5/reanalysis_pressure_levels/surface_all_vars/to_match_smap/'
+      to_match_satel: '../data/era5/reanalysis_pressure_levels/surface_all_vars/to_match_satel/'
       major: '../data/era5/reanalysis_pressure_levels/surface_all_vars/major/'
       minor: '../data/era5/reanalysis_pressure_levels/surface_all_vars/minor/'
 stdmet:
