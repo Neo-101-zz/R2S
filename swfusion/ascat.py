@@ -382,28 +382,6 @@ class ASCATManager(object):
 
         return file_path
 
-    def _generate_wget_str(self, satel_config, query_result_file_name,
-                           start, rows):
-        query_res_file = (f"""{satel_config['dirs']['query_results']}"""
-                          f"""{query_result_file_name}""")
-
-        # Generate query url
-        query_parameters = (f"""(platformname:Sentinel-1 """
-                            f"""AND footprint:\\"Intersects(POLYGON(("""
-                            f"""{satel_config['aoi']})))\\" """
-                            f"""AND producttype:OCN)"""
-                            f"""&orderby=beginposition asc""")
-
-        wget_str = (f"""wget --no-check-certificate """
-                    f"""--user='{satel_config['user']}' """
-                    f"""--password='{satel_config['password']}' """
-                    f"""--output-document='{query_res_file}' """
-                    f"""\"{satel_config['urls']['query']}"""
-                    f"""start={start}"""
-                    f"""&rows={rows}"""
-                    f"""&q={query_parameters}\" """)
-
-        return wget_str, query_res_file
 
     def _get_all_sentinel_1_uuid_and_datetime(self, satel_config):
 
@@ -443,6 +421,7 @@ class ASCATManager(object):
 
                 row = DatetimeUUID()
 
+                row.filename = entry.getchildren()[0].text
                 row.uuid = entry.getchildren()[-1].text
 
                 for date_ in entry.findall(f'./{namespace}date'):
@@ -452,8 +431,6 @@ class ASCATManager(object):
                         row.endposition = self.date_parser(date_.text)
 
                 datetime_uuid.append(row)
-
-        self.datetime_uuid = datetime_uuid
 
         utils.bulk_insert_avoid_duplicate_unique(
             datetime_uuid,
@@ -482,6 +459,8 @@ class ASCATManager(object):
         cols.append(Column('endposition', DateTime, nullable=False))
         cols.append(Column('uuid', String(50), nullable=False,
                            unique=True))
+        cols.append(Column('filename', String(80), nullable=False,
+                           unique=True))
 
         metadata = MetaData(bind=self.engine)
         t = Table(table_name, metadata, *cols)
@@ -504,12 +483,67 @@ class ASCATManager(object):
 
         self._get_all_sentinel_1_uuid_and_datetime(satel_config)
 
+        return None
+
         # Traverse all UUIDs to download all target files
+        DatetimeUUID = self.create_datetime_uuid_table()
+
+        cwd = os.getcwd()
+        os.chdir(satel_config['dirs']['ncs'])
+
+        for row in self.session.query(DatetimeUUID).filter(
+            DatetimeUUID.beginposition > self.period[0],
+            DatetimeUUID.endposition < self.period[1]).yield_per(
+            self.CONFIG['database']['batch_size']['query']):
+            #
+            file_path = self.download_sentinel_1(satel_config, row.uuid,
+                                                 row.filename)
+            if file_path is not None:
+                data_paths.append(file_path)
+
+        os.chdir(cwd)
 
         if len(data_paths):
             return data_paths
         else:
             return None
+
+    def _generate_wget_str(self, satel_config, query_result_file_name,
+                           start, rows):
+        query_res_file = (f"""{satel_config['dirs']['query_results']}"""
+                          f"""{query_result_file_name}""")
+
+        # Generate query url
+        query_parameters = (f"""(platformname:Sentinel-1 """
+                            f"""AND footprint:\\"Intersects(POLYGON(("""
+                            f"""{satel_config['aoi']})))\\" """
+                            f"""AND producttype:OCN)"""
+                            f"""&orderby=beginposition asc""")
+
+        wget_str = (f"""wget --no-check-certificate """
+                    f"""--user='{satel_config['user']}' """
+                    f"""--password='{satel_config['password']}' """
+                    f"""--output-document='{query_res_file}' """
+                    f"""\"{satel_config['urls']['query']}"""
+                    f"""start={start}"""
+                    f"""&rows={rows}"""
+                    f"""&q={query_parameters}\" """)
+
+        return wget_str, query_res_file
+
+    def download_sentinel_1(self, satel_config, uuid, filename):
+        wget_str = (f"""wget --content-disposition --continue """
+                    f"""--user='{satel_config['user']}' """
+                    f"""--password='{satel_config['password']}' """
+                    f"""\"{satel_config['urls']['download']['prefix']}"""
+                    f"""{uuid}"""
+                    f"""{satel_config['urls']['download']['suffix']}\" """)
+        breakpoint()
+
+        os.system(wget_str)
+        file_path = f"""{satel_config['dirs']['ncs']}{filename}.zip"""
+
+        return file_path
 
     def get_query_total_and_namespace(self, xmlfile):
         total = 0
