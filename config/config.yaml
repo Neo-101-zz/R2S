@@ -198,6 +198,34 @@ sfmr:
         Reading general record of hurricanes which have SFMR data
       read_hurr_sfmr: |-
         Reading hurricane SFMR data
+sentinel_1:
+  user: 'neo101'
+  password: '2k24j&B7dz!3'
+  query_rows: 100
+  urls:
+    query: 'https://scihub.copernicus.eu/dhus/search?'
+    download:
+      prefix: 'https://scihub.copernicus.eu/dhus/odata/v1/Products('''
+      suffix: ''')/\$value'
+  period_limit:
+    start: 2014-12-30 00:00:00
+    end: 9999-12-31 23:59:59
+  aoi: >-
+    125 30, 122 30, 118.4 25.0, 113 21.98, 108.5 21.85, 106.0 19.9,
+    105.9 18.3, 108.5 15.71, 109.29 12.8, 108.21 10.9, 104.6 8.5,
+    103.9 10.36, 100.5 13.7, 98 8, 98 4.5, 104.5 0, 109 0, 117 7.1,
+    119.3 5.3, 125 9.67, 125 30
+  data_name_length: 40
+  missing_value:
+    minute: -9999
+    wind: -99.99
+  dirs:
+    query_results: '../data/satel/sentinel_1/query_results/'
+    ncs: '../data/satel/sentinel_1/ncs/'
+  data_prefix: 'RSS_smap_wind_daily_'
+  data_suffix: '_v01.0.nc'
+  files_path:
+    missing_dates: '../data/satel/smap_missing_dates.pkl'
 smap:
   urls: 'http://data.remss.com/smap/wind/L3/v01.0/daily/FINAL/'
   period_limit:
@@ -208,7 +236,7 @@ smap:
     minute: -9999
     wind: -99.99
   dirs:
-    bmaps: '../data/satel/smap_ncs/'
+    ncs: '../data/satel/smap_ncs/'
   data_prefix: 'RSS_smap_wind_daily_'
   data_suffix: '_v01.0.nc'
   files_path:

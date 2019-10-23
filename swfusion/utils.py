@@ -1517,7 +1517,7 @@ def get_basic_satel_era5_columns():
     cols.append(Column('y', Integer, nullable=False))
     cols.append(Column('lon', Float, nullable=False))
     cols.append(Column('lat', Float, nullable=False))
-    cols.append(Column('satel_datetime_x_y', String(50), nullable=False,
+    cols.append(Column('satel_datetime_lon_lat', String(50), nullable=False,
                        unique=True))
 
     return cols

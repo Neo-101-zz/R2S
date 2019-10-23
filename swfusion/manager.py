@@ -30,8 +30,8 @@ def work_flow():
         logger.exception('Exception occurred when loading config.')
     os.makedirs(CONFIG['logging']['dir'], exist_ok=True)
     # Period
-    train_period = [datetime(2016, 7, 1, 0, 0, 0),
-                    datetime(2016, 9, 30, 23, 59, 59)]
+    train_period = [datetime(2018, 6, 30, 0, 0, 0),
+                    datetime(2018, 7, 1, 0, 0, 0)]
     logger.info(f'Period: {train_period}')
     # Region
     region = [0, 30, 98, 125]
