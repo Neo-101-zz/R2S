@@ -428,6 +428,8 @@ class ASCATManager(object):
         rows = 100
         for i in range(math.ceil(total_results /
                                  satel_config['query_rows'])):
+            self.logger.debug((f"""Downloading and parsing {start} - """
+                               f"""{start+99} rows of query result."""))
             start = 100 * i
             wget_str, query_res_file = self._generate_wget_str(
                 satel_config, f'query_result_{start}_{start+99}.xml',
@@ -504,7 +506,10 @@ class ASCATManager(object):
 
         # Traverse all UUIDs to download all target files
 
-        return data_paths
+        if len(data_paths):
+            return data_paths
+        else:
+            return None
 
     def get_query_total_and_namespace(self, xmlfile):
         total = 0
