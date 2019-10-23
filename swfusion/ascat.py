@@ -428,9 +428,9 @@ class ASCATManager(object):
         rows = 100
         for i in range(math.ceil(total_results /
                                  satel_config['query_rows'])):
+            start = 100 * i
             self.logger.debug((f"""Downloading and parsing {start} - """
                                f"""{start+99} rows of query result."""))
-            start = 100 * i
             wget_str, query_res_file = self._generate_wget_str(
                 satel_config, f'query_result_{start}_{start+99}.xml',
                 start, rows)
@@ -446,11 +446,11 @@ class ASCATManager(object):
                 row.uuid = entry.getchildren()[-1].text
 
                 for date_ in entry.findall(f'./{namespace}date'):
-
                     if date_.get('name') == 'beginposition':
                         row.beginposition = self.date_parser(date_.text)
                     elif date_.get('name') == 'endposition':
                         row.endposition = self.date_parser(date_.text)
+
                 datetime_uuid.append(row)
 
         self.datetime_uuid = datetime_uuid
@@ -494,8 +494,8 @@ class ASCATManager(object):
 
     def date_parser(self, date_str):
         # 2014-12-30T13:31:51.933Z
-        dt = datetime.datetime.strptime(date_str.split('.')[0],
-                                        '%Y-%m-%dT%H:%M:%S')
+        dt = datetime.datetime.strptime(
+            date_str.split('.')[0].split('Z')[0], '%Y-%m-%dT%H:%M:%S')
         return dt
 
     def _download_sentinel_1_in_specified_date(self, satel_config,
