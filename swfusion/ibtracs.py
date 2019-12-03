@@ -49,6 +49,9 @@ class IBTrACSManager(object):
 
         self.years = [x for x in range(self.period[0].year,
                                        self.period[1].year+1)]
+        self.lat1, self.lat2 = self.region[0], self.region[1]
+        self.lon1, self.lon2 = self.region[2], self.region[3]
+
         self.download()
 
         utils.reset_signal_handler()
@@ -59,7 +62,7 @@ class IBTrACSManager(object):
         """Create the table which represents TC records from IBTrACS.
 
         """
-        table_name = self.CONFIG['ibtracs']['table_name']
+        table_name = self.CONFIG['ibtracs']['table_name']['scs']
 
         class WMOWPTC(object):
             pass
@@ -120,14 +123,15 @@ class IBTrACSManager(object):
         utils.set_format_custom_text(
             self.CONFIG['ibtracs']['data_name_length'])
 
-        url = self.CONFIG['ibtracs']['urls']['since1980']
+        # url = self.CONFIG['ibtracs']['urls']['since1980']
+        url = self.CONFIG['ibtracs']['urls']['wp']
         file = url.split('/')[-1]
         file = file[:-3].replace('.', '_') + '.nc'
         dir = self.CONFIG['ibtracs']['dirs']
         os.makedirs(dir, exist_ok=True)
-        self.wp_file_path = f'{dir}{file}'
+        self.ibtracs_file_path = f'{dir}{file}'
 
-        utils.download(url, self.wp_file_path, progress=True)
+        utils.download(url, self.ibtracs_file_path, progress=True)
 
     def read(self):
         """Read IBTrACS data into TC table.
@@ -135,7 +139,7 @@ class IBTrACSManager(object):
         """
         self.logger.info('Reading IBTrACS')
         # Read NetCDF file of IBTrACS
-        dataset = Dataset(self.wp_file_path)
+        dataset = Dataset(self.ibtracs_file_path)
         vars = dataset.variables
         # Use data from official WMO agency
         wmo_pres = vars['wmo_pres']
@@ -155,11 +159,13 @@ class IBTrACSManager(object):
             for m in range(12):
                 have_read[year][m+1] = False
 
-        info = f'Reading WMO records in {self.wp_file_path.split("/")[-1]}'
+        info = (f"""Reading WMO records in """
+                f"""{self.ibtracs_file_path.split("/")[-1]}""")
         # Read detail of IBTrACS data
         self._read_detail(vars, storm_num, date_time_num, have_read, info)
 
-    def _read_detail(self, vars, storm_num, date_time_num, have_read, info):
+    def _read_detail(self, vars, storm_num, date_time_num, have_read,
+                     info):
         """Read detail of IBTrACS data.
 
         """
@@ -168,12 +174,20 @@ class IBTrACSManager(object):
         wmo_wp_tcs = []
         WMOWPTC = self.create_tc_table()
 
-        skip_storm = False
+        season_check_offset = self.CONFIG['ibtracs']\
+                ['season_check_offset']
         for i in range(storm_num):
             print(f'\r{info} {i+1}/{total}', end='')
-            # Season is not just the year
-            # if int(vars['season'][i]) not in self.years:
-            #     skip_storm = True
+            # Season is not just the year, so to ensure correctly skipping
+            # loop by checking season, we need to set an offset for
+            # checking season
+            if int(vars['season'][i]) < (self.period[0].year
+                                         - season_check_offset):
+                continue
+            if int(vars['season'][i]) > (self.period[1].year
+                                         + season_check_offset):
+                continue
+
             # Skip this loop is datetime of first record is earlier than
             # start date of period of more than 60 days,
             # or datetime of first record is later than end date of period
@@ -250,8 +264,13 @@ class IBTrACSManager(object):
                 # maximum sustained wind speed from official WMO agency
                 lat = vars['lat'][i][j]
                 lon = vars['lon'][i][j]
+                # breakpoint()
                 if lat is MASKED or lon is MASKED:
                     continue
+                if (lat < self.lat1 or lat > self.lat2
+                    or lon < self.lon1 or lon > self.lon2):
+                    continue
+
                 pres = vars['wmo_pres'][i][j]
                 wind = vars['wmo_wind'][i][j]
                 if pres is MASKED or wind is MASKED:
@@ -284,6 +303,7 @@ class IBTrACSManager(object):
                                     int(sum(radii[r][d])/len(radii[r][d])))
 
                 wmo_wp_tcs.append(row)
+                # breakpoint()
 
         if len(wmo_wp_tcs):
             utils.bulk_insert_avoid_duplicate_unique(

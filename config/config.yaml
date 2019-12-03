@@ -1,13 +1,55 @@
 logging:
   dir: '../log'
+product:
+  temporal_resolution: 600
+satel_names:
+  - 'ascat'
+  - 'wsat'
+  - 'amsr2'
+  - 'smap'
+  - 'sentinel_1'
+ccmp:
+  url: 'http://data.remss.com/ccmp/v02.0/'
+  dir: '../data/ccmp/'
+  file_name:
+    prefix: 'CCMP_Wind_Analysis_'
+    suffix: '_V02.0_L3.0_RSS.nc'
+  file_name_length: 46
+  spatial_resolution: 0.25
+  times_number: 4
+  lat_grid_points_number: 628
+  lon_grid_points_number: 1440
+  missing_value: -9999.0
+isd:
+  urls:
+    csv: 'https://www.ncei.noaa.gov/data/global-hourly/access/'
+  dirs:
+    stations: '../data/isd/stations/'
+    csvs: '../data/isd/csvs/'
+grid:
+  spatial_resolution: 0.05
+  pickle:
+    lons: '../data/grid/lons.pkl'
+    lats: '../data/grid/lats.pkl'
+    x: '../data/grid/x.pkl'
+    y: '../data/grid/y.pkl'
 plot:
-  compare_zorders:
-    coastlines: 4
-    mapboundary: 0
-    contour: 3
-    contourf: 2
-    wedge: 7
-    grid: 10
+  zorders:
+    compare:
+      coastlines: 4
+      mapboundary: 0
+      contour: 3
+      contourf: 2
+      wedge: 7
+      grid: 10
+    scs_basemap:
+      coastlines: 4
+      mapboundary: 0
+      continents: 8
+      contour: 3
+      contourf: 2
+      wedge: 9
+      grid: 10
 match:
   temporal_window:
   - 3600
@@ -34,7 +76,10 @@ hwind:
     East Pacific Basin: 'EP'
     West Pacific Basin: 'WP'
 ibtracs:
-  table_name: 'ibtracs'
+  season_check_offset: 5
+  table_name:
+    scs: 'ibtracs_scs'
+    normal: 'ibtracs'
   urls:
     wp: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.WP.v04r00.nc'
     since1980: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.since1980.v04r00.nc'
@@ -103,6 +148,7 @@ era5:
     surface_wind:
       major: '../data/era5/reanalysis_pressure_levels/surface_wind/major/'
       minor: '../data/era5/reanalysis_pressure_levels/surface_wind/minor/'
+      tc: '../data/era5/reanalysis_pressure_levels/surface_wind/tc/'
     surface_all_vars:
       to_match_satel: '../data/era5/reanalysis_pressure_levels/surface_all_vars/to_match_satel/'
       major: '../data/era5/reanalysis_pressure_levels/surface_all_vars/major/'
@@ -372,3 +418,87 @@ workflow:
         End datetime is too late. Must not be later than
       time_flow_backward: |-
         Start datetime is later than end datetime.
+regression:
+  dirs:
+    checkpoint: '../train/checkpoint/'
+  target:
+    ascat:
+      - 'u_wind'
+      - 'v_wind'
+    wsat:
+      - 'u_wind_aw'
+      - 'v_wind_aw'
+    amsr2:
+      - 'u_wind_avg'
+      - 'v_wind_avg'
+    smap:
+      - 'u_wind'
+      - 'v_wind'
+    sentinel_1:
+      - 'u_wind'
+      - 'v_wind'
+  useless_columns:
+    era5:
+      - 'key'
+      - 'land'
+      - 'x_y'
+    ascat:
+      - 'key'
+      - 'satel_datetime'
+      - 'era5_datetime'
+      - 'satel_datetime_lon_lat'
+      - 'windspd'
+      - 'winddir'
+      - 'scatflag'
+      - 'radrain'
+    wsat:
+      - 'key'
+      - 'satel_datetime'
+      - 'era5_datetime'
+      - 'satel_datetime_lon_lat'
+      - 'w_lf'
+      - 'w_mf'
+      - 'w_aw'
+      - 'winddir'
+      - 'u_wind_lf'
+      - 'v_wind_lf'
+      - 'u_wind_mf'
+      - 'v_wind_mf'
+      - 'sst'
+      - 'vapor'
+      - 'cloud'
+      - 'rain'
+    amsr2:
+      - 'key'
+      - 'satel_datetime'
+      - 'era5_datetime'
+      - 'satel_datetime_lon_lat'
+      - 'wind_lf'
+      - 'wind_mf'
+      - 'u_wind_lf'
+      - 'v_wind_lf'
+      - 'u_wind_mf'
+      - 'v_wind_mf'
+      - 'sst'
+      - 'vapor'
+      - 'cloud'
+      - 'rain'
+    smap:
+      - 'key'
+      - 'satel_datetime'
+      - 'era5_datetime'
+      - 'satel_datetime_lon_lat'
+      - 'windspd'
+    sentinel_1:
+      - 'key'
+      - 'satel_datetime'
+      - 'era5_datetime'
+      - 'satel_datetime_lon_lat'
+      - 'ecmwf_windspd'
+      - 'ecmwf_winddir'
+      - 'ecmwf_u_wind'
+      - 'ecmwf_v_wind'
+      - 'windspd'
+      - 'winddir'
+      - 'inversion_quality'
+      - 'wind_quality'

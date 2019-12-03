@@ -43,16 +43,8 @@ class Regression(object):
         self.save_disk = save_disk
 
         self.smap_columns = ['x', 'y', 'lon', 'lat', 'windspd']
-        self.era5_columns = ['divergence', 'fraction_of_cloud_cover',
-                             'geopotential', 'ozone_mass_mixing_ratio',
-                             'potential_vorticity', 'relative_humidity',
-                             'specific_cloud_ice_water_content',
-                             'specific_cloud_liquid_water_content',
-                             'specific_humidity',
-                             'specific_rain_water_content',
-                             'specific_snow_water_content', 'temperature',
-                             'u_component_of_wind', 'v_component_of_wind',
-                             'vertical_velocity', 'vorticity_relative']
+        self.era5_columns = self.CONFIG['era5']['all_vars']
+
         self.smap_era5_useless_columns = [
             'key', 'match_sid',
             'temporal_window_mins',
@@ -77,7 +69,7 @@ class Regression(object):
 
         self.predict_table_name_prefix = 'predicted_smap_tc'
 
-        self.compare_zorders = self.CONFIG['plot']['compare_zorders']
+        self.compare_zorders = self.CONFIG['plot']['zorders']['compare']
 
         self.wind_radii = self.CONFIG['wind_radii']
 
@@ -260,7 +252,7 @@ class Regression(object):
         train_data, test_data = self._get_train_test()
         combined, target, train_length = self.get_combined_data()
 
-        num_cols = self.get_cols_with_no_nans(combined, 'num')
+        num_cols = utils.get_dataframe_cols_with_no_nans(combined, 'num')
         # print ('Number of numerical columns with no nan values :',
         #        len(num_cols))
 
@@ -302,31 +294,6 @@ class Regression(object):
         train, test = train_test_split(df, test_size=0.2)
 
         return train, test
-
-    def get_cols_with_no_nans(self, df, col_type):
-        '''
-        Arguments :
-        df : The dataframe to process
-        col_type : 
-              num : to only get numerical columns with no nans
-              no_num : to only get nun-numerical columns with no nans
-              all : to get any columns with no nans    
-        '''
-        if (col_type == 'num'):
-            predictors = df.select_dtypes(exclude=['object'])
-        elif (col_type == 'no_num'):
-            predictors = df.select_dtypes(include=['object'])
-        elif (col_type == 'all'):
-            predictors = df
-        else :
-            print('Error : choose a type (num, no_num, all)')
-            return 0
-        cols_with_no_nans = []
-        for col in predictors.columns:
-            if not df[col].isnull().any():
-                cols_with_no_nans.append(col)
-
-        return cols_with_no_nans
 
     def _show_dataframe(self, df):
         df.hist(column=self.era5_columns, figsize = (12,10))

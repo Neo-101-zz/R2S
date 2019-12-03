@@ -22,6 +22,12 @@ from sqlalchemy import Integer, Float, String, DateTime, Boolean
 from sqlalchemy import Table, Column, MetaData
 from sqlalchemy.orm import mapper
 from sqlalchemy import tuple_
+from mpl_toolkits.basemap import Basemap
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+import matplotlib.pyplot as plt
+from matplotlib import patches as mpatches
+import pygrib
+from global_land_mask import globe
 
 from amsr2_daily import AMSR2daily
 from ascat_daily import ASCATDaily
@@ -37,6 +43,7 @@ current_file = None
 DEGREE_OF_ONE_NMILE = float(1)/60
 KM_OF_ONE_NMILE = 1.852
 KM_OF_ONE_DEGREE = KM_OF_ONE_NMILE / DEGREE_OF_ONE_NMILE
+RADII_LEVELS = [34, 50, 64]
 
 def delete_last_lines(n=1):
     CURSOR_UP_ONE = '\x1b[1A'
@@ -49,7 +56,7 @@ def delete_last_lines(n=1):
 
 def setup_signal_handler():
     """Arrange handler for several signal.
-    
+
     Parameters
     ----------
     None
@@ -701,15 +708,20 @@ def bulk_insert_avoid_duplicate_unique(total_sample, batch_size,
                 pass
             else:
                 inserts.append(data)
-        if inserts:
-            # session.add_all(inserts)
-            session.bulk_insert_mappings(
-                table_class,
-                [
-                    row2dict(record)
-                    for record in inserts
-                ],
-            )
+
+        try:
+            if inserts:
+                # session.add_all(inserts)
+                session.bulk_insert_mappings(
+                    table_class,
+                    [
+                        row2dict(record)
+                        for record in inserts
+                    ],
+                )
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
 
     session.commit()
 
@@ -1157,6 +1169,7 @@ def setup_database(the_class, Base):
     # password_ = input(PROMPT['input']['db_root_password'])
     password_ = the_class.db_root_passwd
     HOST = DB_CONFIG['host']
+    PORT = DB_CONFIG['port']
     DB_NAME = DB_CONFIG['db_name']
     ARGS = DB_CONFIG['args']
 
@@ -1171,8 +1184,8 @@ def setup_database(the_class, Base):
     mysql_connector.close()
 
     # Define the MySQL engine using MySQL Connector/Python
-    connect_string = ('{0}://{1}:{2}@{3}/{4}?{5}'.format(
-        DBAPI, USER, password_, HOST, DB_NAME, ARGS))
+    connect_string = ('{0}://{1}:{2}@{3}:{4}/{5}?{6}'.format(
+        DBAPI, USER, password_, HOST, PORT, DB_NAME, ARGS))
     the_class.engine = create_engine(connect_string, echo=False)
     # Create table of the class
     Base.metadata.create_all(the_class.engine)
@@ -1355,12 +1368,21 @@ def get_radii_from_tc_row(tc_row):
 
     return radii
 
-def draw_ibtracs_radii(ax, center, radii, wind_radii, zorders):
-    radii_color = {34: 'yellow', 50: 'orange', 64: 'red'}
+def get_tc_center(tc_row):
+    lon_converted = tc_row.lon + 360 if tc_row.lon < 0 else tc_row.lon
+    center = (lon_converted, tc_row.lat)
+
+    return center
+
+def draw_ibtracs_radii(ax, tc_row, zorders):
+    center = get_tc_center(tc_row)
+    tc_radii = get_radii_from_tc_row(tc_row)
+    # radii_color = {34: 'yellow', 50: 'orange', 64: 'red'}
+    radii_hatch = {34: '-', 50: 'x', 64: 'o'}
     dirs = ['ne', 'se', 'sw', 'nw']
     ibtracs_area = []
 
-    for r in wind_radii:
+    for r in RADII_LEVELS:
         area_in_radii = 0
         for idx, dir in enumerate(dirs):
             if tc_radii[r][dir] is None:
@@ -1372,7 +1394,9 @@ def draw_ibtracs_radii(ax, center, radii, wind_radii, zorders):
                     r=tc_radii[r][dir]*DEGREE_OF_ONE_NMILE,
                     theta1=idx*90, theta2=(idx+1)*90,
                     zorder=zorders['wedge'],
-                    color=radii_color[r], alpha=0.6)
+                    #color=radii_color[r], alpha=0.6
+                    fill=False, hatch=radii_hatch[r]
+                )
             )
 
             radii_in_km = tc_radii[r][dir] * KM_OF_ONE_NMILE
@@ -1382,14 +1406,14 @@ def draw_ibtracs_radii(ax, center, radii, wind_radii, zorders):
 
     return ibtracs_area
 
-def get_area_within_radii(ax, lats, lons, windspd, wind_radii):
+def get_area_within_radii(ax, lats, lons, windspd):
     X, Y = np.meshgrid(lons, lats)
     Z = windspd
 
-    cs = ax.contour(X, Y, Z, levels=wind_radii)
+    cs = ax.contour(X, Y, Z, levels=RADII_LEVELS)
     area = []
-    for i in range(len(wind_radii)):
-        if windspd.max() < wind_radii[i]:
+    for i in range(len(RADII_LEVELS)):
+        if windspd.max() < RADII_LEVELS[i]:
             area.append(0)
             continue
 
@@ -1410,7 +1434,7 @@ def create_area_compare_table(the_class):
     """Get table of ERA5 reanalysis.
 
     """
-    table_name = f'wind_radii_area_compare'
+    table_name = f'RADII_LEVELS_area_compare'
 
     class WindRadiiAreaCompare(object):
         pass
@@ -1427,7 +1451,7 @@ def create_area_compare_table(the_class):
     cols.append(Column('sid', String(13), nullable=False))
     cols.append(Column('date_time', DateTime, nullable=False))
     for type in ['ibtracs', 'era5', 'smap']:
-        for r in the_class.wind_radii:
+        for r in RADII_LEVELS:
             col_name = f'{type}_r{r}_area'
             cols.append(Column(col_name, Float, nullable=False))
     cols.append(Column('sid_date_time', String(50), nullable=False,
@@ -1456,7 +1480,7 @@ def write_area_compare(the_class, tc_row, ibtracs_area,
     row.date_time = tc_row.date_time
 
     for type in ['ibtracs', area_type]:
-        for idx, r in enumerate(the_class.wind_radii):
+        for idx, r in enumerate(RADII_LEVELS):
             setattr(row, f'{type}_r{r}_area', float(area[type][idx]))
     row.sid_date_time = f'{tc_row.sid}_{tc_row.date_time}'
 
@@ -1521,3 +1545,339 @@ def get_basic_satel_era5_columns():
                        unique=True))
 
     return cols
+
+class GetChildDataIndices(object):
+    def __init__(self, grid_pts, lats, lons, owi_az_size):
+        self.grid_pts = grid_pts
+        self.lats = lats
+        self.lons = lons
+        self.owi_az_size = owi_az_size
+
+def get_data_indices_around_grid_pts(workload):
+    grid_pts = workload.grid_pts
+    lats = workload.lats
+    lons = workload.lons
+    owi_az_size = workload.owi_az_size
+
+    total = len(grid_pts) * owi_az_size
+    count = 0
+    pt_region_data_indices = []
+
+    for pt_idx, pt in enumerate(grid_pts):
+        pt_region_data_indices.append(list())
+
+        for i in range(owi_az_size):
+            count += 1
+            percent = float(count) / total * 100
+            print((f"""\rTask ({os.getpid()} """
+                   f"""is getting data indices around ocean """
+                   f"""grid points {percent:.2f}%"""),
+                  end = '')
+
+            lat_row, lon_row = lats[i], lons[i]
+            lat_match_indices = [i for i,v in enumerate(
+                abs(lat_row - pt.lat) < 0.025) if v]
+            lon_match_indices = [i for i,v in enumerate(
+                abs(lon_row - pt.lon) < 0.025) if v]
+
+            match_indices = np.intersect1d(lat_match_indices,
+                                           lon_match_indices)
+            for j in match_indices:
+                pt_region_data_indices[pt_idx].append((i, j))
+
+    delete_last_lines()
+    print('Done')
+
+    return pt_region_data_indices
+
+def gen_satel_era5_tablename(satel_name, dt):
+    return f'{satel_name}_{dt.year}_{str(dt.month).zfill(2)}'
+
+def backtime_to_last_entire_hour(dt):
+    # Initial datetime is not entire-houred
+    if dt.minute or dt.second or dt.microsecond:
+        dt = dt.replace(second=0, microsecond=0, minute=0,
+                        hour=dt.hour)
+
+    return dt
+
+def forwardtime_to_next_entire_hour(dt):
+    # Initial datetime is not entire-houred
+    dt = (dt.replace(second=0, microsecond=0, minute=0,
+                     hour=dt.hour)
+          + datetime.timedelta(hours=1))
+
+    return dt
+
+def load_grid_lonlat_xy(the_class):
+    grid_pickles = the_class.CONFIG['grid']['pickle']
+
+    for key in grid_pickles.keys():
+        with open(grid_pickles[key], 'rb') as f:
+            var = pickle.load(f)
+
+        setattr(the_class, f'grid_{key}', var)
+
+def draw_SCS_basemap(the_class, ax):
+    map = Basemap(llcrnrlon=the_class.lon1, llcrnrlat=the_class.lat1,
+                  urcrnrlon=the_class.lon2, urcrnrlat=the_class.lat2,
+                  ax=ax, resolution='h')
+
+    map.drawcoastlines(zorder=the_class.zorders['coastlines'])
+    map.drawmapboundary(fill_color='white',
+                        zorder=the_class.zorders['mapboundary'])
+    map.fillcontinents(color='grey', lake_color='white',
+                       zorder=the_class.zorders['continents'])
+
+    map.drawmeridians(np.arange(100, 126, 5), labels=[1, 0, 0, 1],
+                      zorder=the_class.zorders['grid'])
+    map.drawparallels(np.arange(0, 31, 5), labels=[1, 0 , 0, 1],
+                      zorder=the_class.zorders['grid'])
+
+def decompose_wind(windspd, winddir, input_convention):
+    """Decompose windspd with winddir into u and v component of wind.
+
+    Parameters
+    ----------
+    windspd: float
+        Wind speed.
+    winddir: float
+        Wind direction in degree.  It increases clockwise from North
+        when viewed from above.
+    input_convention: str
+        Convention of inputted wind direction.  'o' means oceanographic
+        convention and 'm' means meteorological convention.
+
+    Returns
+    -------
+    u_wind: float
+        U component of wind.  None if input is invalid.
+    v_wind: float
+        V component of wind.  None if input is invalid.
+
+    """
+    if windspd is None or winddir is None:
+        return None, None
+
+    # Oceanographic convention
+    if input_convention == 'o':
+        u_wind = windspd * math.sin(math.radians(winddir))
+        v_wind = windspd * math.cos(math.radians(winddir))
+    # Meteorological convention
+    elif input_convention == 'm':
+        u_wind = -windspd * math.sin(math.radians(winddir))
+        v_wind = -windspd * math.cos(math.radians(winddir))
+
+    return u_wind, v_wind
+
+def compose_wind(u_wind, v_wind, output_convention):
+    """Compose windspd and winddir from u and v component of wind.
+
+    Parameters
+    ----------
+    u_wind: float
+        U component of wind.
+    v_wind: float
+        V component of wind.
+    output_convention: str
+        Convention of output wind direction.  'o' means oceanographic
+        convention and 'm' means meteorological convention.
+
+    Returns
+    -------
+    windspd: float
+        Wind speed.
+    winddir: float
+        Wind direction in degree.  It increases clockwise from North
+        when viewed from above.
+
+    """
+    windspd = math.sqrt(u_wind ** 2 + v_wind ** 2)
+
+    # Oceanographic convention
+    if output_convention == 'o':
+        winddir = math.degrees(math.atan2(u_wind, v_wind))
+    # Meteorological convention
+    elif output_convention == 'm':
+        winddir = math.degrees(math.atan2(-u_wind, -v_wind))
+
+    winddir = (winddir + 360) % 360
+
+    return windspd, winddir
+
+def get_dataframe_cols_with_no_nans(df, col_type):
+    '''
+    Arguments :
+    df : The dataframe to process
+    col_type : 
+          num : to only get numerical columns with no nans
+          no_num : to only get nun-numerical columns with no nans
+          all : to get any columns with no nans    
+    '''
+    if (col_type == 'num'):
+        predictors = df.select_dtypes(exclude=['object'])
+    elif (col_type == 'no_num'):
+        predictors = df.select_dtypes(include=['object'])
+    elif (col_type == 'all'):
+        predictors = df
+    else :
+        print('Error : choose a type (num, no_num, all)')
+        return 0
+    cols_with_no_nans = []
+    for col in predictors.columns:
+        if not df[col].isnull().any():
+            cols_with_no_nans.append(col)
+
+    return cols_with_no_nans
+
+def gen_scs_era5_table_name(dt_cursor, hourtime):
+    table_name = (f"""era5_scs_{dt_cursor.strftime('%Y_%m%d')}"""
+                  f"""_{str(hourtime).zfill(4)}""")
+
+    return table_name
+
+def draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
+                               wind_zorder, max_windspd, mesh):
+    if mesh:
+        X, Y = np.meshgrid(lons, lats)
+    else:
+        X, Y = lons, lats
+    Z = windspd
+
+    # windspd_levels = [5*x for x in range(1, 15)]
+    windspd_levels = np.linspace(0, max_windspd, 10)
+
+    # cs = ax.contour(X, Y, Z, levels=windspd_levels,
+    #                 zorder=self.zorders['contour'], colors='k')
+    # ax.clabel(cs, inline=1, colors='k', fontsize=10)
+    try:
+        cf = ax.contourf(X, Y, Z, levels=windspd_levels,
+                         zorder=wind_zorder,
+                         cmap=plt.cm.rainbow)
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes('right', size='5%', pad=0.05)
+
+    fig.colorbar(cf, cax=cax, orientation='vertical', format='%.1f')
+
+def draw_ccmp_windspd(the_class, fig, ax, dt, lons, lats, windspd,
+                      max_windspd):
+    draw_SCS_basemap(the_class, ax)
+
+    draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
+                               the_class.zorders['contourf'],
+                               max_windspd, mesh=True)
+
+def draw_windspd(the_class, fig, ax, dt, lons, lats, windspd,
+                 max_windspd, mesh):
+    draw_SCS_basemap(the_class, ax)
+
+    draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
+                               the_class.zorders['contourf'],
+                               max_windspd, mesh)
+
+def draw_era5_wind(the_class, fig, ax, dt, lons, lats, winspd,
+                   max_windspd):
+    draw_SCS_basemap(the_class, ax)
+
+    draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
+                               the_class.zorders['contourf'],
+                               max_windspd, mesh=False)
+
+def get_nearest_element_and_index(list_, element):
+    ae = [abs(element - x) for x in list_]
+    match_index = ae.index(min(ae))
+
+    return list_[match_index], match_index
+
+def get_xyz_of_ccmp_windspd(ccmp_file_path, dt, region):
+    ccmp_hours = [0, 6, 12, 18]
+    if dt.hour not in ccmp_hours:
+        return None, None, None
+    else:
+        hour_idx = ccmp_hours.index(dt.hour)
+
+    spa_resolu = 0.25
+
+    ccmp_lats = [y * spa_resolu - 78.375 for y in range(628)]
+    ccmp_lons = [x * spa_resolu + 0.125 for x in range(1440)]
+
+    region[0], lat1_idx = get_nearest_element_and_index(ccmp_lats,
+                                                        region[0])
+    region[1], lat2_idx = get_nearest_element_and_index(ccmp_lats,
+                                                        region[1])
+    region[2], lon1_idx = get_nearest_element_and_index(ccmp_lons,
+                                                        region[2])
+    region[3], lon2_idx = get_nearest_element_and_index(ccmp_lons,
+                                                        region[3])
+    lons = list(np.arange(region[2], region[3] + 0.5 * spa_resolu,
+                          spa_resolu))
+    lats = list(np.arange(region[0], region[1] + 0.5 * spa_resolu,
+                          spa_resolu))
+    lons = [round(x, 2) for x in lons]
+    lats = [round(y, 2) for y in lats]
+    windspd = np.ndarray(shape=(len(lats), len(lons)), dtype=float)
+
+    vars = netCDF4.Dataset(ccmp_file_path).variables
+    u_wind = vars['uwnd'][hour_idx]\
+            [lat1_idx:lat2_idx+1, lon1_idx:lon2_idx+1]
+    v_wind = vars['vwnd'][hour_idx]\
+            [lat1_idx:lat2_idx+1, lon1_idx:lon2_idx+1]
+
+    for y in range(len(lats)):
+        for x in range(len(lons)):
+            try:
+                if not bool(globe.is_land(lats[y], lons[x])):
+                    # For safe, maybe should check whether wind
+                    # component is masked
+                    windspd[y][x] = math.sqrt(u_wind[y][x] ** 2
+                                              + v_wind[y][x] ** 2)
+                else:
+                    windspd[y][x] = 0
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
+
+    return lons, lats, windspd
+
+def get_xyz_of_era5_windspd(era5_file_path, dt, region):
+    grbidx = pygrib.index(era5_file_path, 'dataTime')
+    hourtime = dt.hour * 100
+    selected_grbs = grbidx.select(dataTime=hourtime)
+
+    u_wind = None
+    v_wind = None
+
+    for grb in selected_grbs:
+        name = grb.name.replace(" ", "_").lower()
+
+        data, lats, lons = grb.data(region[0], region[1],
+                                    region[2], region[3])
+        data = np.flip(data, 0)
+        lats = np.flip(lats, 0)
+        lons = np.flip(lons, 0)
+
+        if name == 'u_component_of_wind':
+            u_wind = data
+        elif name == 'v_component_of_wind':
+            v_wind = data
+
+    lats_num, lons_num = u_wind.shape
+    windspd = np.ndarray(shape=u_wind.shape, dtype=float)
+    for y in range(lats_num):
+        for x in range(lons_num):
+            try:
+                if not bool(globe.is_land(lats[y][x], lons[y][x])):
+                    windspd[y][x] = math.sqrt(u_wind[y][x] ** 2
+                                              + v_wind[y][x] ** 2)
+                else:
+                    windspd[y][x] = 0
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
+
+    return lons, lats, windspd
+

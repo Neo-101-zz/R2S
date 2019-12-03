@@ -12,7 +12,7 @@ import cdsapi
 import pygrib
 import numpy as np
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Integer, Float, String, DateTime
+from sqlalchemy import Integer, Float, String, DateTime, Boolean
 from sqlalchemy import Column
 from sqlalchemy.schema import Table, MetaData
 from sqlalchemy.orm import mapper
@@ -20,6 +20,7 @@ import numpy as np
 from mpl_toolkits.basemap import Basemap
 from matplotlib import patches as mpatches
 import matplotlib.pyplot as plt
+from global_land_mask import globe
 
 import ibtracs
 import utils
@@ -34,7 +35,8 @@ class ERA5Manager(object):
     sources except TC table from IBTrACS.
 
     """
-    def __init__(self, CONFIG, period, region, passwd, work, save_disk):
+    def __init__(self, CONFIG, period, region, passwd, work, save_disk,
+                 work_mode, vars_mode):
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
@@ -45,6 +47,8 @@ class ERA5Manager(object):
 
         self.logger = logging.getLogger(__name__)
 
+        self.lat1, self.lat2 = region[0], region[1]
+        self.lon1, self.lon2 = region[2], region[3]
         self.years = [x for x in range(self.period[0].year,
                                        self.period[1].year+1)]
         self.main_hours = self.CONFIG['era5']['main_hours']
@@ -74,15 +78,42 @@ class ERA5Manager(object):
 
         self.wind_radii = self.CONFIG['wind_radii']
 
+        self.grid_pts = dict()
+
+        self.grid_pts['era5'] = dict()
+        self.grid_pts['era5']['lat'] = [
+            y * self.spa_resolu - 90 for y in range(
+                self.CONFIG['era5']['lat_grid_points_number'])
+        ]
+        self.grid_pts['era5']['lon'] = [
+            x * self.spa_resolu for x in range(
+                self.CONFIG['era5']['lon_grid_points_number'])
+        ]
+
+        self.zorders = self.CONFIG['plot']['zorders']['compare']
+
         utils.setup_database(self, Base)
 
-        if work:
-            self.download_and_read('surface_all_vars')
+        self.grid_lons = None
+        self.grid_lats = None
+        self.grid_x = None
+        self.grid_y = None
+        # Load 4 variables above
+        utils.load_grid_lonlat_xy(self)
 
-    def get_era5_columns(self):
+        if work:
+            # work_mode: 'scs' / 'tc'
+            # vars_mode: 'surface_all_vars' / 'threeD' / 'surface_wind'
+            self.download_and_read(work_mode, vars_mode)
+            # self.download_and_read('tc', 'surface_all_vars')
+
+    def get_era5_columns(self, satel_era5_time_diff=True):
         cols = []
 
-        cols.append(Column('satel_era5_diff_mins', Integer, nullable=False))
+        if satel_era5_time_diff:
+            cols.append(Column('satel_era5_diff_mins', Integer,
+                               nullable=False))
+
         for var in self.all_vars:
             if var == 'vorticity':
                 var = 'vorticity_relative'
@@ -90,7 +121,7 @@ class ERA5Manager(object):
 
         return cols
 
-    def get_era5_table_names(self, mode):
+    def get_era5_table_names(self, vars_mode):
         table_names = []
         # Get TC table and count its row number
         tc_table_name = self.CONFIG['ibtracs']['table_name']
@@ -110,7 +141,7 @@ class ERA5Manager(object):
             hit, lat1, lat2, lon1, lon2 = \
                     utils.get_subset_range_of_grib(
                         row.lat, row.lon, self.lat_grid_points,
-                        self.lon_grid_points, self.edge, mode='era5',
+                        self.lon_grid_points, self.edge, vars_mode='era5',
                         spatial_resolution=self.spa_resolu)
             if not hit:
                 continue
@@ -130,18 +161,18 @@ class ERA5Manager(object):
             # Get name, sqlalchemy Table class and python original class
             # of ERA5 table
             table_name, sa_table, ERA5Table = self.get_era5_table_class(
-                mode, row.sid, tc_datetime)
+                vars_mode, row.sid, tc_datetime)
 
             table_names.append(table_name)
 
         return table_names
 
-    def get_era5_table_class(self, mode, sid, dt):
+    def get_era5_table_class(self, vars_mode, sid, dt):
         """Get table of ERA5 reanalysis.
 
         """
         dt_str = dt.strftime('%Y_%m%d_%H%M')
-        table_name = f'era5_tc_{mode}_{sid}_{dt_str}'
+        table_name = f'era5_tc_{vars_mode}_{sid}_{dt_str}'
 
         class ERA5(object):
             pass
@@ -158,26 +189,26 @@ class ERA5Manager(object):
         cols.append(Column('x', Integer, nullable=False))
         cols.append(Column('y', Integer, nullable=False))
 
-        if mode == 'threeD':
+        if vars_mode == 'threeD':
             cols.append(Column('z', Integer, nullable=False))
 
         cols.append(Column('lon', Float, nullable=False))
         cols.append(Column('lat', Float, nullable=False))
 
-        if mode == 'threeD':
+        if vars_mode == 'threeD':
             cols.append(Column('pres_lvl', Integer, nullable=False))
             cols.append(Column('x_y_z', String(20), nullable=False,
                                unique=True))
             for var in self.threeD_vars:
                 cols.append(Column(var, Float))
 
-        elif mode == 'surface_wind':
+        elif vars_mode == 'surface_wind':
             cols.append(Column('x_y', String(20), nullable=False,
                                unique=True))
             for var in self.wind_vars:
                 cols.append(Column(var, Float))
 
-        elif mode == 'surface_all_vars':
+        elif vars_mode == 'surface_all_vars':
             cols.append(Column('x_y', String(20), nullable=False,
                                unique=True))
             for var in self.all_vars:
@@ -191,11 +222,23 @@ class ERA5Manager(object):
 
         return table_name, t, ERA5
 
-    def download_all_surface_vars_of_whole_day(
-        self, target_datetime):
+    def download_surface_vars_of_whole_day(self, vars_mode,
+                                           target_datetime):
         era5_dirs = self.CONFIG['era5']['dirs']
-        file_path = (f'{era5_dirs["surface_all_vars"]["to_match_satel"]}'
-                     + target_datetime.strftime('%Y_%m%d.grib'))
+
+        if vars_mode == 'surface_all_vars':
+            file_path = (
+                f"""{era5_dirs["surface_all_vars"]["to_match_satel"]}"""
+                f"""{target_datetime.strftime('%Y_%m%d.grib')}"""
+            )
+            variables = self.all_vars
+        elif vars_mode == 'surface_wind':
+            file_path = (
+                f"""{era5_dirs["surface_wind"]["tc"]}"""
+                f"""{target_datetime.strftime('%Y_%m%d.grib')}"""
+            )
+            variables = self.wind_vars
+
         if os.path.exists(file_path):
             return file_path
 
@@ -205,7 +248,7 @@ class ERA5Manager(object):
         request = {
             'product_type':'reanalysis',
             'format':'grib',
-            'variable': self.all_vars,
+            'variable': variables,
             'pressure_level':'1000',
             'year':f'{target_datetime.year}',
             'month':str(target_datetime.month).zfill(2),
@@ -220,7 +263,7 @@ class ERA5Manager(object):
 
         return file_path
 
-    def download_major(self, mode, file_path, year, month):
+    def download_major(self, vars_mode, file_path, year, month):
         """Download major of ERA5 data which consists of main hour
         (0, 6, 12, 18 h) data in one month.
 
@@ -237,13 +280,13 @@ class ERA5Manager(object):
             'time':list(self.dt_major[year][month]['time'])
         }
 
-        if mode == 'threeD':
+        if vars_mode == 'threeD':
             request['variable'] = self.threeD_vars
             request['pressure_level'] = self.threeD_pres_lvl
-        elif mode == 'surface_wind':
+        elif vars_mode == 'surface_wind':
             request['variable'] = self.wind_vars
             request['pressure_level'] = self.surface_pres_lvl
-        elif mode == 'surface_all_vars':
+        elif vars_mode == 'surface_all_vars':
             request['variable'] = self.all_vars
             request['pressure_level'] = self.surface_pres_lvl
 
@@ -252,7 +295,7 @@ class ERA5Manager(object):
             request,
             file_path)
 
-    def download_minor(self, mode, file_path, year, month, day_str):
+    def download_minor(self, vars_mode, file_path, year, month, day_str):
         """Download minor of ERA5 data which consists of hours except
         (0, 6, 12, 18 h) data in one day.
 
@@ -269,13 +312,13 @@ class ERA5Manager(object):
             'time':list(self.dt_minor[year][month][day_str])
         }
 
-        if mode == 'threeD':
+        if vars_mode == 'threeD':
             request['variable'] = self.threeD_vars
             request['pressure_level'] = self.threeD_pres_lvl
-        elif mode == 'surface_wind':
+        elif vars_mode == 'surface_wind':
             request['variable'] = self.wind_vars
             request['pressure_level'] = self.surface_pres_lvl
-        elif mode == 'surface_all_vars':
+        elif vars_mode == 'surface_all_vars':
             request['variable'] = self.all_vars
             request['pressure_level'] = self.surface_pres_lvl
 
@@ -284,23 +327,57 @@ class ERA5Manager(object):
             request,
             file_path)
 
-    def download_and_read(self, mode):
+    def download_and_read(self, work_mode, vars_mode):
         """Download and read ERA5 data.
 
         """
-        self.logger.info((f'Downloading and reading ERA5 reanalysis: '
-                          + f'{mode} mode'))
+        if work_mode == 'tc':
+            self.download_and_read_tc_oriented(vars_mode)
+        elif work_mode == 'scs':
+            self.download_and_read_scs_oriented(vars_mode)
+
+    def download_and_read_scs_oriented(self, vars_mode):
+        self.logger.info((f"""SCS-orientedly downloading and """
+                          f"""reading ERA5 reanalysis"""))
+        delta = self.period[1] - self.period[0]
+
+        if delta.seconds > 0:
+            days_num = delta.days + 1
+        else:
+            days_num = delta.days
+
+        for day in range(days_num):
+            dt_cursor = self.period[0] + datetime.timedelta(days=day)
+
+            self.logger.info((f"""Downloading ERA5 data on """
+                              f"""{dt_cursor.strftime('%Y-%m-%d')}"""))
+            file_path = self.download_surface_vars_of_whole_day(
+                 vars_mode, dt_cursor)
+
+            self.logger.info((f"""Reading SCS ERA5 data on """
+                              f"""{dt_cursor.strftime('%Y-%m-%d')}"""))
+            self.read('scs', vars_mode, file_path, dt_cursor)
+            if self.save_disk:
+                os.remove(file_path)
+
+    def download_and_read_tc_oriented(self, vars_mode):
+        self.logger.info((f"""TC-orientedly downloading and reading """
+                          f"""ERA5 reanalysis: {vars_mode} mode"""))
         self._get_target_datetime()
 
-        if mode == 'threeD':
+        if vars_mode == 'threeD':
             major_dir = self.CONFIG['era5']['dirs']['threeD']['major']
             minor_dir = self.CONFIG['era5']['dirs']['threeD']['minor']
-        elif mode == 'surface_wind':
-            major_dir = self.CONFIG['era5']['dirs']['surface_wind']['major']
-            minor_dir = self.CONFIG['era5']['dirs']['surface_wind']['minor']
-        elif mode == 'surface_all_vars':
-            major_dir = self.CONFIG['era5']['dirs']['surface_all_vars']['major']
-            minor_dir = self.CONFIG['era5']['dirs']['surface_all_vars']['minor']
+        elif vars_mode == 'surface_wind':
+            major_dir = self.CONFIG['era5']['dirs']['surface_wind']\
+                    ['major']
+            minor_dir = self.CONFIG['era5']['dirs']['surface_wind']\
+                    ['minor']
+        elif vars_mode == 'surface_all_vars':
+            major_dir = self.CONFIG['era5']['dirs']['surface_all_vars']\
+                    ['major']
+            minor_dir = self.CONFIG['era5']['dirs']['surface_all_vars']\
+                    ['minor']
 
         os.makedirs(major_dir, exist_ok=True)
         os.makedirs(minor_dir, exist_ok=True)
@@ -313,10 +390,11 @@ class ERA5Manager(object):
                 self.logger.info(f'Downloading major {file_path}')
 
                 if not os.path.exists(file_path):
-                    self.download_major(mode, file_path, year, month)
+                    self.download_major(vars_mode, file_path, year,
+                                        month)
 
                 self.logger.info(f'Reading major {file_path}')
-                self.read(mode, file_path)
+                self.read('tc', vars_mode, file_path)
                 if self.save_disk:
                     os.remove(file_path)
 
@@ -330,11 +408,11 @@ class ERA5Manager(object):
                     self.logger.info(f'Downloading minor {file_path}')
 
                     if not os.path.exists(file_path):
-                        self.download_minor(mode, file_path, year, month,
+                        self.download_minor(vars_mode, file_path, year, month,
                                             day_str)
 
                     self.logger.info(f'Reading minor {file_path}')
-                    self.read(mode, file_path)
+                    self.read('tc', vars_mode, file_path)
                     if self.save_disk:
                         os.remove(file_path)
 
@@ -354,16 +432,6 @@ class ERA5Manager(object):
         radii = {34: r34, 50: r50, 64: r64}
 
         return radii
-
-    def _set_compare_zorders(self):
-        self.zorders = {
-            'coastlines': 4,
-            'mapboundary': 0,
-            'contour': 3,
-            'contourf': 2,
-            'wedge': 7,
-            'grid': 10
-        }
 
     def _get_compare_latlon(self, surface):
         lons = set()
@@ -412,10 +480,10 @@ class ERA5Manager(object):
         # draw parallels and meridians.
         # label parallels on right and top
         # meridians on bottom and left
-        parallels = np.arange(int(lat1), int(lat2), 2.)
+        parallels = np.arange(int(lat1), int(lat2), 2)
         # labels = [left,right,top,bottom]
         map.drawparallels(parallels,labels=[False,True,True,False])
-        meridians = np.arange(int(lon1), int(lon2), 2.)
+        meridians = np.arange(int(lon1), int(lon2), 2)
         map.drawmeridians(meridians,labels=[True,False,False,True])
 
     def _get_compare_era5_windspd(self, surface, lats, lons):
@@ -504,17 +572,16 @@ class ERA5Manager(object):
         utils.autolabel(ax, rects1)
         utils.autolabel(ax, rects2)
 
-    def compare_ibtracs_era5(self, mode, ibtracs_table_row, ERA5Table,
-                             draw, draw_map, draw_bar):
-        self._set_compare_zorders()
+    def compare_ibtracs_era5(self, vars_mode, ibtracs_table_row,
+                             ERA5Table, draw, draw_map, draw_bar):
         tc_row = ibtracs_table_row
         lon_converted = tc_row.lon + 360 if tc_row.lon < 0 else tc_row.lon
         radii = self._get_radii_from_tc_row(tc_row)
 
-        if mode == 'threeD':
+        if vars_mode == 'threeD':
             surface = self.session.query(ERA5Table).filter(
                 ERA5Table.z == 11)
-        elif mode == 'surface_wind' or mode == 'surface_all_vars':
+        elif vars_mode == 'surface_wind' or vars_mode == 'surface_all_vars':
             surface = self.session.query(ERA5Table)
 
         lats, lons = self._get_compare_latlon(surface)
@@ -629,7 +696,143 @@ class ERA5Manager(object):
 
         return WindRadiiAreaCompare
 
-    def read(self, mode, file_path):
+    def read(self, work_mode, vars_mode, file_path, dt_cursor):
+        if work_mode == 'tc':
+            self.read_tc_oriented(vars_mode, file_path)
+        elif work_mode == 'scs':
+            self.read_scs_oriented(vars_mode, file_path, dt_cursor)
+
+    def read_scs_oriented(self, vars_mode, file_path, dt_cursor):
+        # Open ERA5 grib data and read 6-hourly
+        grbidx = pygrib.index(file_path, 'dataTime')
+
+        for hourtime in range(0, 2400,
+                              self.CONFIG['product']\
+                              ['temporal_resolution']):
+
+            # Create ERA5 table for SCS
+            SCSERA5 = self.create_scs_era5_table(dt_cursor, hourtime)
+
+            selected_grbs = grbidx.select(dataTime=hourtime)
+            # Generate frame of one 6-hour SCS ERA5 table
+            table_entity = self.gen_scs_era5_entity(SCSERA5)
+
+            total = len(selected_grbs)
+
+            for idx, grb in enumerate(selected_grbs):
+                info = (f"""\rReading grbs on hour """
+                        f"""{int(hourtime/100)} {idx+1}/{total}""")
+                print(f'\r{info}', end='')
+                # Traverse all data point in ERA5 grib message,
+                # find corresponding row in SCS ERA5 table frame
+                # and fill its environmental variables
+                table_entity = self.fill_scs_era5_table_entity(
+                    grb, table_entity)
+
+                # Temporarily not interpolate the space between
+                # ERA5 0.25 degree grid points
+
+                # Method_1: conventional interpolation methods
+
+                # Method_2: GAN
+
+            # Insert entity into database
+            utils.bulk_insert_avoid_duplicate_unique(
+                table_entity, self.CONFIG['database']\
+                ['batch_size']['insert'],
+                SCSERA5, ['x_y'], self.session,
+                check_self=True)
+            utils.delete_last_lines()
+        print('Done')
+
+    def fill_scs_era5_table_entity(self, grb, table_entity):
+        data, lats, lons = grb.data(-90, 90, 0, 360)
+        data = np.flip(data, 0)
+
+        # Generate name which is the same with table column
+        name = grb.name.replace(" ", "_").lower()
+        if name == 'vorticity_(relative)':
+            name = 'vorticity_relative'
+
+        for row in table_entity:
+            if (row.lat not in self.grid_pts['era5']['lat']
+                or row.lon not in self.grid_pts['era5']['lon']):
+                continue
+            lat_idx = self.grid_pts['era5']['lat'].index(row.lat)
+            lon_idx = self.grid_pts['era5']['lon'].index(row.lon)
+            setattr(row, name, float(data[lat_idx][lon_idx]))
+
+        return table_entity
+
+    def gen_scs_era5_entity(self, SCSERA5):
+        entity = []
+        lons_num = int((self.lon2 - self.lon1) / self.spa_resolu) + 1
+        lats_num = int((self.lat2 - self.lat1) / self.spa_resolu) + 1
+        # Traverse through meridians first
+        for lon in np.linspace(self.lon1, self.lon2, lons_num):
+            x = self.grid_lons.index(lon)
+
+            # Traverse through parallels then
+            for lat in np.linspace(self.lat1, self.lat2, lats_num):
+                is_land = bool(globe.is_land(lat, lon))
+                if is_land:
+                    continue
+
+                y = self.grid_lats.index(lat)
+
+                row = SCSERA5()
+                row.x = x
+                row.y = y
+                row.lon = float(lon)
+                row.lat = float(lat)
+                row.land = is_land
+                row.x_y = f'{x}_{y}'
+                row.satel_era5_diff_mins = 0
+
+                entity.append(row)
+
+        return entity
+
+    def create_scs_era5_table(self, dt_cursor, hourtime):
+        table_name = utils.gen_scs_era5_table_name(dt_cursor, hourtime)
+
+        class SCSERA5(object):
+            pass
+
+        if self.engine.dialect.has_table(self.engine, table_name):
+            metadata = MetaData(bind=self.engine, reflect=True)
+            t = metadata.tables[table_name]
+            mapper(SCSERA5, t)
+
+            return SCSERA5
+
+        cols = []
+
+        cols.append(Column('key', Integer, primary_key=True))
+        cols.append(Column('x', Integer, nullable=False))
+        cols.append(Column('y', Integer, nullable=False))
+        cols.append(Column('lon', Float, nullable=False))
+        cols.append(Column('lat', Float, nullable=False))
+        cols.append(Column('land', Boolean, nullable=False))
+        cols.append(Column('x_y', String(30), nullable=False,
+                           unique=True))
+
+        # cols.append(Column('grid_pt_key', Integer, primary_key=True))
+
+        era5_cols = self.get_era5_columns()
+
+        cols = cols + era5_cols
+
+        metadata = MetaData(bind=self.engine)
+        t = Table(table_name, metadata, *cols)
+        metadata.create_all()
+        mapper(SCSERA5, t)
+
+        self.session.commit()
+
+        return SCSERA5
+
+    def read_tc_oriented(self, vars_mode, file_path):
         # load grib file
         grbs = pygrib.open(file_path)
 
@@ -656,7 +859,7 @@ class ERA5Manager(object):
             hit, lat1, lat2, lon1, lon2 = \
                     utils.get_subset_range_of_grib(
                         row.lat, row.lon, self.lat_grid_points,
-                        self.lon_grid_points, self.edge, mode='era5',
+                        self.lon_grid_points, self.edge, vars_mode='era5',
                         spatial_resolution=self.spa_resolu)
             if not hit:
                 continue
@@ -679,11 +882,11 @@ class ERA5Manager(object):
             # Get name, sqlalchemy Table class and python original class
             # of ERA5 table
             table_name, sa_table, ERA5Table = self.get_era5_table_class(
-                mode, row.sid, tc_datetime)
+                vars_mode, row.sid, tc_datetime)
 
             # Create entity of ERA5 table
             era5_table_entity = self._gen_whole_era5_table_entity(
-                mode, ERA5Table, lat1, lat2, lon1, lon2)
+                vars_mode, ERA5Table, lat1, lat2, lon1, lon2)
 
             # Record number of successfully reading data matrix of ERA5
             # grib file near TC center
@@ -704,7 +907,7 @@ class ERA5Manager(object):
                     continue
 
                 # extract corresponding data matrix in ERA5 reanalysis
-                read_hit = self._read_grb_matrix(mode, era5_table_entity,
+                read_hit = self._read_grb_matrix(vars_mode, era5_table_entity,
                                                  grb, lat1, lat2, lon1,
                                                  lon2)
                 if read_hit:
@@ -723,13 +926,13 @@ class ERA5Manager(object):
 
             # Write extracted data matrix into DB
             start = time.process_time()
-            if mode == 'threeD':
+            if vars_mode == 'threeD':
                 utils.bulk_insert_avoid_duplicate_unique(
                     era5_table_entity,
                     int(self.CONFIG['database']['batch_size']['insert']/10),
                     ERA5Table, ['x_y_z'], self.session,
                     check_self=True)
-            elif mode == 'surface_wind' or mode == 'surface_all_vars':
+            elif vars_mode == 'surface_wind' or vars_mode == 'surface_all_vars':
                 utils.bulk_insert_avoid_duplicate_unique(
                     era5_table_entity,
                     int(self.CONFIG['database']['batch_size']['insert']/10),
@@ -740,12 +943,12 @@ class ERA5Manager(object):
             self.logger.debug((f'Bulk inserting ERA5 data into '
                                + f'{table_name} in {end-start:2f} s'))
 
-            self.compare_ibtracs_era5(mode, row, ERA5Table, draw=True,
+            self.compare_ibtracs_era5(vars_mode, row, ERA5Table, draw=True,
                                       draw_map=True, draw_bar=False)
         utils.delete_last_lines()
         print('Done')
 
-    def _gen_whole_era5_table_entity(self, mode, ERA5Table,
+    def _gen_whole_era5_table_entity(self, vars_mode, ERA5Table,
                                      lat1, lat2, lon1, lon2):
         """Generate entity of ERA5 table. It represents a threeD grid of
         which center of bottom is the closest grid point near TC
@@ -755,7 +958,7 @@ class ERA5Manager(object):
         entity = []
         half_edge_indices = (self.edge / 2 / self.spa_resolu)
 
-        if mode == 'threeD':
+        if vars_mode == 'threeD':
             for x in range(self.threeD_grid['lon_axis']):
                 for y in range(self.threeD_grid['lat_axis']):
                     for z in range(self.threeD_grid['height']):
@@ -771,7 +974,7 @@ class ERA5Manager(object):
 
                         entity.append(pt)
 
-        elif mode == 'surface_wind' or mode == 'surface_all_vars':
+        elif vars_mode == 'surface_wind' or vars_mode == 'surface_all_vars':
             for x in range(self.threeD_grid['lon_axis']):
                 for y in range(self.threeD_grid['lat_axis']):
                     pt = ERA5Table()
@@ -786,7 +989,7 @@ class ERA5Manager(object):
 
         return entity
 
-    def _read_grb_matrix(self, mode, era5, grb, lat1, lat2, lon1, lon2):
+    def _read_grb_matrix(self, vars_mode, era5, grb, lat1, lat2, lon1, lon2):
         """Read data matrix of ERA5 of particular variable in particular
         pressure level.
 
@@ -808,7 +1011,7 @@ class ERA5Manager(object):
         name = grb.name.replace(" ", "_").lower()
         if name == 'vorticity_(relative)':
             name = 'vorticity_relative'
-        if mode == 'threeD':
+        if vars_mode == 'threeD':
             z = self.threeD_pres_lvl.index(str(grb.level))
         hit_count = 0
 
@@ -848,12 +1051,12 @@ class ERA5Manager(object):
                 value = float( sum(corners) / len(corners) )
 
                 hit_count += 1
-                if mode == 'threeD':
+                if vars_mode == 'threeD':
                     index = ((x * self.threeD_grid['lat_axis'] * \
                               self.threeD_grid['height'])
                              + y * self.threeD_grid['height']
                              + z)
-                elif mode == 'surface_wind' or mode == 'surface_all_vars':
+                elif vars_mode == 'surface_wind' or vars_mode == 'surface_all_vars':
                     index = x * self.threeD_grid['lat_axis'] + y
 
                 setattr(era5[index], name, value)

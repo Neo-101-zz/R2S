@@ -6,13 +6,19 @@ import math
 import logging
 import pickle
 import operator
+import random
 import re
 import os
+import signal
 import time
 import sys
 import xml.etree.ElementTree as ET
+import zipfile
+from statistics import mean
+from multiprocessing import Pool
 
 from geopy import distance
+import requests
 import mysql.connector
 from sqlalchemy import create_engine, extract
 from sqlalchemy.ext.declarative import declarative_base
@@ -26,16 +32,20 @@ import numpy as np
 from matplotlib.patches import Polygon
 import netCDF4
 import pygrib
+import pandas as pd
+import scipy
 
 import utils
 import cwind
 import sfmr
 import era5
+import grid
 
 MASKED = np.ma.core.masked
 Base = declarative_base()
+current_file = None
 
-class ASCATManager(object):
+class SCSSatelManager(object):
     """Manage features of satellite data that are not related to other data
     sources except TC table from IBTrACS.
 
@@ -44,6 +54,7 @@ class ASCATManager(object):
     def __init__(self, CONFIG, period, region, passwd, save_disk):
         self.logger = logging.getLogger(__name__)
         # self.satel_names = ['ascat', 'wsat', 'amsr2', 'smap']
+        # self.satel_names = ['sentinel_1']
         self.satel_names = ['sentinel_1']
 
         self.CONFIG = CONFIG
@@ -60,29 +71,33 @@ class ASCATManager(object):
                                        self.period[1].year+1)]
 
         self.edge = self.CONFIG['rss']['subset_edge_in_degree']
-        self.spa_resolu = self.CONFIG['rss']['spatial_resolution']
-        self.lat_grid_points = [
-            y * self.spa_resolu - 89.875 for y in range(
+
+        self.spa_resolu = dict()
+        self.spa_resolu['rss'] = self.CONFIG['rss']['spatial_resolution']
+        self.spa_resolu['grid'] = self.CONFIG['grid']\
+                ['spatial_resolution']
+
+        self.grid_pts = dict()
+
+        self.grid_pts['rss'] = dict()
+        self.grid_pts['rss']['lat'] = [
+            y * self.spa_resolu['rss'] - 89.875 for y in range(
                 self.CONFIG['rss']['lat_grid_points_number'])
         ]
-        self.lon_grid_points = [
-            x * self.spa_resolu + 0.125 for x in range(
+        self.grid_pts['rss']['lon'] = [
+            x * self.spa_resolu['rss'] + 0.125 for x in range(
                 self.CONFIG['rss']['lon_grid_points_number'])
         ]
-        self._get_region_corners_indices()
-        self.era5_lat_grid_points = [
-            y * self.spa_resolu - 90 for y in range(
+
+        self.grid_pts['era5'] = dict()
+        self.grid_pts['era5']['lat'] = [
+            y * self.spa_resolu['rss'] - 90 for y in range(
                 self.CONFIG['era5']['lat_grid_points_number'])
         ]
-        self.era5_lon_grid_points = [
-            x * self.spa_resolu for x in range(
+        self.grid_pts['era5']['lon'] = [
+            x * self.spa_resolu['rss'] for x in range(
                 self.CONFIG['era5']['lon_grid_points_number'])
         ]
-
-        # Size of 3D grid points around TC center
-        self.grid_2d = dict()
-        self.grid_2d['lat_axis'] = self.grid_2d['lon_axis'] = int(
-            self.edge/self.spa_resolu) + 1
 
         self.missing_value = dict()
         for satel_name in self.satel_names:
@@ -96,19 +111,28 @@ class ASCATManager(object):
                 self.missing_value[satel_name]['wind'] = \
                         self.CONFIG[satel_name]['missing_value']['wind']
 
+        self._get_region_corners_indices()
         utils.setup_database(self, Base)
+
+        self.grid_lons = None
+        self.grid_lats = None
+        self.grid_x = None
+        self.grid_y = None
+        # Load 4 variables above
+        utils.load_grid_lonlat_xy(self)
+
         # self.download_and_read_tc_oriented()
         self.download_and_read()
 
     def _get_region_corners_indices(self):
-        self.lat1_index = self.lat_grid_points.index(self.lat1 - 0.5 *
-                                                     self.spa_resolu)
-        self.lat2_index = self.lat_grid_points.index(self.lat2 + 0.5 *
-                                                     self.spa_resolu)
-        self.lon1_index = self.lon_grid_points.index(self.lon1 - 0.5 *
-                                                     self.spa_resolu)
-        self.lon2_index = self.lon_grid_points.index(self.lon2 + 0.5 *
-                                                     self.spa_resolu)
+        self.lat1_index = self.grid_pts['rss']['lat'].index(
+            self.lat1 + 0.5 * self.spa_resolu['rss'])
+        self.lat2_index = self.grid_pts['rss']['lat'].index(
+            self.lat2 - 0.5 * self.spa_resolu['rss'])
+        self.lon1_index = self.grid_pts['rss']['lon'].index(
+            self.lon1 + 0.5 * self.spa_resolu['rss'])
+        self.lon2_index = self.grid_pts['rss']['lon'].index(
+            self.lon2 - 0.5 * self.spa_resolu['rss'])
 
     def create_satel_era5_table(self, satel_name, target_datetime):
         if satel_name == 'ascat':
@@ -119,12 +143,12 @@ class ASCATManager(object):
             SatelERA5 = self.create_amsr2_era5_table(target_datetime)
         elif satel_name == 'smap':
             SatelERA5 = self.create_smap_era5_table(target_datetime)
+        elif satel_name == 'sentinel_1':
+            SatelERA5 = self.create_sentinel_1_table(target_datetime)
 
         return SatelERA5
 
     def download_and_read(self):
-
-        utils.setup_signal_handler()
 
         dt_delta = self.period[1] - self.period[0]
 
@@ -155,27 +179,34 @@ class ASCATManager(object):
 
             for satel_name in self.satel_names:
                 # Download satellite data
-                satel_data_path = self.download(satel_name, target_datetime)
-                utils.reset_signal_handler()
+                satel_data_path = self.download(satel_name,
+                                                target_datetime)
                 if satel_data_path is None:
                     continue
-                # Download ERA5 data
-                self.logger.debug((f'Downloading all surface ERA5 '
-                                   + f'data of all hours on '
-                                   + f'{target_datetime.date()}'))
 
                 # Get satellite table
-                SatelERA5 = self.create_satel_era5_table(satel_name,
-                                                         target_datetime)
+                SatelERA5 = self.create_satel_era5_table(
+                    satel_name, target_datetime)
                 self.logger.debug((f'Reading {satel_name} and ERA5 '
                                    + f'data on '
                                    + f'{target_datetime.date()}'))
                 self.read_satel_era5(satel_name, satel_data_path,
                                      era5_data_path, SatelERA5,
                                      target_datetime.date())
+
             if self.save_disk:
                 os.remove(era5_data_path['today'])
             breakpoint()
+
+    def get_grid_pts_in_range(self, min_lon, max_lon, min_lat, max_lat):
+        Grid = grid.Grid
+
+        pts = self.session.query(Grid).filter(
+            Grid.lon > min_lon, Grid.lon < max_lon,
+            Grid.lat > min_lat, Grid.lat < max_lat,
+            Grid.land == False)
+
+        return pts
 
     def read_satel_era5(self, satel_name, satel_data_path,
                         era5_data_path, SatelERA5, target_date):
@@ -204,18 +235,22 @@ class ASCATManager(object):
 
         # Then add ERA5 part
         self.logger.debug(f'Adding ERA5 part from {era5_data_path}')
-        satel_era5_data = self._add_era5_part(satel_part, era5_data_path,
-                                              target_date)
+        satel_era5_data = self._add_era5_part(
+            satel_name, satel_part, era5_data_path, target_date)
 
         return satel_era5_data
 
     def _get_satel_part(self, satel_name, satel_data_path, SatelERA5,
                         target_date):
-        self.logger.info((f'Getting {satel_name} part from '
-                         + f'{satel_data_path}'))
+        info = f'Getting {satel_name} part'
+        if satel_name != 'sentinel_1':
+            self.logger.info(f'{info} from {satel_data_path}')
+        else:
+            self.logger.info(info)
+
         missing = self.CONFIG[satel_name]['missing_value']
 
-        if satel_name != 'smap':
+        if satel_name != 'smap' and satel_name != 'sentinel_1':
             dataset = utils.dataset_of_daily_satel(satel_name,
                                                    satel_data_path)
             vars = dataset.variables
@@ -229,19 +264,24 @@ class ASCATManager(object):
             elif satel_name == 'amsr2':
                 satel_part = self._get_amsr2_part(vars, SatelERA5,
                                                  target_date, missing)
-        else:
+        elif satel_name == 'smap':
             dataset = netCDF4.Dataset(satel_data_path)
-            # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which faster
-            # than 1 m/s, so must disable auto mask
+
+            # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which
+            # faster than 1 m/s, so must disable auto mask
             dataset.set_auto_mask(False)
             vars = dataset.variables
 
             satel_part = self._get_smap_part(vars, SatelERA5,
-                                              target_date, missing)
+                                             target_date, missing)
+        elif satel_name == 'sentinel_1':
+            satel_part = self._get_sentinel_1_part(
+                satel_data_path, SatelERA5, target_date)
 
         return satel_part
 
-    def _add_era5_part(self, satel_part, era5_data_path, target_date):
+    def _add_era5_part(self, satel_name, satel_part, era5_data_path,
+                       target_date):
         """
         Attention
         ---------
@@ -309,30 +349,134 @@ class ASCATManager(object):
                         row.satel_era5_diff_mins = \
                                 satel_minute - grb_minute
 
-                        lat1, lat2, lon1, lon2 = self._get_corners_of_cell(
-                            row.lon, row.lat)
-                        if lon2 == 360:
-                            lon2 = 0
-                        corners = []
-                        for lat in [lat1, lat2]:
-                            for lon in [lon1, lon2]:
-                                lat_idx = self.era5_lat_grid_points.index(
-                                    lat)
-                                lon_idx = self.era5_lon_grid_points.index(
-                                    lon)
-                                corners.append(data[lat_idx][lon_idx])
+                        if satel_name != 'sentinel_1':
+                            lat1, lat2, lon1, lon2 = \
+                                    self._get_era5_corners_of_rss_cell(
+                                        row.lon, row.lat)
+                            if lon2 == 360:
+                                lon2 = 0
+                            corners = []
+                            for lat in [lat1, lat2]:
+                                for lon in [lon1, lon2]:
+                                    lat_idx = self.grid_pts['era5']\
+                                            ['lat'].index(lat)
+                                    lon_idx = self.grid_pts['era5']\
+                                            ['lon'].index(lon)
+                                    corners.append(
+                                        data[lat_idx][lon_idx])
 
-                        value = float( sum(corners) / len(corners) )
-                        setattr(row, name, value)
+                            value = float(sum(corners) / len(corners))
+                            setattr(row, name, value)
+                        else:
+                            lat1, lat2, lon1, lon2 = \
+                                    self._get_era5_corners_of_scs_cell(
+                                        row.lon, row.lat)
+
+                            corners = []
+                            for lat in [lat1, lat2]:
+                                row_of_lat = []
+                                for lon in [lon1, lon2]:
+                                    lat_idx = self.grid_pts['era5']\
+                                            ['lat'].index(lat)
+                                    lon_idx = self.grid_pts['era5']\
+                                            ['lon'].index(lon)
+
+                                    row_of_lat.append(
+                                        data[lat_idx][lon_idx])
+                                corners.append(row_of_lat)
+
+                            f = scipy.interpolate.interp2d(
+                                [lon1, lon2], [lat1, lat2], corners)
+
+                            # From x * 0.25 to (x + 1) * 0.25,
+                            # there are 6 points at the intervel of
+                            # 0.05
+                            xnew = [x * 0.05 + lon1 for x in range(6)]
+                            ynew = [y * 0.05 + lat1 for y in range(6)]
+                            znew = f(xnew, ynew)
+
+                            x_idx = xnew.index(row.lon)
+                            y_idx = ynew.index(row.lat)
+                            value = float(znew[y_idx][x_idx])
+                            setattr(row, name, value)
 
             grbidx.close()
 
         utils.delete_last_lines()
         print('Done')
 
+        if satel_name == 'amsr2' or satel_name == 'smap':
+            satel_part = self.decompose_radiometer_wind_by_era5(
+                satel_name, satel_part)
+            if satel_name == 'amsr2':
+                satel_part = self.cal_avg_u_v_wind_of_amsr2(satel_part)
+
         return satel_part
 
-    def _get_corners_of_cell(self, lon, lat):
+    def cal_avg_u_v_wind_of_amsr2(self, satel_part):
+        for row in satel_part:
+            row.u_wind_avg = 0.5 * (row.u_wind_lf + row.u_wind_mf)
+            row.v_wind_avg = 0.5 * (row.v_wind_lf + row.v_wind_mf)
+
+        return satel_part
+
+    def decompose_radiometer_wind_by_era5(self, satel_name,
+                                          satel_part):
+        windspd_and_uv_col_name = {
+            'amsr2': {
+                'wind_lf': ['u_wind_lf', 'v_wind_lf'],
+                'wind_mf': ['u_wind_mf', 'v_wind_mf']
+            },
+            'smap': {
+                'windspd': ['u_wind', 'v_wind']
+            }
+        }
+
+        for row in satel_part:
+            winddir = math.degrees(
+                math.atan2(row.u_component_of_wind,
+                           row.v_component_of_wind)
+            )
+            for windspd_name in windspd_and_uv_col_name[satel_name]:
+                windspd = getattr(row, windspd_name)
+                u_wind, v_wind = utils.decompose_wind(windspd, winddir,
+                                                      'o')
+                setattr(row, windspd_and_uv_col_name[satel_name]\
+                        [windspd_name][0], u_wind)
+                setattr(row, windspd_and_uv_col_name[satel_name]\
+                        [windspd_name][1], v_wind)
+
+        return satel_part
+
+    def _get_era5_corners_of_scs_cell(self, lon, lat):
+        if lon < 0 or lat < 0:
+            self.logger.error((f"""SCS grid point's lon or """
+                               f"""lat is negative"""))
+
+        lon_frac_part, lon_inte_part = math.modf(lon)
+        lat_frac_part, lat_inte_part = math.modf(lat)
+
+        era5_frac_parts = np.arange(0.0, 1.01, 0.25)
+
+        for start_idx in range(len(era5_frac_parts) - 1):
+            start = era5_frac_parts[start_idx]
+            end = era5_frac_parts[start_idx + 1]
+
+            if lon_frac_part >= start and lon_frac_part < end:
+                lon1 = start + lon_inte_part
+                lon2 = end + lon_inte_part
+
+            if lat_frac_part >= start and lat_frac_part < end:
+                lat1 = start + lat_inte_part
+                lat2 = end + lat_inte_part
+
+        try:
+            return lat1, lat2, lon1, lon2
+        except NameError:
+            self.logger.error((f"""Fail getting ERA5 corners """
+                               f"""of SCS grid cell"""))
+
+    def _get_era5_corners_of_rss_cell(self, lon, lat):
         delta = self.CONFIG['rss']['spatial_resolution'] * 0.5
         lat1 = lat - delta
         lat2 = lat + delta
@@ -373,15 +517,75 @@ class ASCATManager(object):
 
         satel_config = self.CONFIG[satel_name]
         satel_date = target_datetime.date()
+
         if satel_name != 'sentinel_1':
+
+            utils.setup_signal_handler()
             file_path = self._download_satel_data_in_specified_date(
                 satel_config, satel_name, satel_date)
+            utils.reset_signal_handler()
+
         else:
+
+            self._setup_signal_handler()
             file_path = self._download_sentinel_1_in_specified_date(
-                satel_config, satel_date)
+                satel_config, satel_date, have_uuid_table=True)
+            self._reset_signal_handler()
 
         return file_path
 
+    def _setup_signal_handler(self):
+        """Arrange handler for several signal.
+
+        Parameters
+        ----------
+        None
+            Nothing required by this function.
+
+        Returns
+        -------
+        None
+            Nothing returned by this function.
+
+        """
+        signal.signal(signal.SIGINT, self._handler)
+        signal.signal(signal.SIGHUP, self._handler)
+        signal.signal(signal.SIGTERM, self._handler)
+
+    def _reset_signal_handler(self):
+        global current_file
+        current_file = None
+
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+
+    def _handler(self, signum, frame):
+        """Handle forcing quit which may be made by pressing Control + C and
+        sending SIGINT which will interupt this application.
+
+        Parameters
+        ----------
+        signum : int
+            Signal number which is sent to this application.
+        frame : ?
+            Current stack frame.
+
+        Returns
+        -------
+        None
+            Nothing returned by this function.
+
+        """
+        # Remove file that is downloaded currently in case forcing quit
+        # makes this file uncomplete
+        global current_file
+        if current_file is not None:
+            os.remove(current_file)
+            info = f'Removing uncompleted downloaded file: {current_file}'
+            self.logger.info(info)
+        # Print log
+        print('\nForce quit on %s.\n' % signum)
+        # Force quit
+        sys.exit(1)
 
     def _get_all_sentinel_1_uuid_and_datetime(self, satel_config):
 
@@ -478,12 +682,11 @@ class ASCATManager(object):
         return dt
 
     def _download_sentinel_1_in_specified_date(self, satel_config,
-                                               satel_date):
+                                               satel_date, have_uuid_table):
         data_paths = []
 
-        self._get_all_sentinel_1_uuid_and_datetime(satel_config)
-
-        return None
+        if not have_uuid_table:
+            self._get_all_sentinel_1_uuid_and_datetime(satel_config)
 
         # Traverse all UUIDs to download all target files
         DatetimeUUID = self.create_datetime_uuid_table()
@@ -491,10 +694,12 @@ class ASCATManager(object):
         cwd = os.getcwd()
         os.chdir(satel_config['dirs']['ncs'])
 
+        the_day = satel_date
         for row in self.session.query(DatetimeUUID).filter(
-            DatetimeUUID.beginposition > self.period[0],
-            DatetimeUUID.endposition < self.period[1]).yield_per(
-            self.CONFIG['database']['batch_size']['query']):
+            extract('year', DatetimeUUID.beginposition) == the_day.year,
+            extract('month', DatetimeUUID.beginposition) == the_day.month,
+            extract('day', DatetimeUUID.beginposition) == the_day.day
+        ).yield_per(self.CONFIG['database']['batch_size']['query']):
             #
             file_path = self.download_sentinel_1(satel_config, row.uuid,
                                                  row.filename)
@@ -532,16 +737,67 @@ class ASCATManager(object):
         return wget_str, query_res_file
 
     def download_sentinel_1(self, satel_config, uuid, filename):
-        wget_str = (f"""wget --content-disposition --continue """
-                    f"""--user='{satel_config['user']}' """
-                    f"""--password='{satel_config['password']}' """
-                    f"""\"{satel_config['urls']['download']['prefix']}"""
-                    f"""{uuid}"""
-                    f"""{satel_config['urls']['download']['suffix']}\" """)
-        breakpoint()
 
-        os.system(wget_str)
-        file_path = f"""{satel_config['dirs']['ncs']}{filename}.zip"""
+        cwd = os.getcwd()
+        test_existence_file_path = (f"""{cwd}/{filename}.zip""")
+
+        if os.path.exists(test_existence_file_path):
+            return test_existence_file_path
+
+        file_path = None
+        # Checking products availability with OData
+        url = (f"""https://scihub.copernicus.eu/dhus/odata/v1/"""
+               f"""Products('{uuid}')/Online/$value""")
+        page = requests.get(url, auth=(satel_config['user'],
+                                       satel_config['password']))
+        if page.status_code != 200:
+            self.logger.error((f"""Failed checking Sentinel products """
+                               f"""availability with OData: """
+                               f"""{url}"""))
+            return file_path
+
+        online_str = page.text
+        need_trigger_by_wget = False
+
+        if online_str == 'false':
+            self.logger.info((f"""Sentinel product is offline: """
+                              f"""{filename}"""))
+
+            # Triggering the retrieval of offline products
+            trigger_url = (f"""https://scihub.copernicus.eu/dhus/odata/"""
+                           f"""v1/Products('{uuid}')/$value""")
+            trigger_page = requests.get(
+                url, auth=(satel_config['user'],
+                           satel_config['password']))
+
+            if trigger_page.status_code == 202:
+                self.logger.info((f"""Successfully triggers the """
+                                  f"""retrieval of offline product: """
+                                  f"""{filename}"""))
+            else:
+                self.logger.debug((f"""Failed SIMPLY triggering the """
+                                  f"""retrieval of offline product: """
+                                  f"""{filename}"""))
+                need_trigger_by_wget = True
+
+        if online_str == 'true' or need_trigger_by_wget:
+            if online_str == 'true':
+                file_path = test_existence_file_path
+                self.logger.debug((f"""Downloading Sentinel product: """
+                                   f"""{filename}"""))
+
+            elif need_trigger_by_wget:
+                self.logger.info((f"""Using wget to trigger the """
+                                  f"""retrieval of offline product: """
+                                  f"""{filename}"""))
+
+            wget_str = (f"""wget --content-disposition --continue """
+                        f"""--user='{satel_config['user']}' """
+                        f"""--password='{satel_config['password']}' """
+                        f"""\"{satel_config['urls']['download']['prefix']}"""
+                        f"""{uuid}"""
+                        f"""{satel_config['urls']['download']['suffix']}\" """)
+            os.system(wget_str)
 
         return file_path
 
@@ -628,7 +884,7 @@ class ASCATManager(object):
         return file_path
 
     def create_ascat_era5_table(self, dt):
-        table_name = f'ascat_{dt.year}_{str(dt.month).zfill(2)}'
+        table_name = utils.gen_satel_era5_tablename('ascat', dt)
 
         class Satel(object):
             pass
@@ -641,8 +897,13 @@ class ASCATManager(object):
             return Satel
 
         cols = utils.get_basic_satel_era5_columns()
+
         cols.append(Column('windspd', Float, nullable=False))
         cols.append(Column('winddir', Float, nullable=False))
+
+        cols.append(Column('u_wind', Float, nullable=False))
+        cols.append(Column('v_wind', Float, nullable=False))
+
         cols.append(Column('scatflag', Boolean, nullable=False))
         cols.append(Column('radrain', Float, nullable=False))
 
@@ -662,7 +923,7 @@ class ASCATManager(object):
         return Satel
 
     def create_wsat_era5_table(self, dt):
-        table_name = f'wsat_{dt.year}_{str(dt.month).zfill(2)}'
+        table_name = utils.gen_satel_era5_tablename('wsat', dt)
 
         class Satel(object):
             pass
@@ -675,10 +936,19 @@ class ASCATManager(object):
             return Satel
 
         cols = utils.get_basic_satel_era5_columns()
+
         cols.append(Column('w_lf', Float, nullable=False))
         cols.append(Column('w_mf', Float, nullable=False))
         cols.append(Column('w_aw', Float, nullable=False))
         cols.append(Column('winddir', Float, nullable=False))
+
+        cols.append(Column('u_wind_lf', Float, nullable=False))
+        cols.append(Column('v_wind_lf', Float, nullable=False))
+        cols.append(Column('u_wind_mf', Float, nullable=False))
+        cols.append(Column('v_wind_mf', Float, nullable=False))
+        cols.append(Column('u_wind_aw', Float, nullable=False))
+        cols.append(Column('v_wind_aw', Float, nullable=False))
+
         cols.append(Column('sst', Float, nullable=False))
         cols.append(Column('vapor', Float, nullable=False))
         cols.append(Column('cloud', Float, nullable=False))
@@ -700,7 +970,7 @@ class ASCATManager(object):
         return Satel
 
     def create_amsr2_era5_table(self, dt):
-        table_name = f'amsr2_{dt.year}_{str(dt.month).zfill(2)}'
+        table_name = utils.gen_satel_era5_tablename('amsr2', dt)
 
         class Satel(object):
             pass
@@ -713,8 +983,17 @@ class ASCATManager(object):
             return Satel
 
         cols = utils.get_basic_satel_era5_columns()
-        cols.append(Column('windLF', Float, nullable=False))
-        cols.append(Column('windMF', Float, nullable=False))
+
+        cols.append(Column('wind_lf', Float, nullable=False))
+        cols.append(Column('wind_mf', Float, nullable=False))
+
+        cols.append(Column('u_wind_lf', Float, nullable=False))
+        cols.append(Column('v_wind_lf', Float, nullable=False))
+        cols.append(Column('u_wind_mf', Float, nullable=False))
+        cols.append(Column('v_wind_mf', Float, nullable=False))
+        cols.append(Column('u_wind_avg', Float, nullable=False))
+        cols.append(Column('v_wind_avg', Float, nullable=False))
+
         cols.append(Column('sst', Float, nullable=False))
         cols.append(Column('vapor', Float, nullable=False))
         cols.append(Column('cloud', Float, nullable=False))
@@ -736,7 +1015,7 @@ class ASCATManager(object):
         return Satel
 
     def create_smap_era5_table(self, dt):
-        table_name = f'smap_{dt.year}_{str(dt.month).zfill(2)}'
+        table_name = utils.gen_satel_era5_tablename('smap', dt)
 
         class Satel(object):
             pass
@@ -749,7 +1028,11 @@ class ASCATManager(object):
             return Satel
 
         cols = utils.get_basic_satel_era5_columns()
+
         cols.append(Column('windspd', Float, nullable=False))
+
+        cols.append(Column('u_wind', Float, nullable=False))
+        cols.append(Column('v_wind', Float, nullable=False))
 
         era5_ = era5.ERA5Manager(self.CONFIG, self.period, self.region,
                                  self.db_root_passwd, work=False,
@@ -765,6 +1048,70 @@ class ASCATManager(object):
         self.session.commit()
 
         return Satel
+
+    def create_sentinel_1_table(self, dt):
+        table_name = utils.gen_satel_era5_tablename('sentinel_1', dt)
+
+        class SatelERA5(object):
+            pass
+
+        # Return TC table if it exists
+        if self.engine.dialect.has_table(self.engine, table_name):
+            metadata = MetaData(bind=self.engine, reflect=True)
+            t = metadata.tables[table_name]
+            mapper(SatelERA5, t)
+
+            return SatelERA5
+
+        cols = utils.get_basic_satel_era5_columns()
+
+
+        cols.append(Column('ecmwf_windspd', Float, nullable=False))
+        cols.append(Column('ecmwf_winddir', Float, nullable=False))
+        cols.append(Column('ecmwf_u_wind', Float, nullable=False))
+        cols.append(Column('ecmwf_v_wind', Float, nullable=False))
+
+        cols.append(Column('windspd', Float, nullable=False))
+        cols.append(Column('winddir', Float, nullable=False))
+        cols.append(Column('u_wind', Float, nullable=False))
+        cols.append(Column('v_wind', Float, nullable=False))
+
+        cols.append(Column('inversion_quality', Float, nullable=False))
+        cols.append(Column('wind_quality', Float, nullable=False))
+
+        era5_ = era5.ERA5Manager(self.CONFIG, self.period, self.region,
+                                 self.db_root_passwd, work=False,
+                                 save_disk=self.save_disk)
+        era5_cols = era5_.get_era5_columns()
+        cols = cols + era5_cols
+
+        metadata = MetaData(bind=self.engine)
+        t = Table(table_name, metadata, *cols)
+        metadata.create_all()
+        mapper(SatelERA5, t)
+
+        self.session.commit()
+
+        return SatelERA5
+
+    def get_latlon_and_match_index(self, lat_or_lon, latlon_idx):
+        if lat_or_lon == 'lat':
+            lat_of_row = self.grid_pts['rss']['lat']\
+                    [self.lat1_index + latlon_idx]
+            # Choose south grid point nearest to RSS point
+            lat_match_index = self.grid_lats.index(
+                    lat_of_row - 0.5 * self.spa_resolu['grid'])
+
+            return lat_of_row, lat_match_index
+
+        elif lat_or_lon == 'lon':
+            lon_of_pt = self.grid_pts['rss']['lon']\
+                    [self.lon1_index + latlon_idx]
+            # Choose east grid point nearest to RSS point
+            lon_match_index = self.grid_lons.index(
+                    lon_of_pt + 0.5 * self.spa_resolu['grid'])
+
+            return lon_of_pt, lon_match_index
 
     def _get_ascat_part(self, vars, SatelERA5, target_date, missing):
         satel_data = []
@@ -785,14 +1132,18 @@ class ASCATManager(object):
 
         for i in range(passes_num):
             for y in range(lats_num):
+                lat_of_row, lat_match_index = \
+                        self.get_latlon_and_match_index('lat', y)
+
                 for x in range(lons_num):
                     # Skip when the cell has no data
                     if subset['nodata'][i][y][x]:
                         continue
 
-                    # Skip when the time of ascending and descending passes
-                    # is same
-                    if subset['mingmt'][0][y][x] == subset['mingmt'][1][y][x]:
+                    # Skip when the time of ascending and descending
+                    # passes is same
+                    if subset['mingmt'][0][y][x] == \
+                       subset['mingmt'][1][y][x]:
                         continue
 
                     if (bool(subset['land'][i][y][x])
@@ -811,27 +1162,36 @@ class ASCATManager(object):
                     row = SatelERA5()
                     row.satel_datetime = datetime.datetime.combine(
                         target_date, time_)
-                    row.x = x
-                    row.y = y
-                    row.lon = self.lon_grid_points[self.lon1_index + x]
-                    row.lat = self.lat_grid_points[self.lat1_index + y]
-                    row.satel_datetime_lon_lat = (f'{row.satel_datetime}'
-                                                  + f'_{row.lon}'
-                                                  + f'_{row.lat}')
-                    row.scatflag = (None
-                                    if subset['scatflag'][i][y][x] == missing
-                                    else bool(subset['scatflag'][i][y][x]))
-                    row.radrain = (None 
-                                   if subset['radrain'][i][y][x] < 0
-                                   else float(subset['radrain'][i][y][x]))
 
-                    row.windspd = (None
-                                   if subset['windspd'][i][y][x] == missing
-                                   else float(subset['windspd'][i][y][x]))
+                    lon_of_pt, lon_match_index = \
+                            self.get_latlon_and_match_index('lon', x)
 
-                    row.winddir = (None
-                                   if subset['winddir'][i][y][x] == missing
-                                   else float(subset['winddir'][i][y][x]))
+                    row.x = int(self.grid_x[lon_match_index])
+                    row.y = int(self.grid_y[lat_match_index])
+
+                    row.lon = lon_of_pt
+                    row.lat = lat_of_row
+
+                    row.satel_datetime_lon_lat = (
+                        f'{row.satel_datetime}_{row.lon}_{row.lat}')
+                    row.scatflag = (
+                        None if subset['scatflag'][i][y][x] == missing
+                        else bool(subset['scatflag'][i][y][x])
+                    )
+                    row.radrain = (
+                        None if subset['radrain'][i][y][x] < 0
+                        else float(subset['radrain'][i][y][x])
+                    )
+                    row.windspd = (
+                        None if subset['windspd'][i][y][x] == missing
+                        else float(subset['windspd'][i][y][x])
+                    )
+                    row.winddir = (
+                        None if subset['winddir'][i][y][x] == missing
+                        else float(subset['winddir'][i][y][x])
+                    )
+                    row.u_wind, row.v_wind = utils.decompose_wind(
+                        row.windspd, row.winddir, 'o')
 
                     # Strictest reading rule: None of columns is none
                     skip = False
@@ -865,6 +1225,9 @@ class ASCATManager(object):
 
         for i in range(passes_num):
             for y in range(lats_num):
+                lat_of_row, lat_match_index = \
+                        self.get_latlon_and_match_index('lat', y)
+
                 for x in range(lons_num):
                     # Skip when the cell has no data
                     if subset['nodata'][i][y][x]:
@@ -873,7 +1236,8 @@ class ASCATManager(object):
                     # Skip when the time of ascending and descending passes
                     # is same and (anyone of wind speed variabkles 
                     # or wdir is not the same)
-                    if subset['mingmt'][0][y][x] == subset['mingmt'][1][y][x]:
+                    if subset['mingmt'][0][y][x] == \
+                       subset['mingmt'][1][y][x]:
                         skip = False
                         for var_name in ['w-lf', 'w-mf', 'w-aw', 'wdir']:
                             if (subset[var_name][0][y][x] !=\
@@ -893,10 +1257,16 @@ class ASCATManager(object):
                     row = SatelERA5()
                     row.satel_datetime = datetime.datetime.combine(
                         target_date, time_)
-                    row.x = x
-                    row.y = y
-                    row.lon = self.lon_grid_points[self.lon1_index + x]
-                    row.lat = self.lat_grid_points[self.lat1_index + y]
+
+                    lon_of_pt, lon_match_index = \
+                            self.get_latlon_and_match_index('lon', x)
+
+                    row.x = int(self.grid_x[lon_match_index])
+                    row.y = int(self.grid_y[lat_match_index])
+
+                    row.lon = lon_of_pt
+                    row.lat = lat_of_row
+
                     row.satel_datetime_lon_lat = (f'{row.satel_datetime}'
                                                   + f'_{row.lon}'
                                                   + f'_{row.lat}')
@@ -926,6 +1296,13 @@ class ASCATManager(object):
                     row.winddir = (None
                                    if subset['wdir'][i][y][x] == missing
                                    else float(subset['wdir'][i][y][x]))
+
+                    row.u_wind_lf, row.v_wind_lf = utils.decompose_wind(
+                        row.w_lf, row.winddir, 'o')
+                    row.u_wind_mf, row.v_wind_mf = utils.decompose_wind(
+                        row.w_mf, row.winddir, 'o')
+                    row.u_wind_aw, row.v_wind_aw = utils.decompose_wind(
+                        row.w_aw, row.winddir, 'o')
 
                     # Strictest reading rule: None of columns is none
                     skip = False
@@ -959,6 +1336,10 @@ class ASCATManager(object):
 
         for i in range(passes_num):
             for y in range(lats_num):
+
+                lat_of_row, lat_match_index = \
+                        self.get_latlon_and_match_index('lat', y)
+
                 for x in range(lons_num):
                     # Skip when the cell has no data
                     if subset['nodata'][i][y][x]:
@@ -980,10 +1361,16 @@ class ASCATManager(object):
                     row = SatelERA5()
                     row.satel_datetime = datetime.datetime.combine(
                         target_date, time_)
-                    row.x = x
-                    row.y = y
-                    row.lon = self.lon_grid_points[self.lon1_index + x]
-                    row.lat = self.lat_grid_points[self.lat1_index + y]
+
+                    lon_of_pt, lon_match_index = \
+                            self.get_latlon_and_match_index('lon', x)
+
+                    row.x = int(self.grid_x[lon_match_index])
+                    row.y = int(self.grid_y[lat_match_index])
+
+                    row.lon = lon_of_pt
+                    row.lat = lat_of_row
+
                     row.satel_datetime_lon_lat = (f'{row.satel_datetime}'
                                                   + f'_{row.lon}'
                                                   + f'_{row.lat}')
@@ -1000,12 +1387,19 @@ class ASCATManager(object):
                     row.rain = (None 
                                 if subset['rain'][i][y][x] < 0
                                 else float(subset['rain'][i][y][x]))
-                    row.windLF = (None
+                    row.wind_lf = (None
                                   if subset['windLF'][i][y][x] == missing
                                   else float(subset['windLF'][i][y][x]))
-                    row.windMF = (None
+                    row.wind_mf = (None
                                   if subset['windMF'][i][y][x] == missing
                                   else float(subset['windMF'][i][y][x]))
+                    # Wait to be updated when adding ERA5 data
+                    row.u_wind_lf = 0
+                    row.v_wind_lf = 0
+                    row.u_wind_mf = 0
+                    row.v_wind_mf = 0
+                    row.u_wind_avg = 0
+                    row.v_wind_avg = 0
 
                     # Strictest reading rule: None of columns is none
                     skip = False
@@ -1038,6 +1432,10 @@ class ASCATManager(object):
         lats_num, lons_num, passes_num = subset[var_names[0]].shape
 
         for y in range(lats_num):
+
+            lat_of_row, lat_match_index = \
+                    self.get_latlon_and_match_index('lat', y)
+
             for x in range(lons_num):
                 for i in range(passes_num):
                     # Skip when the cell has no data
@@ -1057,15 +1455,24 @@ class ASCATManager(object):
                     row = SatelERA5()
                     row.satel_datetime = datetime.datetime.combine(
                         target_date, time_)
-                    row.x = x
-                    row.y = y
-                    row.lon = self.lon_grid_points[self.lon1_index + x]
-                    row.lat = self.lat_grid_points[self.lat1_index + y]
+
+                    lon_of_pt, lon_match_index = \
+                            self.get_latlon_and_match_index('lon', x)
+
+                    row.x = int(self.grid_x[lon_match_index])
+                    row.y = int(self.grid_y[lat_match_index])
+
+                    row.lon = lon_of_pt
+                    row.lat = lat_of_row
+
                     row.satel_datetime_lon_lat = (f'{row.satel_datetime}'
                                                   + f'_{row.lon}'
                                                   + f'_{row.lat}')
 
                     row.windspd = float(subset['wind'][y][x][i])
+                    # Wait to be updated when adding ERA5 data
+                    row.u_wind = 0
+                    row.v_wind = 0
 
                     # Strictest reading rule: None of columns is none
                     skip = False
@@ -1079,3 +1486,182 @@ class ASCATManager(object):
                     satel_data.append(row)
 
         return satel_data
+
+    def _get_sentinel_1_part(self, zip_file_paths, SatelERA5,
+                             target_date):
+        data_dir = os.path.dirname(zip_file_paths[0])
+        all_data = []
+
+        for zip_file in zip_file_paths:
+            if not zip_file.endswith('83C3.zip'):
+                continue
+
+            with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+                zip_ref.extractall(data_dir)
+
+            nc_files_dir = (f"""{zip_file.replace('zip', 'SAFE')}/"""
+                            f"""measurement/""")
+            nc_file_names = [f for f in os.listdir(nc_files_dir)
+                             if f.endswith('.nc')]
+
+            for nc_name in nc_file_names:
+                nc_path = f'{nc_files_dir}{nc_name}'
+
+                data = self.read_single_sentinel_1_nc(nc_path, SatelERA5)
+
+                all_data += data
+
+        return all_data
+
+    def read_single_sentinel_1_nc(self, nc_path, SatelERA5):
+        self.logger.debug((f"""Reading Sentinel-1 data from """
+                           f"""{nc_path}"""))
+        data = []
+
+        nc_name_parts = nc_path.split('/')[-1].split('-')
+        start, end = [x for x in nc_name_parts if len(x) == 15]
+
+        start_dt = datetime.datetime.strptime(start, '%Y%m%dt%H%M%S')
+        end_dt = datetime.datetime.strptime(end, '%Y%m%dt%H%M%S')
+
+        mean_dt = start_dt + (end_dt - start_dt) / 2
+        mean_dt = mean_dt.replace(microsecond = 0)
+
+        dataset = netCDF4.Dataset(nc_path)
+        vars = dataset.variables
+
+        owi_az_size, owi_ra_size = vars['owiLat'].shape
+
+        lons, lats = vars['owiLon'][:], vars['owiLat'][:]
+
+        try:
+            # Aiming at South China Sea
+            # So lon is positive and lat is not negative
+            min_lon = float(lons[lons > 0].min())
+            max_lon = float(lons[lons > 0].max())
+            min_lat = float(lats[lats >= 0].min())
+            max_lat = float(lats[lats >= 0].max())
+        except ValueError:
+            # If there is no positive lon or no nonnegative lat,
+            # sentinel-1 data area is out of SCS
+            self.logger.debug((f"""Data area is out of target """
+                               f"""region: {nc_path}"""))
+            return data
+
+        self.ocean_grid_pts = self.get_grid_pts_in_range(
+            min_lon, max_lon, min_lat, max_lat)
+        grid_pts_num = self.ocean_grid_pts.count()
+
+        self.pt_region_data_indices = []
+
+        subprocess_num = 4
+        subset_pts_num = int(grid_pts_num / subprocess_num)
+
+        parallelism_workload = []
+        for i in range(subprocess_num):
+            start = i * subset_pts_num
+            if i != subprocess_num - 1:
+                end = (i + 1) * subset_pts_num
+            else:
+                end = grid_pts_num
+
+            workload = utils.GetChildDataIndices(
+                self.ocean_grid_pts[start:end], lats, lons,
+                owi_az_size)
+            parallelism_workload.append(workload)
+
+        with Pool(subprocess_num) as p:
+            parallelism_res = p.map(
+                utils.get_data_indices_around_grid_pts,
+                parallelism_workload
+            )
+
+        for res_subset in parallelism_res:
+            for pt_res in res_subset:
+                self.pt_region_data_indices.append(pt_res)
+
+        print(f'ocean gird pts num: {grid_pts_num}')
+        print((f"""len of pt_region_data_indices: """
+               f"""{len(self.pt_region_data_indices)}"""))
+
+        var_names = [
+            'owiEcmwfWindSpeed', 'owiEcmwfWindDirection',
+            'owiWindSpeed', 'owiWindDirection',
+            'owiInversionQuality', 'owiWindQuality'
+        ]
+
+        total = grid_pts_num
+        for pt_idx, pt in enumerate(self.ocean_grid_pts):
+            percent = float(pt_idx + 1) / total * 100
+            print(f'\r{percent:.2f}%', end='')
+
+            ecmwf_windspd = []
+            ecmwf_winddir = []
+            windspd = []
+            winddir = []
+            # :flag_values = 0B, 1B, 2B; // byte
+            # :flag_meanings = "good medium poor"
+            inversion_quality = []
+            # :flag_values = 0B, 1B, 2B, 3B; // byte
+            # :flag_meanings = "good medium low poor"
+            wind_quality = []
+
+            for index_pair in self.pt_region_data_indices[pt_idx]:
+                i, j = index_pair[0], index_pair[1]
+                # Mask
+                if vars['owiMask'][i][j] != 0.0:
+                    continue
+
+                skip = False
+                for var_name in var_names:
+                    if vars[var_name][i][j] is MASKED:
+                        skip = True
+                        break
+                if skip:
+                    continue
+
+                ecmwf_windspd.append(vars['owiEcmwfWindSpeed'][i][j])
+                ecmwf_winddir.append(vars['owiEcmwfWindDirection'][i][j])
+                windspd.append(vars['owiWindSpeed'][i][j])
+                winddir.append(vars['owiWindDirection'][i][j])
+                inversion_quality.append(
+                    float(vars['owiInversionQuality'][i][j]))
+                wind_quality.append(
+                    float(vars['owiWindQuality'][i][j]))
+
+            if not len(windspd) or not len(winddir):
+                continue
+
+            row = SatelERA5()
+            row.satel_datetime = mean_dt
+            row.x = pt.x
+            row.y = pt.y
+            row.lon = pt.lon
+            row.lat = pt.lat
+            row.satel_datetime_lon_lat = (f"""{row.satel_datetime}"""
+                                          + f"""_{row.lon}_{row.lat}""")
+            row.ecmwf_windspd = float(mean(ecmwf_windspd))
+            # In Sentinel-1's NetCDF file, owiEcmwfWindDirection is
+            # meteorological convention, which needed to be converted
+            # to oceangraphic convention
+            row.ecmwf_winddir = (float(mean(ecmwf_winddir)) + 180) % 360
+            row.ecmwf_u_wind, row.ecmwf_v_wind = utils.decompose_wind(
+                row.ecmwf_windspd, row.ecmwf_winddir, 'o')
+
+            row.windspd = float(mean(windspd))
+            # In Sentinel-1's NetCDF file, owiWindDirection is
+            # meteorological convention, which needed to be converted
+            # to oceangraphic convention
+            row.winddir = (float(mean(winddir)) + 180) % 360
+            row.u_wind, row.v_wind = utils.decompose_wind(
+                row.windspd, row.winddir, 'o')
+
+            row.inversion_quality = mean(inversion_quality)
+            row.wind_quality = mean(wind_quality)
+
+            data.append(row)
+
+        utils.delete_last_lines()
+        print('Done')
+
+        return data
