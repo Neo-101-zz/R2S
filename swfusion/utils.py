@@ -1135,7 +1135,6 @@ def get_class_by_tablename(engine, table_fullname):
         mapper(Template, t)
         return Template
     else:
-        logger.error(f'{table_fullname} not exists')
         return None
 
 def add_column(engine, table_name, column):
@@ -1368,17 +1367,11 @@ def get_radii_from_tc_row(tc_row):
 
     return radii
 
-def get_tc_center(tc_row):
-    lon_converted = tc_row.lon + 360 if tc_row.lon < 0 else tc_row.lon
-    center = (lon_converted, tc_row.lat)
-
-    return center
-
 def draw_ibtracs_radii(ax, tc_row, zorders):
     center = get_tc_center(tc_row)
     tc_radii = get_radii_from_tc_row(tc_row)
     # radii_color = {34: 'yellow', 50: 'orange', 64: 'red'}
-    radii_hatch = {34: '-', 50: 'x', 64: 'o'}
+    radii_linestyle = {34: 'solid', 50: 'dashed', 64: 'dotted'}
     dirs = ['ne', 'se', 'sw', 'nw']
     ibtracs_area = []
 
@@ -1395,7 +1388,7 @@ def draw_ibtracs_radii(ax, tc_row, zorders):
                     theta1=idx*90, theta2=(idx+1)*90,
                     zorder=zorders['wedge'],
                     #color=radii_color[r], alpha=0.6
-                    fill=False, hatch=radii_hatch[r]
+                    fill=False, linestyle=radii_linestyle[r]
                 )
             )
 
@@ -1522,7 +1515,7 @@ def set_bar_title_and_so_on(ax, tc_row, labels, x, data_name):
 def get_basic_satel_columns():
     cols = []
     cols.append(Column('key', Integer, primary_key=True))
-    cols.append(Column('date_time', DateTime, nullable=False))
+    cols.append(Column('datetime', DateTime, nullable=False))
     cols.append(Column('x', Integer, nullable=False))
     cols.append(Column('y', Integer, nullable=False))
     cols.append(Column('lon', Float, nullable=False))
@@ -1532,17 +1525,19 @@ def get_basic_satel_columns():
 
     return cols
 
-def get_basic_satel_era5_columns():
+def get_basic_satel_era5_columns(tc_info=False):
     cols = []
     cols.append(Column('key', Integer, primary_key=True))
+    if tc_info:
+        cols.append(Column('sid', String(13), nullable=False))
     cols.append(Column('satel_datetime', DateTime, nullable=False))
     cols.append(Column('era5_datetime', DateTime, nullable=False))
     cols.append(Column('x', Integer, nullable=False))
     cols.append(Column('y', Integer, nullable=False))
     cols.append(Column('lon', Float, nullable=False))
     cols.append(Column('lat', Float, nullable=False))
-    cols.append(Column('satel_datetime_lon_lat', String(50), nullable=False,
-                       unique=True))
+    cols.append(Column('satel_datetime_lon_lat', String(50),
+                       nullable=False, unique=True))
 
     return cols
 
@@ -1592,6 +1587,9 @@ def get_data_indices_around_grid_pts(workload):
 
 def gen_satel_era5_tablename(satel_name, dt):
     return f'{satel_name}_{dt.year}_{str(dt.month).zfill(2)}'
+
+def gen_tc_satel_era5_tablename(satel_name, dt):
+    return f'tc_{satel_name}_era5_{dt.year}'
 
 def backtime_to_last_entire_hour(dt):
     # Initial datetime is not entire-houred
@@ -1747,6 +1745,7 @@ def draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
     # windspd_levels = [5*x for x in range(1, 15)]
     windspd_levels = np.linspace(0, max_windspd, 10)
 
+
     # cs = ax.contour(X, Y, Z, levels=windspd_levels,
     #                 zorder=self.zorders['contour'], colors='k')
     # ax.clabel(cs, inline=1, colors='k', fontsize=10)
@@ -1763,14 +1762,6 @@ def draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
 
     fig.colorbar(cf, cax=cax, orientation='vertical', format='%.1f')
 
-def draw_ccmp_windspd(the_class, fig, ax, dt, lons, lats, windspd,
-                      max_windspd):
-    draw_SCS_basemap(the_class, ax)
-
-    draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
-                               the_class.zorders['contourf'],
-                               max_windspd, mesh=True)
-
 def draw_windspd(the_class, fig, ax, dt, lons, lats, windspd,
                  max_windspd, mesh):
     draw_SCS_basemap(the_class, ax)
@@ -1779,19 +1770,210 @@ def draw_windspd(the_class, fig, ax, dt, lons, lats, windspd,
                                the_class.zorders['contourf'],
                                max_windspd, mesh)
 
-def draw_era5_wind(the_class, fig, ax, dt, lons, lats, winspd,
-                   max_windspd):
-    draw_SCS_basemap(the_class, ax)
+def get_latlon_and_index_in_grid(value, range, grid_lat_or_lon_list):
+    """Getting region corners' lat or lon's value and its index
+    in CCMP grid.
 
-    draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
-                               the_class.zorders['contourf'],
-                               max_windspd, mesh=False)
+    Parameters
+    ----------
+    value: float
+        The value of latitude or longtitude of region corner.
+    range: tuple
+        The range of latitude or longtitude of region.  The first
+        element is smaller than the second element.
+    grid_lat_or_lon_list: list
+        The latitude or longitutde of CCMP grid.  Ascending sorted.
+
+    Return
+    ------
+    grid_pt_value: float
+        The value of latitude or longtitude of matching CCMP grid point.
+    grid_pt_index: int
+        The index of latitude or longtitude of matching CCMP grid point.
+
+    """
+    tmp_value, tmp_index = get_nearest_element_and_index(
+        grid_lat_or_lon_list, value)
+    # value is the first element (smaller one) of range
+    if not range.index(value):
+        if tmp_value > value:
+            tmp_value -= 0.25
+            tmp_index -= 1
+    # value is the second element (larger one) of range
+    else:
+        if tmp_value < value:
+            tmp_value += 0.25
+            tmp_index += 1
+
+    grid_pt_value = tmp_value
+    grid_pt_index = tmp_index
+
+    return grid_pt_value, grid_pt_index
 
 def get_nearest_element_and_index(list_, element):
     ae = [abs(element - x) for x in list_]
     match_index = ae.index(min(ae))
 
     return list_[match_index], match_index
+
+def get_pixel_of_smap_windspd(smap_file_path, dt, lon, lat):
+    spa_resolu = 0.25
+
+    smap_lats = [y * spa_resolu - 89.875 for y in range(720)]
+    smap_lons = [x * spa_resolu + 0.125 for x in range(1440)]
+
+    match_lat, lat_match_index = get_nearest_element_and_index(
+        smap_lats, lat)
+    match_lon, lon_match_index = get_nearest_element_and_index(
+        smap_lons, lon)
+
+    dataset = netCDF4.Dataset(smap_file_path)
+    # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which
+    # faster than 1 m/s, so must disable auto mask
+    dataset.set_auto_mask(False)
+    vars = dataset.variables
+    minute = vars['minute']
+    wind = vars['wind']
+
+    y = lat_match_index
+    x = lon_match_index
+    windspd = None
+
+    passes_num = 2
+    minute_missing = -9999
+    wind_missing = -99.99
+    for i in range(passes_num):
+        if (minute[y][x][i] == minute_missing
+            or wind[y][x][i] == wind_missing):
+            continue
+        if minute[y][x][0] == minute[y][x][1]:
+            break
+        time_ = datetime.time(
+            *divmod(int(minute[y][x][i]), 60), 0)
+        # Temporal window is one hour
+        if time_.hour != dt.hour - 1 and time_.hour != dt.hour:
+            continue
+
+        # SMAP originally has land mask, so it's not necessary
+        # to check whether each pixel is land or ocean
+        windspd = float(wind[y][x][i])
+        break
+
+    return windspd
+
+def get_xyz_of_smap_windspd(smap_file_path, dt, region):
+    """Temporal window is one hour.
+
+    """
+    spa_resolu = 0.25
+
+    smap_lats = [y * spa_resolu - 89.875 for y in range(720)]
+    smap_lons = [x * spa_resolu + 0.125 for x in range(1440)]
+
+    lat1, lat1_idx = get_latlon_and_index_in_grid(
+        region[0], (region[0], region[1]), smap_lats)
+    lat2, lat2_idx = get_latlon_and_index_in_grid(
+        region[1], (region[0], region[1]), smap_lats)
+    lon1, lon1_idx = get_latlon_and_index_in_grid(
+        region[2], (region[2], region[3]), smap_lons)
+    lon2, lon2_idx = get_latlon_and_index_in_grid(
+        region[3], (region[2], region[3]), smap_lons)
+
+    lons = list(np.arange(lon1, lon2 + 0.5 * spa_resolu, spa_resolu))
+    lats = list(np.arange(lat1, lat2 + 0.5 * spa_resolu, spa_resolu))
+    lons = [round(x, 3) for x in lons]
+    lats = [round(y, 3) for y in lats]
+    windspd = np.full(shape=(len(lats), len(lons)), fill_value=-1,
+                      dtype=float)
+
+    dataset = netCDF4.Dataset(smap_file_path)
+    # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which
+    # faster than 1 m/s, so must disable auto mask
+    dataset.set_auto_mask(False)
+    vars = dataset.variables
+    minute = vars['minute'][lat1_idx:lat2_idx+1, lon1_idx:lon2_idx+1, :]
+    wind = vars['wind'][lat1_idx:lat2_idx+1, lon1_idx:lon2_idx+1, :]
+
+    rows, cols = minute.shape[:2]
+    passes_num = 2
+    minute_missing = -9999
+    wind_missing = -99.99
+    for y in range(len(lats)):
+        for x in range(len(lons)):
+            for i in range(passes_num):
+                if (minute[y][x][i] == minute_missing
+                    or wind[y][x][i] == wind_missing):
+                    continue
+                if minute[y][x][0] == minute[y][x][1]:
+                    continue
+                time_ = datetime.time(
+                    *divmod(int(minute[y][x][i]), 60), 0)
+                # Temporal window is one hour
+                if time_.hour != dt.hour - 1 and time_.hour != dt.hour:
+                    continue
+
+                # SMAP originally has land mask, so it's not necessary
+                # to check whether each pixel is land or ocean
+                windspd[y][x] = float(wind[y][x][i])
+
+    if windspd.max() > 0:
+        return lons, lats, windspd
+    else:
+        return None, None, None
+
+def satel_data_cover_tc_center(lons, lats, windspd, tc):
+    # (lon, lat)
+    tc_lon, tc_lat = get_tc_center(tc)
+    tc_lon_in_grid, tc_lon_in_grid_idx = \
+            get_nearest_element_and_index(lons, tc_lon)
+    tc_lat_in_grid, tc_lat_in_grid_idx = \
+            get_nearest_element_and_index(lats, tc_lat)
+
+    if windspd[tc_lat_in_grid_idx][tc_lon_in_grid_idx] > 0:
+        return True
+    else:
+        return False
+
+def cover_tc_wind_radii(lons, lats, windspd, tc):
+    # (lon, lat)
+    center = get_tc_center(tc_row)
+    tc_radii = get_radii_from_tc_row(tc_row)
+
+    largest_radii = RADII_LEVELS[0]
+
+    pass
+
+def draw_ibtracs_radii(ax, tc_row, zorders):
+    center = get_tc_center(tc_row)
+    tc_radii = get_radii_from_tc_row(tc_row)
+    # radii_color = {34: 'yellow', 50: 'orange', 64: 'red'}
+    radii_linestyle = {34: 'solid', 50: 'dashed', 64: 'dotted'}
+    dirs = ['ne', 'se', 'sw', 'nw']
+    ibtracs_area = []
+
+    for r in RADII_LEVELS:
+        area_in_radii = 0
+        for idx, dir in enumerate(dirs):
+            if tc_radii[r][dir] is None:
+                continue
+
+            ax.add_patch(
+                mpatches.Wedge(
+                    center,
+                    r=tc_radii[r][dir]*DEGREE_OF_ONE_NMILE,
+                    theta1=idx*90, theta2=(idx+1)*90,
+                    zorder=zorders['wedge'],
+                    #color=radii_color[r], alpha=0.6
+                    fill=False, linestyle=radii_linestyle[r]
+                )
+            )
+
+            radii_in_km = tc_radii[r][dir] * KM_OF_ONE_NMILE
+            area_in_radii += math.pi * (radii_in_km)**2 / 4
+
+        ibtracs_area.append(area_in_radii)
+
+    return ibtracs_area
 
 def get_xyz_of_ccmp_windspd(ccmp_file_path, dt, region):
     ccmp_hours = [0, 6, 12, 18]
@@ -1805,20 +1987,19 @@ def get_xyz_of_ccmp_windspd(ccmp_file_path, dt, region):
     ccmp_lats = [y * spa_resolu - 78.375 for y in range(628)]
     ccmp_lons = [x * spa_resolu + 0.125 for x in range(1440)]
 
-    region[0], lat1_idx = get_nearest_element_and_index(ccmp_lats,
-                                                        region[0])
-    region[1], lat2_idx = get_nearest_element_and_index(ccmp_lats,
-                                                        region[1])
-    region[2], lon1_idx = get_nearest_element_and_index(ccmp_lons,
-                                                        region[2])
-    region[3], lon2_idx = get_nearest_element_and_index(ccmp_lons,
-                                                        region[3])
-    lons = list(np.arange(region[2], region[3] + 0.5 * spa_resolu,
-                          spa_resolu))
-    lats = list(np.arange(region[0], region[1] + 0.5 * spa_resolu,
-                          spa_resolu))
-    lons = [round(x, 2) for x in lons]
-    lats = [round(y, 2) for y in lats]
+    lat1, lat1_idx = get_latlon_and_index_in_grid(
+        region[0], (region[0], region[1]), ccmp_lats)
+    lat2, lat2_idx = get_latlon_and_index_in_grid(
+        region[1], (region[0], region[1]), ccmp_lats)
+    lon1, lon1_idx = get_latlon_and_index_in_grid(
+        region[2], (region[2], region[3]), ccmp_lons)
+    lon2, lon2_idx = get_latlon_and_index_in_grid(
+        region[3], (region[2], region[3]), ccmp_lons)
+
+    lons = list(np.arange(lon1, lon2 + 0.5 * spa_resolu, spa_resolu))
+    lats = list(np.arange(lat1, lat2 + 0.5 * spa_resolu, spa_resolu))
+    lons = [round(x, 3) for x in lons]
+    lats = [round(y, 3) for y in lats]
     windspd = np.ndarray(shape=(len(lats), len(lons)), dtype=float)
 
     vars = netCDF4.Dataset(ccmp_file_path).variables
@@ -1836,6 +2017,7 @@ def get_xyz_of_ccmp_windspd(ccmp_file_path, dt, region):
                     windspd[y][x] = math.sqrt(u_wind[y][x] ** 2
                                               + v_wind[y][x] ** 2)
                 else:
+                    # There may be problem
                     windspd[y][x] = 0
             except Exception as msg:
                 breakpoint()
@@ -1843,13 +2025,66 @@ def get_xyz_of_ccmp_windspd(ccmp_file_path, dt, region):
 
     return lons, lats, windspd
 
-def get_xyz_of_era5_windspd(era5_file_path, dt, region):
+def get_pixel_of_era5_windspd(era5_file_path, product_type, dt,
+                              lon, lat):
+    grbidx = pygrib.index(era5_file_path, 'dataTime')
+    hourtime = dt.hour * 100
+    selected_grbs = grbidx.select(dataTime=hourtime)
+
+    if product_type == 'single_levels':
+        u_wind_var_name = 'neutral_wind_at_10_m_u-component'
+        v_wind_var_name = 'neutral_wind_at_10_m_v-component'
+    elif product_type == 'pressure_levels':
+        u_wind_var_name = 'u_component_of_wind'
+        v_wind_var_name = 'v_component_of_wind'
+
+    spa_resolu = 0.25
+    era5_lats = [y * spa_resolu - 90 for y in range(721)]
+    era5_lons = [x * spa_resolu for x in range(1440)]
+    match_lat, lat_match_index = get_nearest_element_and_index(
+        era5_lats, lat)
+    match_lon, lon_match_index = get_nearest_element_and_index(
+        era5_lons, lon)
+    u_wind = None
+    v_wind = None
+
+    for grb in selected_grbs:
+        try:
+            name = grb.name.replace(" ", "_").lower()
+
+            data, lats, lons = grb.data(-90, 90, 0, 360)
+            data = np.flip(data, 0)
+
+            if name == u_wind_var_name:
+                u_wind = data[lat_match_index][lon_match_index]
+            elif name == v_wind_var_name:
+                v_wind = data[lat_match_index][lon_match_index]
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
+
+    try:
+        windspd = math.sqrt(u_wind ** 2 + v_wind ** 2)
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+    return windspd
+
+def get_xyz_of_era5_windspd(era5_file_path, product_type, dt, region):
     grbidx = pygrib.index(era5_file_path, 'dataTime')
     hourtime = dt.hour * 100
     selected_grbs = grbidx.select(dataTime=hourtime)
 
     u_wind = None
     v_wind = None
+
+    if product_type == 'single_levels':
+        u_wind_var_name = 'neutral_wind_at_10_m_u-component'
+        v_wind_var_name = 'neutral_wind_at_10_m_v-component'
+    elif product_type == 'pressure_levels':
+        u_wind_var_name = 'u_component_of_wind'
+        v_wind_var_name = 'v_component_of_wind'
 
     for grb in selected_grbs:
         name = grb.name.replace(" ", "_").lower()
@@ -1860,9 +2095,9 @@ def get_xyz_of_era5_windspd(era5_file_path, dt, region):
         lats = np.flip(lats, 0)
         lons = np.flip(lons, 0)
 
-        if name == 'u_component_of_wind':
+        if name == u_wind_var_name:
             u_wind = data
-        elif name == 'v_component_of_wind':
+        elif name == v_wind_var_name:
             v_wind = data
 
     lats_num, lons_num = u_wind.shape
@@ -1874,6 +2109,7 @@ def get_xyz_of_era5_windspd(era5_file_path, dt, region):
                     windspd[y][x] = math.sqrt(u_wind[y][x] ** 2
                                               + v_wind[y][x] ** 2)
                 else:
+                    # There may be problem
                     windspd[y][x] = 0
             except Exception as msg:
                 breakpoint()
@@ -1881,3 +2117,107 @@ def get_xyz_of_era5_windspd(era5_file_path, dt, region):
 
     return lons, lats, windspd
 
+def if_mesh(lons):
+    if isinstance(lons, list):
+        return True
+    elif isinstance(lons, np.ndarray):
+        if len(lons.shape) == 2:
+            return False
+        return False
+
+def get_subplots_row_col(subplots_num):
+    if subplots_num == 1:
+        return 1, 1
+    elif subplots_num == 2:
+        return 1, 2
+    elif subplots_num == 3:
+        return 1, 3
+    elif subplots_num >= 4 and subplots_num <= 6:
+        return 2, 3
+
+def get_era5_corners_of_rss_cell(lat, lon, era5_lats_grid,
+                                 era5_lons_grid, grb_spa_resolu):
+    if grb_spa_resolu == 0.25:
+        delta = 0.5 * 0.25
+        lat1 = lat - delta
+        lat2 = lat + delta
+        lon1 = lon - delta
+        lon2 = (lon + delta) % 360
+    elif grb_spa_resolu == 0.5:
+        lat1, lat2 = find_neighbours_of_pt_in_half_degree_grid(lat)
+        lon1, lon2 = find_neighbours_of_pt_in_half_degree_grid(lon)
+        if lon2 == 360:
+            lon2 = 0
+
+    try:
+        era5_lats = list(era5_lats_grid[:, 0])
+        era5_lons = list(era5_lons_grid[0, :])
+
+        lat1_idx = era5_lats.index(lat1)
+        lat2_idx = era5_lats.index(lat2)
+        lon1_idx = era5_lons.index(lon1)
+        lon2_idx = era5_lons.index(lon2)
+    except Exception as msg:
+        breakpoint()
+        # exit(msg)
+
+    return [lat1, lat2, lon1, lon2], [lat1_idx, lat2_idx, lon1_idx,
+                                      lon2_idx]
+
+def find_neighbours_of_pt_in_half_degree_grid(pt):
+    nearest = round(pt * 2) / 2
+    direction = ((pt - nearest) / abs(pt - nearest))
+    the_other = pt + (0.5 - abs(pt- nearest)) * direction
+
+    return min(nearest, the_other), max(nearest, the_other)
+
+def get_center_shift_of_two_tcs(next_tc, tc):
+    next_tc_center = get_tc_center(next_tc)
+    tc_center = get_tc_center(tc)
+
+    return (next_tc_center[0] - tc_center[0],
+            next_tc_center[1] - tc_center[1])
+
+def get_tc_center(tc_row):
+    lon_converted = tc_row.lon + 360 if tc_row.lon < 0 else tc_row.lon
+    center = (lon_converted, tc_row.lat)
+
+    return center
+
+def process_grib_message_name(name):
+    return name.replace(" ", "_").replace("-", "_").replace('(', '')\
+            .replace(')', '').lower()
+
+def longtitude_converter(lon, input_mode, output_mode):
+    if input_mode == '360' and output_mode == '-180':
+        if lon > 180:
+            lon -= 360
+    elif input_mode == '-180' and output_mode == '360':
+        if lon < 0:
+            lon += 360
+
+    return lon
+
+def find_best_NN_weights_file(dir):
+    file_names = [f for f in os.listdir(dir) if f.endswith('.hdf5')]
+    max_epoch = -1
+    best_weights_file_name = None
+
+    for file in file_names:
+        epoch = int(file.split('-')[1])
+        if epoch > max_epoch:
+            max_epoch = epoch
+            best_weights_file_name = file
+
+    return f'{dir}{best_weights_file_name}'
+
+def filter_dataframe_by_column_value_divide(df, col_name, divide,
+                                            large_or_small):
+    if large_or_small == 'large':
+        in_range = df[col_name] > divide
+    elif large_or_small == 'small':
+        in_range = df[col_name] < divide
+
+    condition = f'{col_name}_{large_or_small}_than_{divide}'
+
+    return df[in_range], condition

@@ -2,37 +2,28 @@ import datetime
 import logging
 import os
 import pickle
+import string
 
-from netCDF4 import Dataset
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, Integer, Float, String, DateTime, Date
-from sqlalchemy import Table, Column, MetaData
-from sqlalchemy.orm import mapper
-from sqlalchemy import create_engine, extract
-from global_land_mask import globe
-import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.basemap import Basemap
-from mpl_toolkits.axes_grid1 import make_axes_locatable
+from global_land_mask import globe
 
 import ccmp
 import era5
+import satel_scs
 import utils
-
-Base = declarative_base()
 
 class TCComparer(object):
 
-    def __init__(self, CONFIG, period, region, passwd):
+    def __init__(self, CONFIG, period, region, passwd, save_disk):
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
         self.db_root_passwd = passwd
+        self.save_disk = save_disk
         self.engine = None
         self.session = None
 
         self.logger = logging.getLogger(__name__)
-        utils.setup_database(self, Base)
 
         self.sources = ['ccmp', 'era5', 'ascat', 'wsat', 'amsr2',
                         'smap', 'sentinel_1']
@@ -72,6 +63,7 @@ class TCComparer(object):
 
         self._get_region_corners_indices()
 
+        self.sources = ['era5', 'smap']
         self.compare_sources()
 
     def _get_region_corners_indices(self):
@@ -90,78 +82,157 @@ class TCComparer(object):
         table_name = self.CONFIG['ibtracs']['table_name']['scs']
         IBTrACS = utils.get_class_by_tablename(self.engine,
                                                table_name)
+
+        sources_str = ''
+        for idx, src in enumerate(self.sources):
+            if idx < len(self.sources) - 1:
+                sources_str = f"""{sources_str}{src.upper()} and """
+            else:
+                sources_str = f"""{sources_str}{src.upper()}"""
+
         # Filter TCs during period
         for tc in self.session.query(IBTrACS).filter(
             IBTrACS.date_time >= self.period[0],
             IBTrACS.date_time <= self.period[1]
         ).yield_per(self.CONFIG['database']['batch_size']['query']):
             # 
+            if tc.wind < 64:
+                continue
             if tc.r34_ne is None:
+                continue
+            if bool(globe.is_land(tc.lat, tc.lon)):
                 continue
             # Draw windspd from CCMP, ERA5, Interium
             # and several satellites
-            print((f"""Comparing CCMP and ERA5 with IBTrACS record of """
-                   f"""TC {tc.name} on {tc.date_time}"""), end='')
-            self.compare_with_one_tc_record(tc)
-            utils.delete_last_lines()
+            success = self.compare_with_one_tc_record(tc)
+            if success:
+                print((f"""Comparing {sources_str} with IBTrACS record """
+                       f"""of TC {tc.name} on {tc.date_time}"""))
+            else:
+                print((f"""Skiping comparsion of {sources_str} with """
+                       f"""IBTrACS record of TC {tc.name} """
+                       f"""on {tc.date_time}"""))
         print('Done')
 
     def compare_with_one_tc_record(self, tc):
-        dt = tc.date_time
-        fig, axs = plt.subplots(1, 2, figsize=(15, 10), sharey=True)
+        subplots_row, subplots_col = utils.get_subplots_row_col(
+            len(self.sources))
+        fig, axs = plt.subplots(subplots_row, subplots_col,
+                                figsize=(15, 7), sharey=True)
+        axs_list = []
+        for idx, src in enumerate(self.sources):
+            if subplots_row == 1:
+                col_idx = idx % subplots_col
+                ax = axs[col_idx]
+            elif subplots_row > 1:
+                row_idx = int(idx / subplots_col)
+                col_idx = idx % subplots_col
+                ax = axs[row_idx][col_idx]
+
+            axs_list.append(ax)
+
         lons = dict()
         lats = dict()
         windspd = dict()
+        radii_area = dict()
+        mesh = dict()
 
-        ax_ccmp = axs[0]
-        ax_era5 = axs[1]
+        max_windspd = -1
+        for idx, src in enumerate(self.sources):
+            ax = axs_list[idx]
 
+            # Get lons, lats, windspd
+            success, lons[src], lats[src], windspd[src], mesh[src] = \
+                    self.get_sources_xyz(src, tc, ax)
+            if not success:
+                return False
+            # Get max windspd
+            if windspd[src].max() > max_windspd:
+                max_windspd = windspd[src].max()
+            # Draw wind radii
+            radii_area[src] = utils.draw_ibtracs_radii(ax, tc,
+                                                       self.zorders)
+
+        # Draw windspd
+        for idx, src in enumerate(self.sources):
+            ax = axs_list[idx]
+
+            utils.draw_windspd(self, fig, ax, tc.date_time,
+                               lons[src], lats[src], windspd[src],
+                               max_windspd, mesh[src])
+            ax.text(-0.1, 1.025, f'({string.ascii_lowercase[idx]})',
+                    transform=ax.transAxes, fontsize=16,
+                    fontweight='bold', va='top', ha='right')
+
+        fig.subplots_adjust(wspace=0.4)
+
+        dt_str = tc.date_time.strftime('%Y_%m%d_%H%M')
+        fig_dir = (f"""{self.CONFIG['result']['dirs']['fig']['root']}"""
+                   f"""ibtracs_vs""")
+        for idx, src in enumerate(self.sources):
+            if idx < len(self.sources) - 1:
+                fig_dir = f"""{fig_dir}_{src}_and"""
+            else:
+                fig_dir = f"""{fig_dir}_{src}/"""
+
+        os.makedirs(fig_dir, exist_ok=True)
+        fig_name = f'{dt_str}_{tc.name}.png'
+        plt.savefig(f'{fig_dir}{fig_name}')
+        plt.clf()
+
+        return True
+
+    def get_sources_xyz(self, src, tc, ax):
+        if src == 'ccmp':
+            return self.get_ccmp_xyz(tc, ax)
+        elif src == 'era5':
+            return self.get_era5_xyz(tc, ax)
+        elif src == 'smap':
+            return self.get_smap_xyz(tc, ax)
+
+    def get_smap_xyz(self, tc, ax):
+        satel_manager = satel_scs.SCSSatelManager(
+            self.CONFIG, self.period, self.region, self.db_root_passwd,
+            save_disk=self.save_disk, work=False)
+        smap_file_path = satel_manager.download('smap', tc.date_time)
+
+        lons, lats, windspd = utils.get_xyz_of_smap_windspd(
+            smap_file_path, tc.date_time, self.region)
+
+        if (not utils.satel_data_cover_tc_center(lons, lats, windspd, tc)
+            or windspd is None):
+            return False, None, None, None, None
+        else:
+            return True, lons, lats, windspd, utils.if_mesh(lons)
+
+    def get_ccmp_xyz(self, tc, ax):
         ccmp_manager = ccmp.CCMPManager(self.CONFIG, self.period,
                                         self.region, self.db_root_passwd,
                                         # work_mode='fetch')
                                         work_mode='')
-        ccmp_file_path = ccmp_manager.download_ccmp_on_one_day(dt)
-        lons['ccmp'], lats['ccmp'], windspd['ccmp'] = \
-                utils.get_xyz_of_ccmp_windspd(ccmp_file_path, dt,
-                                              self.region)
+        ccmp_file_path = ccmp_manager.download_ccmp_on_one_day(
+            tc.date_time)
 
-        if windspd['ccmp'] is None:
-            self.logger.info((f"""No CCMP data on {dt}"""))
-            return
+        lons, lats, windspd = utils.get_xyz_of_ccmp_windspd(
+            ccmp_file_path, tc.date_time, self.region)
 
-        # CCMP = ccmp_manager.create_scs_ccmp_table(dt.date())
-        # lons['ccmp'], lats['ccmp'], windspd['ccmp'] = \
-        #         ccmp_manager.get_xyz_of_ccmp_windspd(CCMP, dt)
+        if windspd is not None:
+            return True, lons, lats, windspd, utils.if_mesh(lons)
+        else:
+            self.logger.info((f"""No CCMP data on {tc.date_time}"""))
+            return False, None, None, None, None
 
-
+    def get_era5_xyz(self, tc, ax):
         era5_manager = era5.ERA5Manager(self.CONFIG, self.period,
                                         self.region,
                                         self.db_root_passwd,
-                                        work=False, save_disk=False,
+                                        work=False,
+                                        save_disk=self.save_disk,
                                         work_mode='',
                                         vars_mode='')
         era5_file_path = era5_manager.download_surface_vars_of_whole_day(
-                 'surface_wind', dt)
-        lons['era5'], lats['era5'], windspd['era5'] = \
-                utils.get_xyz_of_era5_windspd(era5_file_path, dt,
-                                              self.region)
+                 'single_levels', 'surface_wind', tc.date_time)
+        lons, lats, windspd = utils.get_xyz_of_era5_windspd(
+            era5_file_path, 'single_levels', tc.date_time, self.region)
 
-        radii_area = utils.draw_ibtracs_radii(ax_ccmp, tc, self.zorders)
-        radii_area = utils.draw_ibtracs_radii(ax_era5, tc, self.zorders)
-
-        max_windspd = max(windspd['ccmp'].max(), windspd['era5'].max())
-
-        utils.draw_windspd(self, fig, ax_ccmp, dt, lons['ccmp'],
-                           lats['ccmp'], windspd['ccmp'], max_windspd,
-                           mesh=True)
-        utils.draw_windspd(self, fig, ax_era5, dt, lons['era5'],
-                           lats['era5'], windspd['era5'], max_windspd,
-                           mesh=False)
-
-        dt_str = dt.strftime('%Y_%m%d_%H%M')
-        fig_name = f'ibtracs_vs_ccmp_vs_era5_{dt_str}_{tc.name}.png'
-        fig_dir = self.CONFIG['result']['dirs']['fig']
-        plt.show()
-        # plt.savefig(f'{fig_dir}{fig_name}')
-        plt.clf()
-
+        return True, lons, lats, windspd, utils.if_mesh(lons)

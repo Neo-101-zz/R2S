@@ -35,8 +35,8 @@ class ERA5Manager(object):
     sources except TC table from IBTrACS.
 
     """
-    def __init__(self, CONFIG, period, region, passwd, work, save_disk,
-                 work_mode, vars_mode):
+    def __init__(self, CONFIG, period, region, passwd, work,
+                 save_disk, work_mode, vars_mode):
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
@@ -55,10 +55,7 @@ class ERA5Manager(object):
         self.edge = self.CONFIG['era5']['subset_edge_in_degree']
 
         self.cdsapi_client = cdsapi.Client()
-        self.all_vars = self.CONFIG['era5']['all_vars']
-        self.threeD_vars = self.CONFIG['era5']['vars']
-        self.threeD_pres_lvl = self.CONFIG['era5']['pres_lvl']
-        self.wind_vars = self.CONFIG['era5']['wind_vars']
+        self.vars = self.CONFIG['era5']['vars']
         self.surface_pres_lvl = '1000'
 
         self.spa_resolu = self.CONFIG['era5']['spatial_resolution']
@@ -70,7 +67,8 @@ class ERA5Manager(object):
         self.threeD_grid = dict()
         self.threeD_grid['lat_axis'] = self.threeD_grid['lon_axis'] = int(
             self.edge/self.spa_resolu) + 1
-        self.threeD_grid['height'] = len(self.threeD_pres_lvl)
+        self.threeD_grid['height'] = len(
+            self.CONFIG['era5']['pres_lvls'])
 
         self.twoD_grid = dict()
         self.twoD_grid['lat_axis'] = self.twoD_grid['lon_axis'] = int(
@@ -114,9 +112,12 @@ class ERA5Manager(object):
             cols.append(Column('satel_era5_diff_mins', Integer,
                                nullable=False))
 
-        for var in self.all_vars:
-            if var == 'vorticity':
-                var = 'vorticity_relative'
+        for var in self.vars['grib']['reanalysis_single_levels']\
+                   ['tc']:
+            cols.append(Column(var, Float, nullable=False))
+
+        for var in self.vars['grib']['reanalysis_pressure_levels']\
+                   ['all_vars']:
             cols.append(Column(var, Float, nullable=False))
 
         return cols
@@ -222,38 +223,115 @@ class ERA5Manager(object):
 
         return table_name, t, ERA5
 
-    def download_surface_vars_of_whole_day(self, vars_mode,
-                                           target_datetime):
-        era5_dirs = self.CONFIG['era5']['dirs']
+    def download_single_levels_vars(self, vars_mode, target_datetime,
+                                    time_mode, times, area,
+                                    match_satel, file_name_suffix):
+        era5_dirs = self.CONFIG['era5']['dirs']\
+                ['reanalysis_single_levels']
 
-        if vars_mode == 'surface_all_vars':
-            file_path = (
-                f"""{era5_dirs["surface_all_vars"]["to_match_satel"]}"""
-                f"""{target_datetime.strftime('%Y_%m%d.grib')}"""
+        if vars_mode == 'tc':
+            file_dir = (
+                f"""{era5_dirs["tc"]}/{match_satel}/"""
+                f"""Y{target_datetime.year}/"""
+                f"""M{str(target_datetime.month).zfill(2)}/"""
             )
-            variables = self.all_vars
-        elif vars_mode == 'surface_wind':
-            file_path = (
-                f"""{era5_dirs["surface_wind"]["tc"]}"""
-                f"""{target_datetime.strftime('%Y_%m%d.grib')}"""
-            )
-            variables = self.wind_vars
+            file_name = target_datetime.strftime('%Y_%m%d')
+            for t in times:
+                file_name = f'{file_name}_{str(t).zfill(2)}'
+            for a in area:
+                file_name = f'{file_name}_{a}'
+            file_name = f'{file_name}_{file_name_suffix}.grib'
+            file_path = f'{file_dir}{file_name}'
+            variables = self.vars['request']\
+                    ['reanalysis_single_levels']['tc']
+            vars_name = 'TC-relevant single levels variables'
+        else:
+            return None
 
         if os.path.exists(file_path):
             return file_path
 
+        self.logger.info((f"""Downloading {vars_name} of {times} """
+                          f"""hours on {target_datetime.date()} """
+                          f"""from ERA5"""))
+
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        whole_day_times = [f'{str(x).zfill(2)}:00' for x in range(24)]
+
+        if time_mode == 'whole_day':
+            hour_times = [f'{str(x).zfill(2)}:00' for x in range(24)]
+        else:
+            hour_times = [f'{str(x).zfill(2)}:00' for x in times]
 
         request = {
             'product_type':'reanalysis',
             'format':'grib',
             'variable': variables,
-            'pressure_level':'1000',
             'year':f'{target_datetime.year}',
             'month':str(target_datetime.month).zfill(2),
             'day':str(target_datetime.day).zfill(2),
-            'time':whole_day_times
+            'area': area,
+            'time':hour_times
+        }
+
+        self.cdsapi_client.retrieve(
+            'reanalysis-era5-single-levels',
+            request,
+            file_path)
+
+        return file_path
+
+    def download_pressure_levels_vars(self, vars_mode,
+                                      target_datetime, time_mode,
+                                      times, area, pressure_levels,
+                                      match_satel, file_name_suffix):
+        era5_dirs = self.CONFIG['era5']['dirs']\
+                ['reanalysis_pressure_levels']
+
+        if vars_mode == 'tc':
+            file_dir = (
+                f"""{era5_dirs["tc"]}/{match_satel}/"""
+                f"""Y{target_datetime.year}/"""
+                f"""M{str(target_datetime.month).zfill(2)}/"""
+            )
+            file_name = target_datetime.strftime('%Y_%m%d')
+            for t in times:
+                file_name = f'{file_name}_{str(t).zfill(2)}'
+            for a in area:
+                file_name = f'{file_name}_{a}'
+            file_name = f'{file_name}_{file_name_suffix}.grib'
+            file_path = f'{file_dir}{file_name}'
+            variables = self.vars['request']\
+                    ['reanalysis_pressure_levels']['all_vars']
+            vars_name = 'all pressure levels variables'
+        else:
+            return None
+
+        if os.path.exists(file_path):
+            return file_path
+
+        self.logger.info((f"""Downloading {vars_name} of {times} """
+                          f"""hours on {target_datetime.date()} """
+                          f"""from ERA5"""))
+
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+        if time_mode == 'whole_day':
+            hour_times = [f'{str(x).zfill(2)}:00' for x in range(24)]
+        else:
+            hour_times = [f'{str(x).zfill(2)}:00' for x in times]
+
+        pres_lvls = [str(x) for x in pressure_levels]
+
+        request = {
+            'product_type':'reanalysis',
+            'format':'grib',
+            'pressure_level':pres_lvls,
+            'variable': variables,
+            'year':f'{target_datetime.year}',
+            'month':str(target_datetime.month).zfill(2),
+            'day':str(target_datetime.day).zfill(2),
+            'area':area,
+            'time':hour_times
         }
 
         self.cdsapi_client.retrieve(
@@ -629,11 +707,13 @@ class ERA5Manager(object):
             ax2.remove()
 
         fig.tight_layout()
-        fig_path = (f'{self.CONFIG["result"]["dirs"]["fig"]}'
+        fig_dir = self.CONFIG["result"]["dirs"]["fig"]\
+                ['ibtracs_vs_era5']
+        fig_path = (f'{fig_dir}'
                     + f'era5_vs_ibtracs_{tc_row.sid}_'
                     + f'{tc_row.name}_{tc_row.date_time}_'
                     + f'{lon_converted}_{tc_row.lat}.png')
-        os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+        os.makedirs(fig_dir, exist_ok=True)
         fig.savefig(fig_path, dpi=300)
         plt.close(fig)
 

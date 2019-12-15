@@ -279,8 +279,10 @@ class CoverageManager(object):
 
         start_dt = this_hour.strftime('%Y_%m%d_%H%M')
         end_dt = next_hour.strftime('%Y_%m%d_%H%M')
-        fig_name = f'coverage_{start_dt}_{end_dt}.png'
-        fig_dir = self.CONFIG['result']['dirs']['fig']
+        fig_name = f'{start_dt}_{end_dt}.png'
+        fig_dir = self.CONFIG['result']['dirs']['fig']\
+                ['satellite_coverage']
+        os.makedirs(fig_dir, exist_ok=True)
         plt.savefig(f'{fig_dir}{fig_name}')
         plt.clf()
 

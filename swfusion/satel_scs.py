@@ -51,7 +51,7 @@ class SCSSatelManager(object):
 
     """
 
-    def __init__(self, CONFIG, period, region, passwd, save_disk):
+    def __init__(self, CONFIG, period, region, passwd, save_disk, work):
         self.logger = logging.getLogger(__name__)
         # self.satel_names = ['ascat', 'wsat', 'amsr2', 'smap']
         # self.satel_names = ['sentinel_1']
@@ -121,8 +121,8 @@ class SCSSatelManager(object):
         # Load 4 variables above
         utils.load_grid_lonlat_xy(self)
 
-        # self.download_and_read_tc_oriented()
-        self.download_and_read()
+        if work:
+            self.download_and_read()
 
     def _get_region_corners_indices(self):
         self.lat1_index = self.grid_pts['rss']['lat'].index(
@@ -351,10 +351,8 @@ class SCSSatelManager(object):
 
                         if satel_name != 'sentinel_1':
                             lat1, lat2, lon1, lon2 = \
-                                    self._get_era5_corners_of_rss_cell(
+                                    utils.get_era5_corners_of_rss_cell(
                                         row.lon, row.lat)
-                            if lon2 == 360:
-                                lon2 = 0
                             corners = []
                             for lat in [lat1, lat2]:
                                 for lon in [lon1, lon2]:
@@ -476,15 +474,6 @@ class SCSSatelManager(object):
             self.logger.error((f"""Fail getting ERA5 corners """
                                f"""of SCS grid cell"""))
 
-    def _get_era5_corners_of_rss_cell(self, lon, lat):
-        delta = self.CONFIG['rss']['spatial_resolution'] * 0.5
-        lat1 = lat - delta
-        lat2 = lat + delta
-        lon1 = lon - delta
-        lon2 = lon + delta
-
-        return lat1, lat2, lon1, lon2
-
     def _get_hourtime_row_dict(self, satel_part):
         """Generate a dict to record the relationship between SMAP data
         point and its closest hour.
@@ -519,14 +508,11 @@ class SCSSatelManager(object):
         satel_date = target_datetime.date()
 
         if satel_name != 'sentinel_1':
-
             utils.setup_signal_handler()
             file_path = self._download_satel_data_in_specified_date(
                 satel_config, satel_name, satel_date)
             utils.reset_signal_handler()
-
         else:
-
             self._setup_signal_handler()
             file_path = self._download_sentinel_1_in_specified_date(
                 satel_config, satel_date, have_uuid_table=True)
@@ -692,7 +678,10 @@ class SCSSatelManager(object):
         DatetimeUUID = self.create_datetime_uuid_table()
 
         cwd = os.getcwd()
-        os.chdir(satel_config['dirs']['ncs'])
+        dir = (f"""{satel_config['dirs']['ncs']}Y{satel_date.year}"""
+               f"""/M{str(satel_date.month).zfill(2)}/""")
+        os.makedirs(dir, exist_ok=True)
+        os.chdir(dir)
 
         the_day = satel_date
         for row in self.session.query(DatetimeUUID).filter(
@@ -843,6 +832,8 @@ class SCSSatelManager(object):
             save_dir = config['dirs']['bmaps']
         else:
             save_dir = config['dirs']['ncs']
+        save_dir = (f"""{save_dir}Y{satel_date.year}/"""
+                    f"""M{str(satel_date.month).zfill(2)}/""")
         missing_dates_file = config['files_path']['missing_dates']
 
         if os.path.exists(missing_dates_file):

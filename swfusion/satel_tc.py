@@ -1094,10 +1094,12 @@ class SatelManager(object):
             plt.clf()
             return count
 
-        fig_path = (f'{self.CONFIG["result"]["dirs"]["fig"]}'
-                     + f'data_match_on_{tc_row.date_time}_{satel_name}.png')
+        fig_dir = self.CONFIG["result"]["dirs"]["fig"]\
+                ['data_match_of_tc']
+        fig_path = (f'{fig_dir}'
+                     + f'{tc_row.date_time}_{satel_name}.png')
         self.logger.debug(f'Drawing {fig_path}')
-        os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+        os.makedirs(fig_dir, exist_ok=True)
         plt.savefig(fig_path)
         plt.clf()
 

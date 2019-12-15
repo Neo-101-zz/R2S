@@ -1,5 +1,7 @@
 logging:
   dir: '../log'
+statistic:
+  table_name: 'isd_based_comparsion'
 product:
   temporal_resolution: 600
 satel_names:
@@ -79,7 +81,8 @@ ibtracs:
   season_check_offset: 5
   table_name:
     scs: 'ibtracs_scs'
-    normal: 'ibtracs'
+    wp: 'ibtracs_wp'
+    global_since_1980: 'ibtracs_global'
   urls:
     wp: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.WP.v04r00.nc'
     since1980: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.since1980.v04r00.nc'
@@ -102,57 +105,111 @@ era5:
     - 6
     - 12
     - 18
+  different_spatial_resolution_vars:
+    grib:
+      reanalysis_single_levels:
+        tc:
+          atmosphere:
+            spatial_resolution: 0.25
+            vars:
+              - 'neutral_wind_at_10_m_u_component'
+              - '10_metre_u_wind_component'
+              - 'neutral_wind_at_10_m_v_component'
+              - '10_metre_v_wind_component'
+              - '2_metre_dewpoint_temperature'
+              - '2_metre_temperature'
+              - 'mean_sea_level_pressure'
+              - 'sea_surface_temperature'
+          ocean_waves:
+            spatial_resolution: 0.5
+            vars:
+              - 'significant_height_of_combined_wind_waves_and_swell'
   vars:
-    - 'geopotential'
-    - 'relative_humidity'
-    - 'temperature'
-    - 'u_component_of_wind'
-    - 'v_component_of_wind'
-  wind_vars:
-    - 'u_component_of_wind'
-    - 'v_component_of_wind'
-  all_vars:
-    - 'divergence'
-    - 'fraction_of_cloud_cover'
-    - 'geopotential'
-    - 'ozone_mass_mixing_ratio'
-    - 'potential_vorticity'
-    - 'relative_humidity'
-    - 'specific_cloud_ice_water_content'
-    - 'specific_cloud_liquid_water_content'
-    - 'specific_humidity'
-    - 'specific_rain_water_content'
-    - 'specific_snow_water_content'
-    - 'temperature'
-    - 'u_component_of_wind'
-    - 'v_component_of_wind'
-    - 'vertical_velocity'
-    - 'vorticity'
-  pres_lvl:
-    - '100'
-    - '200'
-    - '300'
-    - '400'
-    - '500'
-    - '600'
-    - '700'
-    - '800'
-    - '850'
-    - '925'
-    - '975'
-    - '1000'
+    grib:
+      reanalysis_single_levels:
+        10_metre_equivalent_neutral_wind:
+          - 'neutral_wind_at_10_m_u_component'
+          - 'neutral_wind_at_10_m_v_component'
+        tc:
+          - 'neutral_wind_at_10_m_u_component'
+          - '10_metre_u_wind_component'
+          - 'neutral_wind_at_10_m_v_component'
+          - '10_metre_v_wind_component'
+          - '2_metre_dewpoint_temperature'
+          - '2_metre_temperature'
+          - 'mean_sea_level_pressure'
+          - 'sea_surface_temperature'
+          - 'significant_height_of_combined_wind_waves_and_swell'
+      reanalysis_pressure_levels:
+        all_vars:
+          - 'divergence'
+          - 'fraction_of_cloud_cover'
+          - 'geopotential'
+          - 'ozone_mass_mixing_ratio'
+          - 'potential_vorticity'
+          - 'relative_humidity'
+          - 'specific_cloud_ice_water_content'
+          - 'specific_cloud_liquid_water_content'
+          - 'specific_humidity'
+          - 'specific_rain_water_content'
+          - 'specific_snow_water_content'
+          - 'temperature'
+          - 'u_component_of_wind'
+          - 'v_component_of_wind'
+          - 'vertical_velocity'
+          - 'vorticity_relative'
+    request:
+      reanalysis_single_levels:
+        10_metre_equivalent_neutral_wind:
+          - '10m_u_component_of_neutral_wind'
+          - '10m_v_component_of_neutral_wind'
+        tc:
+          - '10m_u_component_of_neutral_wind'
+          - '10m_u_component_of_wind'
+          - '10m_v_component_of_neutral_wind'
+          - '10m_v_component_of_wind'
+          - '2m_dewpoint_temperature'
+          - '2m_temperature'
+          - 'mean_sea_level_pressure'
+          - 'sea_surface_temperature'
+          - 'significant_height_of_combined_wind_waves_and_swell'
+      reanalysis_pressure_levels:
+        all_vars:
+          - 'divergence'
+          - 'fraction_of_cloud_cover'
+          - 'geopotential'
+          - 'ozone_mass_mixing_ratio'
+          - 'potential_vorticity'
+          - 'relative_humidity'
+          - 'specific_cloud_ice_water_content'
+          - 'specific_cloud_liquid_water_content'
+          - 'specific_humidity'
+          - 'specific_rain_water_content'
+          - 'specific_snow_water_content'
+          - 'temperature'
+          - 'u_component_of_wind'
+          - 'v_component_of_wind'
+          - 'vertical_velocity'
+          - 'vorticity'
+  pres_lvls:
+    - 100
+    - 200
+    - 300
+    - 400
+    - 500
+    - 600
+    - 700
+    - 800
+    - 850
+    - 925
+    - 975
+    - 1000
   dirs:
-    threeD:
-      major: '../data/era5/reanalysis_pressure_levels/threeD/major/'
-      minor: '../data/era5/reanalysis_pressure_levels/threeD/minor/'
-    surface_wind:
-      major: '../data/era5/reanalysis_pressure_levels/surface_wind/major/'
-      minor: '../data/era5/reanalysis_pressure_levels/surface_wind/minor/'
-      tc: '../data/era5/reanalysis_pressure_levels/surface_wind/tc/'
-    surface_all_vars:
-      to_match_satel: '../data/era5/reanalysis_pressure_levels/surface_all_vars/to_match_satel/'
-      major: '../data/era5/reanalysis_pressure_levels/surface_all_vars/major/'
-      minor: '../data/era5/reanalysis_pressure_levels/surface_all_vars/minor/'
+    reanalysis_single_levels:
+      10_metre_equivalent_neutral_wind: '../data/era5/reanalysis_single_levels/10_metre_equivalent_neutral_wind/'
+      tc: '../data/era5/reanalysis_single_levels/tc/'
+    reanalysis_pressure_levels:
+      tc: '../data/era5/reanalysis_pressure_levels/tc/'
 stdmet:
   urls:
     data: 'https://www.ndbc.noaa.gov/data/historical/stdmet/'
@@ -359,7 +416,20 @@ wsat:
         Reading Windsat data
 result:
   dirs:
-    fig: '../fig/'
+    fig:
+      root: '../fig/'
+      isd_stations: '../fig/isd_stations/'
+      ibtracs_vs_ccmp: '../fig/btracs_vs_ccmp/'
+      ibtracs_vs_era5: '../fig/ibtracs_vs_era5/'
+      ibtracs_vs_smap: '../fig/ibtracs_vs_smap/'
+      data_match_of_tc: '../fig/data_match_of_tc/'
+      satellite_coverage: './fig/satellite_coverage/'
+      ibtracs_vs_ccmp_and_era5: '../fig/ibtracs_vs_ccmp_and_era5/'
+      distribution_of_stdmet_stations: '../fig/distribution_of_stdmet_stations/'
+      regression_vs_era5: '../fig/regression_vs_era5/'
+      hist_of_same_mingmt: '../fig/hist_of_same_mingmt/'
+      hist_of_same_latitude_at_same_mingmt: '../fig/hist_of_same_latitude_at_same_mingmt/'
+      hist_of_same_longitude_at_same_mingmt: '../fig/hist_of_same_longitude_at_same_mingmt/'
 database:
   db_api: 'mysql+mysqlconnector'
   user: 'root'
@@ -419,9 +489,15 @@ workflow:
       time_flow_backward: |-
         Start datetime is later than end datetime.
 regression:
+  edge_in_degree: 8
   dirs:
-    checkpoint: '../train/checkpoint/'
+    scs: '../regression/NN/scs/checkpoint/'
+    tc:
+      model_summary: '../regression/NN/tc/model_summary/'
+      checkpoint: '../regression/NN/tc/checkpoint/'
+      evaluation: '../regression/NN/tc/evaluation/'
   target:
+    smap_era5: 'smap_windspd'
     ascat:
       - 'u_wind'
       - 'v_wind'
@@ -438,6 +514,16 @@ regression:
       - 'u_wind'
       - 'v_wind'
   useless_columns:
+    smap_era5:
+      - 'key'
+      - 'sid'
+      - 'satel_datetime'
+      - 'era5_datetime'
+      - 'satel_datetime_lon_lat'
+      - 'smap_u_wind'
+      - 'smap_v_wind'
+      - 'era5_10m_neutral_equivalent_windspd'
+      - 'era5_10m_neutral_equivalent_winddir'
     era5:
       - 'key'
       - 'land'

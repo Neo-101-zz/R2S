@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 import warnings
 warnings.filterwarnings('ignore')
 warnings.filterwarnings('ignore', category=DeprecationWarning)
@@ -12,6 +13,7 @@ from sqlalchemy.ext.declarative import declarative_base
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 import seaborn as sb
+from keras import backend as K
 from keras.models import Sequential
 from keras.callbacks import ModelCheckpoint
 from keras.layers import Dense, Activation, Flatten
@@ -22,11 +24,16 @@ from xgboost import XGBRegressor
 from mpl_toolkits.basemap import Basemap
 from matplotlib import patches as mpatches
 import matplotlib.pyplot as plt
+from keras.models import model_from_yaml
+import yaml
 
 import utils
 import era5
 
 Base = declarative_base()
+
+def root_mean_squared_error(y_true, y_pred):
+    return K.sqrt(K.mean(K.square(y_pred - y_true)))
 
 class Regression(object):
 
@@ -43,16 +50,8 @@ class Regression(object):
         self.save_disk = save_disk
 
         self.smap_columns = ['x', 'y', 'lon', 'lat', 'windspd']
-        self.era5_columns = self.CONFIG['era5']['all_vars']
+        # self.era5_columns = self.CONFIG['era5']['all_vars']
 
-        self.smap_era5_useless_columns = [
-            'key', 'match_sid',
-            'temporal_window_mins',
-            'satel_tc_diff_mins', 'tc_datetime',
-            'satel_datetime', 'era5_datetime',
-            'satel_datetime_lon_lat',
-            'satel_era5_diff_mins'
-        ]
         self.era5_useless_columns = [
             'key', 'x_y'
         ]
@@ -75,12 +74,28 @@ class Regression(object):
 
         utils.setup_database(self, Base)
 
-        self.read_era5_smap()
-        self.make_DNN()
+        self.read_smap_era5(None, 15, 'small')
+        self.bulid_DNN()
         self.train_DNN()
-        self.predict()
+        self.predict_and_evaluate()
 
-    def predict(self):
+    def predict_and_evaluate(self):
+        self.logger.info((f"""Predicting and evaluating"""))
+        # Get ERA file in test period according to IBTrACS data in
+        # SCS/WP ?
+
+        # Generate ERA5 fields from ERA5 file
+
+        # Predict SMAP windspd
+        score = self.NN_model.evaluate(self.test, self.test_target,
+                                       verbose=0)
+
+        self.logger.info((f"""Evaluating on test dataset"""))
+        metrics_names = self.NN_model.metrics_names
+        for i in range(len(metrics_names)):
+            print(f'{metrics_names[i]}: {score[i]}')
+
+    def predict_old(self):
         the_mode = 'surface_all_vars'
         # Read ERA5 dataframe
         era5_ = era5.ERA5Manager(self.CONFIG, self.test_period,
@@ -186,11 +201,13 @@ class Regression(object):
             ax2.remove()
 
         fig.tight_layout()
-        fig_path = (f'{self.CONFIG["result"]["dirs"]["fig"]}'
+        fig_dir = self.CONFIG["result"]["dirs"]["fig"]\
+                ['ibtracs_vs_smap']
+        fig_path = (f'{fig_dir}'
                     + f'smap_vs_ibtracs_{tc_row.sid}_'
                     + f'{tc_row.name}_{tc_row.date_time}_'
                     + f'{lon_converted}_{tc_row.lat}.png')
-        os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+        os.makedirs(fig_dir, exist_ok=True)
         fig.savefig(fig_path, dpi=300)
         plt.close(fig)
 
@@ -205,27 +222,38 @@ class Regression(object):
 
         return windspd
 
-    def train_DNN(self):
-        # self.NN_model.fit(self.train, self.target, epochs=self.epochs,
-        #                   batch_size=self.batch_size,
-        #                   validation_split=self.validation_split,
-        #                   callbacks=self.callbacks_list)
+    def train_DNN(self, skip_fit=False):
+        self.logger.info((f"""Training DNN"""))
+        if not skip_fit:
+            self.NN_model.fit(self.train, self.target,
+                              epochs=self.epochs,
+                              batch_size=self.batch_size,
+                              validation_split=self.validation_split,
+                              callbacks=self.callbacks_list, verbose=0)
 
         # Load weights file of the best model:
         # choose the best checkpoint
-        weights_file = 'Weights-438--1.16947.hdf5'
+        weights_file = utils.find_best_NN_weights_file(
+            self.checkpoint_dir)
         # load it
         self.NN_model.load_weights(weights_file)
-        self.NN_model.compile(loss='mean_absolute_error',
+        self.NN_model.compile(loss=root_mean_squared_error,
                               optimizer='adam',
-                              metrics=['mean_absolute_error'])
-        score = self.NN_model.evaluate(self.train, self.target,
-                                       verbose=0)
-        metrics_names = self.NN_model.metrics_names
-        for i in range(len(metrics_names)):
-            print(f'{metrics_names[i]}: {score[i]}')
+                              metrics=[root_mean_squared_error])
 
-    def make_DNN(self):
+        # self.logger.info((f"""Evaluating on train dataset"""))
+        # score = self.NN_model.evaluate(self.train, self.target,
+        #                                verbose=0)
+
+        # metrics_names = self.NN_model.metrics_names
+        # for i in range(len(metrics_names)):
+        #     print(f'{metrics_names[i]}: {score[i]}')
+
+        # evaluation_dir = self.CONFIG['regression']['dirs']['tc']\
+        #         ['evaluation']
+
+    def bulid_DNN(self):
+        self.logger.info((f"""Building DNN"""))
         self.NN_model = Sequential()
         self.NN_model.add(Dense(128, kernel_initializer='normal',
                                 input_dim = self.train.shape[1],
@@ -235,67 +263,122 @@ class Regression(object):
                                     activation='relu'))
         self.NN_model.add(Dense(1, kernel_initializer='normal',
                                 activation='linear'))
-        self.NN_model.compile(loss='mean_absolute_error',
+        self.NN_model.compile(loss=root_mean_squared_error,
                               optimizer='adam',
-                              metrics=['mean_absolute_error'])
+                              metrics=[root_mean_squared_error])
 
         self.NN_model.summary()
 
+        yaml_string = self.NN_model.to_yaml()
+        # model = model_from_yaml(yaml_string)
+        model_summary_dir = self.CONFIG['regression']['dirs']['tc']\
+                ['model_summary']
+        os.makedirs(model_summary_dir, exist_ok=True)
+        model_summary_path = f'{model_summary_dir}model.yml'
+        with open(model_summary_path, 'w') as outfile:
+            yaml.dump(yaml_string, outfile, default_flow_style=False)
+
+        checkpoint_root_dir = self.CONFIG['regression']['dirs']\
+                ['tc']['checkpoint']
+
+        self.checkpoint_dir = (f"""{checkpoint_root_dir}"""
+                               f"""{self.condition}/""")
+        # Remove old checkpoint files
+        if os.path.exists(self.checkpoint_dir):
+            shutil.rmtree(self.checkpoint_dir)
+        # Create a new checkpoint directory
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
+
         checkpoint_name = 'Weights-{epoch:03d}--{val_loss:.5f}.hdf5'
-        checkpoint = ModelCheckpoint(checkpoint_name,
+        checkpoint_path = (f"""{self.checkpoint_dir}"""
+                           f"""{checkpoint_name}""")
+
+        checkpoint = ModelCheckpoint(checkpoint_path,
                                      monitor='val_loss',
-                                     verbose=1, save_best_only=True,
-                                     mode ='auto')
+                                     verbose=2, save_best_only=True,
+                                     mode='auto')
         self.callbacks_list = [checkpoint]
 
-    def read_era5_smap(self):
-        train_data, test_data = self._get_train_test()
-        combined, target, train_length = self.get_combined_data()
+    def read_smap_era5(self, col_name, divide, large_or_small):
+        self.logger.info((f"""Reading SMAP-ERA5 data"""))
+        combined, target, test_target, train_length = \
+                self.get_combined_data(col_name, divide, large_or_small)
 
-        num_cols = utils.get_dataframe_cols_with_no_nans(combined, 'num')
+        # num_cols = utils.get_dataframe_cols_with_no_nans(combined,
+        #                                                  'num')
         # print ('Number of numerical columns with no nan values :',
         #        len(num_cols))
-
-        # train_data['Target'] = target
-
-        # C_mat = train_data.corr()
-        # fig = plt.figure(figsize=(15, 15))
-        # sb.heatmap(C_mat, vmax=.8, square=True)
-        # plt.show()
 
         self.train, self.test = self.split_combined(combined,
                                                     train_length)
         self.target = target
+        self.test_target = test_target
+
+        # train_data, test_data = self._get_train_test()
+        # train_data = self.train
+        # train_data['Target'] = target
+        # self._show_correlation_heatmap(train_data)
+        # breakpoint()
 
     def split_combined(self, combined, train_length):
         train = combined[:train_length]
         test = combined[train_length:]
 
-        return train , test
+        return train, test
 
-    def get_combined_data(self):
-        train, test = self._get_train_test()
+    def get_combined_data(self, col_name, divide, large_or_small):
+        train, test = self._get_train_test(col_name, divide,
+                                           large_or_small)
         train_length = len(train)
 
-        target = train.windspd
-        train.drop(['windspd'], axis=1, inplace=True)
-        test.drop(['windspd'], axis=1, inplace=True)
+        target_name = self.CONFIG['regression']['target']['smap_era5']
+        target = getattr(train, target_name)
+        test_target = getattr(test, target_name)
+        train.drop([target_name], axis=1, inplace=True)
+        test.drop([target_name], axis=1, inplace=True)
 
         combined = train.append(test)
         combined.reset_index(inplace=True)
         combined.drop(['index'], axis=1, inplace=True)
 
-        return combined, target, train_length
+        return combined, target, test_target, train_length
 
-    def _get_train_test(self):
-        table_name = 'smap_2015'
-        df = pd.read_sql('SELECT * FROM smap_2018', self.engine)
-        df.drop(self.smap_era5_useless_columns, axis=1, inplace=True)
+    def _get_train_test(self, col_name, divide, large_or_small):
+        # years = [y for y in range(self.train_period[0].year,
+        #                           self.train_period[1].year+1)]
+        years = [2015, 2016, 2017, 2018, 2019]
+        df = None
+        for y in years:
+            table_name = f'tc_smap_era5_{y}'
+            if (utils.get_class_by_tablename(self.engine, table_name)
+                is not None):
+                tmp_df = pd.read_sql(f'SELECT * FROM {table_name}',
+                                     self.engine)
+                if df is None:
+                    df = tmp_df
+                else:
+                    df = df.append(tmp_df)
+
+        df.drop(self.CONFIG['regression']['useless_columns']\
+                ['smap_era5'], axis=1, inplace=True)
+
+        if col_name is not None:
+            df, self.condition = \
+                    utils.filter_dataframe_by_column_value_divide(
+                        df, col_name, divide, large_or_small)
+        else:
+            self.condition = 'all'
+
         train, test = train_test_split(df, test_size=0.2)
 
         return train, test
 
-    def _show_dataframe(self, df):
-        df.hist(column=self.era5_columns, figsize = (12,10))
+    def _show_dataframe_hist(self, df, columns):
+        df.hist(column=columns, figsize = (12,10))
         plt.show()
 
+    def _show_correlation_heatmap(self, data):
+        C_mat = data.corr()
+        fig = plt.figure(figsize=(15, 15))
+        sb.heatmap(C_mat, vmax=.8, square=True)
+        plt.show()

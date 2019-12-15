@@ -56,13 +56,13 @@ class IBTrACSManager(object):
 
         utils.reset_signal_handler()
         utils.setup_database(self, Base)
-        self.read()
+        self.read('wp', region_restriction=False)
 
-    def create_tc_table(self):
+    def create_tc_table(self, tc_type):
         """Create the table which represents TC records from IBTrACS.
 
         """
-        table_name = self.CONFIG['ibtracs']['table_name']['scs']
+        table_name = self.CONFIG['ibtracs']['table_name'][tc_type]
 
         class WMOWPTC(object):
             pass
@@ -133,7 +133,7 @@ class IBTrACSManager(object):
 
         utils.download(url, self.ibtracs_file_path, progress=True)
 
-    def read(self):
+    def read(self, tc_type, region_restriction):
         """Read IBTrACS data into TC table.
 
         """
@@ -162,17 +162,18 @@ class IBTrACSManager(object):
         info = (f"""Reading WMO records in """
                 f"""{self.ibtracs_file_path.split("/")[-1]}""")
         # Read detail of IBTrACS data
-        self._read_detail(vars, storm_num, date_time_num, have_read, info)
+        self._read_detail(tc_type, region_restriction, vars, storm_num,
+                          date_time_num, have_read, info)
 
-    def _read_detail(self, vars, storm_num, date_time_num, have_read,
-                     info):
+    def _read_detail(self, tc_type, region_restriction, vars,
+                     storm_num, date_time_num, have_read, info):
         """Read detail of IBTrACS data.
 
         """
         total = storm_num
         # List to record all details
         wmo_wp_tcs = []
-        WMOWPTC = self.create_tc_table()
+        WMOWPTC = self.create_tc_table(tc_type)
 
         season_check_offset = self.CONFIG['ibtracs']\
                 ['season_check_offset']
@@ -267,9 +268,10 @@ class IBTrACSManager(object):
                 # breakpoint()
                 if lat is MASKED or lon is MASKED:
                     continue
-                if (lat < self.lat1 or lat > self.lat2
-                    or lon < self.lon1 or lon > self.lon2):
-                    continue
+                if region_restriction:
+                    if (lat < self.lat1 or lat > self.lat2
+                        or lon < self.lon1 or lon > self.lon2):
+                        continue
 
                 pres = vars['wmo_pres'][i][j]
                 wind = vars['wmo_wind'][i][j]

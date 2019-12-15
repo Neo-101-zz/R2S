@@ -23,12 +23,13 @@ Base = declarative_base()
 
 class ISDManager(object):
 
-    def __init__(self, CONFIG, period, region, passwd):
+    def __init__(self, CONFIG, period, region, passwd, work_mode):
         self.logger = logging.getLogger(__name__)
 
         self.CONFIG = CONFIG
         self.period = period
         self.db_root_passwd = passwd
+        self.work_mode = work_mode
         self.engine = None
         self.session = None
 
@@ -59,10 +60,11 @@ class ISDManager(object):
         # Load 4 variables above
         utils.load_grid_lonlat_xy(self)
 
-        self.if_station_on_land()
-        self.plot_stations_on_map()
+        # self.if_station_on_land()
+        # self.plot_stations_on_map()
 
-        self.download_and_read_scs_data()
+        if self.work_mode != '':
+            self.download_and_read_scs_data()
 
     def plot_stations_on_map(self):
         stn_df = pd.read_sql('isd_scs_stations', self.engine)
@@ -116,9 +118,9 @@ class ISDManager(object):
 
         plt.legend().set_zorder(self.zorders['grid'] + 1)
 
-        fig_dir = self.CONFIG['result']['dirs']['fig']
-        fig_name = (f"""ISD_SCS_stations_{self.period[0]}"""
-                    f"""_{self.period[1]}.png""")
+        fig_dir = self.CONFIG['result']['dirs']['fig']['isd_stations']
+        os.makedirs(fig_dir, exist_ok=True)
+        fig_name = (f"""{self.period[0]}_{self.period[1]}.png""")
         fig_path = f'{fig_dir}{fig_name}'
         plt.savefig(fig_path)
 
@@ -146,7 +148,9 @@ class ISDManager(object):
         self.logger.info(f'Downloading ISD data')
         ISDStation = self.create_isd_station_table()
 
+        year_csv_paths = dict()
         for year in self.years:
+            year_csv_paths[year] = []
             year_dir = f"{self.CONFIG['isd']['dirs']['csvs']}{year}/"
             os.makedirs(year_dir, exist_ok=True)
 
@@ -161,15 +165,24 @@ class ISDManager(object):
 
             for stn in stn_query:
                 count += 1
-                print((f"""\rDownloading and reading {stn.station_id} """
-                       f"""in {year} {count}/{total}"""), end='')
+                if self.work_mode == 'fetch_and_read':
+                    print((f"""\rDownloading and reading """
+                           f"""{stn.station_id} """
+                           f"""in {year} {count}/{total}"""), end='')
+                else:
+                    print((f"""\rDownloading {stn.station_id} """
+                           f"""in {year} {count}/{total}"""), end='')
                 csv_path = self.download_stn_data_in_a_year(
                     stn, year, year_dir)
+                year_csv_paths[year].append(csv_path)
 
-                self.read_isd_csv(ISDWind, csv_path, year)
+                if self.work_mode == 'fetch_and_read':
+                    self.read_isd_csv(ISDWind, csv_path, year)
 
             utils.delete_last_lines()
             print(f'{year} done')
+
+        return year_csv_paths
 
     def read_isd_csv(self, ISDWind, csv_path, year):
         df = pd.read_csv(csv_path)

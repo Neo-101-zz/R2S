@@ -133,6 +133,11 @@ class CCMPManager(object):
         file_path = f'{file_dir}{file_name}'
         file_url = f'{url_prefix}{file_name}'
 
+        if os.path.exists(file_path):
+            return file_path
+
+        self.logger.info((f"""Downloading {file_name}"""))
+
         os.makedirs(file_dir, exist_ok=True)
         utils.download(file_url, file_path, progress=True)
         utils.reset_signal_handler()
@@ -327,8 +332,9 @@ class CCMPManager(object):
         radii_area = utils.draw_ibtracs_radii(ax, tc, self.zorders)
 
         dt_str = dt.strftime('%Y_%m%d_%H%M')
+        fig_dir = self.CONFIG['result']['dirs']['fig']['ibtracs_vs_ccmp']
+        os.makedirs(fig_dir, exist_ok=True)
         fig_name = f'ccmp_vs_ibtracs_{dt_str}_{tc.name}.png'
-        fig_dir = self.CONFIG['result']['dirs']['fig']
         plt.savefig(f'{fig_dir}{fig_name}')
         plt.clf()
 

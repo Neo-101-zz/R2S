@@ -140,9 +140,11 @@ class StdmetManager(object):
         map.drawmeridians(np.arange(0,360,30))
         map.drawparallels(np.arange(-90,90,30))
         map.scatter(stn_lon, stn_lat, latlon=True)
-        fig_path = (f'{self.CONFIG["result"]["dirs"]["fig"]}'
+        fig_dir = self.CONFIG["result"]["dirs"]["fig"]\
+                ['distribution_of_stdmet_stations']
+        fig_path = (f'{fig_dir}'
                      + f'distribution_of_stdmet_stations.png')
-        os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+        os.makedirs(fig_dir, exist_ok=True)
         plt.savefig(fig_path)
         plt.show()
 

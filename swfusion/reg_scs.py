@@ -183,8 +183,10 @@ class NewReg(object):
             self.draw_reg_windspd(fig, ax, self.grid_lons, self.grid_lats,
                                   wind, min_windspd, max_windspd)
 
-        fig_name = f'regression_{table_datetime}_{satel_name}.png'
-        fig_dir = self.CONFIG['result']['dirs']['fig']
+        fig_name = f'{table_datetime}_{satel_name}.png'
+        fig_dir = self.CONFIG['result']['dirs']['fig']\
+                ['regression_vs_era5']
+        os.makedirs(fig_dir, exist_ok=True)
         plt.savefig(f'{fig_dir}{fig_name}')
         plt.clf()
 
@@ -310,8 +312,11 @@ class NewReg(object):
 
         self.NN_model[col_name].summary()
 
+        checkpoint_root_dir = self.CONFIG['regression']['dirs']\
+                ['checkpoint']
+
         self.checkpoint_dir[col_name] = (
-            f"""{self.CONFIG['regression']['dirs']['checkpoint']}"""
+            f"""{checkpoint_root_dir['scs']}"""
             f"""{satel_name}/"""
             f"""{col_name}/"""
         )
