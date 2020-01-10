@@ -2618,3 +2618,35 @@ def get_terminal_indices_of_nc_var(var, masked_value):
             encounter_masked = True
             start_indices.append(idx)
 
+def update_sfmr_windspd_matrix(grid_lons, grid_lats, sfmr_windspd,
+                               nc_file_path, data_indices):
+    dataset = netCDF4.Dataset(smap_file_path)
+    # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which
+    # faster than 1 m/s, so must disable auto mask
+    dataset.set_auto_mask(False)
+    vars = dataset.variables
+    lons = vars['LON']
+    lats = vars['LAT']
+    wind = vars['SWS']
+
+    used_sfmr_lonlats = set()
+    filled_grid_lonlats = set()
+
+    for idx in data_indices:
+        lon = lons[idx]
+        lat = lats[idx]
+        if (lon, lat) in used_sfmr_lonlats:
+            continue
+        used_sfmr_lonlats.add((lon, lat))
+
+        mapped_grid_lon, mapped_grid_lon_idx = get_nearest_element_and_index(
+            grid_lons, lon)
+        mapped_grid_lat, mapped_grid_lat_idx = get_nearest_element_and_index(
+            grid_lats, lat)
+        if (mapped_grid_lon, mapped_grid_lat) in filled_grid_lonlats:
+            continue
+        filled_grid_lonlats.add((mapped_grid_lon, mapped_grid_lat))
+
+        sfmr_windspd[mapped_grid_lat_idx][mapped_grid_lon_idx] = wind[idx]
+
+    return sfmr_windspd
