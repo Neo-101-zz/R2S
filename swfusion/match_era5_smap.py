@@ -20,7 +20,7 @@ Base = declarative_base()
 
 class matchManager(object):
 
-    def __init__(self, CONFIG, period, region, passwd, save_disk):
+    def __init__(self, CONFIG, period, region, basin, passwd, save_disk):
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
@@ -28,6 +28,7 @@ class matchManager(object):
         self.save_disk = save_disk
         self.engine = None
         self.session = None
+        self.match_basin = basin
 
         self.logger = logging.getLogger(__name__)
         utils.setup_database(self, Base)
@@ -77,7 +78,8 @@ class matchManager(object):
 
     def extract(self):
         # Get IBTrACS table
-        table_name = self.CONFIG['ibtracs']['table_name']['wp']
+        table_name = self.CONFIG['ibtracs']['table_name'][
+            self.match_basin]
         IBTrACS = utils.get_class_by_tablename(self.engine,
                                                table_name)
         tc_query = self.session.query(IBTrACS).filter(
@@ -91,6 +93,8 @@ class matchManager(object):
                 converted_lon = utils.longtitude_converter(
                     tc.lon, '360', '-180')
                 if bool(globe.is_land(tc.lat, converted_lon)):
+                    continue
+                if tc.date_time.minute or tc.date_time.second:
                     continue
                 if idx < total - 1:
                     next_tc = tc_query[idx + 1]
@@ -109,6 +113,14 @@ class matchManager(object):
                 exit(msg)
 
     def extract_between_two_tc_records(self, tc, next_tc):
+        """
+        Notes
+        -----
+        In this project, the range of longitude is from 0 to 360, so there
+        may be data leap near the prime merdian.  And the interpolation
+        should be ajusted.
+
+        """
         # Temporal shift
         delta = next_tc.date_time - tc.date_time
         # Skip interpolating between two TC recors if two neighbouring
@@ -117,6 +129,11 @@ class matchManager(object):
             self.extract_detail(tc.sid, tc.date_time, tc.lon, tc.lat)
             return
         hours = int(delta.seconds / 3600)
+        # Skip interpolating between two TC recors if two neighbouring
+        # records of TC are too close in time
+        if not hours:
+            self.extract_detail(tc.sid, tc.date_time, tc.lon, tc.lat)
+            return
         # Spatial shift
         lon_shift, lat_shift = utils.get_center_shift_of_two_tcs(
             next_tc, tc)
@@ -126,7 +143,7 @@ class matchManager(object):
         for h in range(hours):
             interp_dt = tc.date_time + datetime.timedelta(
                 seconds = h * 3600)
-            interp_tc_lon = (h * hourly_lon_shift + tc.lon)
+            interp_tc_lon = (h * hourly_lon_shift + tc.lon + 360) % 360
             interp_tc_lat = (h * hourly_lat_shift + tc.lat)
             self.extract_detail(tc.sid, interp_dt, interp_tc_lon,
                                 interp_tc_lat)
@@ -134,12 +151,20 @@ class matchManager(object):
     def extract_detail(self, tc_id, tc_dt, tc_lon, tc_lat):
         SMAPERA5 = self.create_smap_era5_table(tc_dt)
         # Skip this turn if there is no SMAP data around TC
-        data, hourtimes, area = self.extract_smap(tc_id, tc_dt, tc_lon,
-                                                  tc_lat, SMAPERA5)
-        if not len(data):
-            return
+        try:
+            data, hourtimes, area = self.extract_smap(
+                tc_id, tc_dt, tc_lon, tc_lat, SMAPERA5)
+            if not len(data):
+                return
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
 
-        data = self.extract_era5(tc_id, tc_dt, data, hourtimes, area)
+        try:
+            data = self.extract_era5(tc_id, tc_dt, data, hourtimes, area)
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
 
         utils.bulk_insert_avoid_duplicate_unique(
             data, self.CONFIG['database']\
@@ -167,27 +192,40 @@ class matchManager(object):
         lon1: float
 
         """
-        tc_lon_in_grid, tc_lon_in_grid_idx = \
-                utils.get_nearest_element_and_index(self.lons['smap'],
-                                                    tc_lon)
-        tc_lat_in_grid, tc_lat_in_grid_idx = \
-                utils.get_nearest_element_and_index(self.lats['smap'],
-                                                    tc_lat)
-        lat1_idx = tc_lat_in_grid_idx - self.half_edge_grid_intervals
-        lat1 = self.lats['smap'][lat1_idx]
-        lat2_idx = tc_lat_in_grid_idx + self.half_edge_grid_intervals
-        lat2 = self.lats['smap'][lat2_idx]
+        try:
+            tc_lon_in_grid, tc_lon_in_grid_idx = \
+                    utils.get_nearest_element_and_index(self.lons['smap'],
+                                                        tc_lon)
+            tc_lat_in_grid, tc_lat_in_grid_idx = \
+                    utils.get_nearest_element_and_index(self.lats['smap'],
+                                                        tc_lat)
+            lat1_idx = tc_lat_in_grid_idx - self.half_edge_grid_intervals
+            lat1 = self.lats['smap'][lat1_idx]
+            lat2_idx = tc_lat_in_grid_idx + self.half_edge_grid_intervals
+            lat2 = self.lats['smap'][lat2_idx]
 
-        if lat1 < -90 or lat2 > 90:
-            success = False
-        else:
-            success = True
+            if lat1 < -90 or lat2 > 90:
+                success = False
+            else:
+                success = True
 
-        lon1_idx = tc_lon_in_grid_idx - self.half_edge_grid_intervals
-        lon1 = self.lons['smap'][lon1_idx]
-        lon2_idx = tc_lon_in_grid_idx + self.half_edge_grid_intervals
-        lon2 = self.lons['smap'][lon2_idx]
-        lon1 = (lon1+ 360) % 360
+            lons_num = len(self.lons['smap'])
+            lon1_idx = tc_lon_in_grid_idx - self.half_edge_grid_intervals
+            lon1_idx = (lon1_idx + lons_num) % lons_num
+            lon1 = self.lons['smap'][lon1_idx]
+            lon2_idx = tc_lon_in_grid_idx + self.half_edge_grid_intervals
+            lon2_idx = (lon2_idx + lons_num) % lons_num
+            lon2 = self.lons['smap'][lon2_idx]
+
+            # ATTENTION: if area crosses the prime merdian, e.g.
+            # area = [10, 358, 8, 2], ERA5 API cannot retrieve
+            # requested data correctly,  so skip this situation
+            if lon1_idx >= lon2_idx:
+                success = False
+
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
 
         return success, lat1_idx, lat2_idx, lon1_idx, lon2_idx,\
                 lat1, lon1
@@ -222,14 +260,17 @@ class matchManager(object):
         """
         self.logger.info((f"""Extracting SMAP data on {tc_dt} """
                           f"""around TC {tc_id}"""))
-        satel_manager = satel_scs.SCSSatelManager(
-            self.CONFIG, self.period, self.region, self.db_root_passwd,
-            save_disk=self.save_disk, work=False)
-        smap_file_path = satel_manager.download('smap', tc_dt)
-        data, hourtimes, area = self.get_smap_part(SMAPERA5, tc_id,
-                                                   tc_dt, tc_lon,
-                                                   tc_lat,
-                                                   smap_file_path)
+        try:
+            satel_manager = satel_scs.SCSSatelManager(
+                self.CONFIG, self.period, self.region,
+                self.db_root_passwd,
+                save_disk=self.save_disk, work=False)
+            smap_file_path = satel_manager.download('smap', tc_dt)
+            data, hourtimes, area = self.get_smap_part(
+                SMAPERA5, tc_id, tc_dt, tc_lon, tc_lat, smap_file_path)
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
 
         return data, hourtimes, area
 
@@ -238,30 +279,26 @@ class matchManager(object):
         success, lat1_idx, lat2_idx, lon1_idx, lon2_idx, lat1, lon1 = \
                 self.get_square_around_tc(tc_lon, tc_lat)
         if not success:
-            return [], None
+            return [], None, None
 
         dataset = Dataset(smap_file_path)
         # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which
         # faster than 1 m/s, so must disable auto mask
         dataset.set_auto_mask(False)
         vars = dataset.variables
+        # Square around TC does not cross the prime meridian
         minute = vars['minute'][lat1_idx:lat2_idx+1,
                                 lon1_idx:lon2_idx+1, :]
         wind = vars['wind'][lat1_idx:lat2_idx+1,
                             lon1_idx:lon2_idx+1, :]
 
-        subset = dict()
-        var_names = ['minute', 'wind']
-
-        for var_name in var_names:
-            subset[var_name] = vars[var_name][
-                lat1_idx:lat2_idx+1, lon1_idx:lon2_idx+1, :
-            ]
-        lats_num, lons_num, passes_num = subset[var_names[0]].shape
+        lats_num, lons_num, passes_num = minute.shape
         minute_missing = self.CONFIG['smap']['missing_value']['minute']
         wind_missing = self.CONFIG['smap']['missing_value']['wind']
 
         data = []
+        lats = []
+        lons = []
         north = -90
         west = 360
         south = 90
@@ -273,78 +310,128 @@ class matchManager(object):
 
             for x in range(lons_num):
                 lon_of_col = x * self.spa_resolu['smap'] + lon1
+                lon_of_col = (lon_of_col + 360) % 360
 
                 for i in range(passes_num):
-                    if (minute[y][x][i] == minute_missing
-                        or wind[y][x][i] == wind_missing):
-                        continue
-                    if minute[y][x][0] == minute[y][x][1]:
-                        continue
-                    time_ = datetime.time(
-                        *divmod(int(minute[y][x][i]), 60), 0)
-                    # Temporal window is one hour
-                    pixel_dt = datetime.datetime.combine(
-                        tc_dt.date(), time_)
-                    delta = pixel_dt - tc_dt
-                    if delta.days or abs(delta.seconds) >= 1800:
-                        continue
+                    try:
+                        if (minute[y][x][i] == minute_missing
+                            or wind[y][x][i] == wind_missing):
+                            continue
+                        if minute[y][x][0] == minute[y][x][1]:
+                            continue
+                        if minute[y][x][i] == 1440:
+                            continue
+                        time_ = datetime.time(
+                            *divmod(int(minute[y][x][i]), 60), 0)
+                        # Temporal window is one hour
+                        pixel_dt = datetime.datetime.combine(
+                            tc_dt.date(), time_)
+                        delta = pixel_dt - tc_dt
+                        if delta.days or abs(delta.seconds) >= 1800:
+                            continue
 
-                    # SMAP originally has land mask, so it's not
-                    # necessary to check whether each pixel is land
-                    # or ocean
-                    row = SMAPERA5()
-                    row.sid = tc_id
-                    row.satel_datetime = datetime.datetime.combine(
-                        tc_dt.date(), time_)
-                    row.x = x - self.half_edge_grid_intervals
-                    row.y = y - self.half_edge_grid_intervals
+                        # SMAP originally has land mask, so it's not
+                        # necessary to check whether each pixel is land
+                        # or ocean
+                        row = SMAPERA5()
+                        row.sid = tc_id
+                        row.satel_datetime = datetime.datetime.combine(
+                            tc_dt.date(), time_)
+                        row.x = x - self.half_edge_grid_intervals
+                        row.y = y - self.half_edge_grid_intervals
 
-                    row.lon = lon_of_col
-                    if row.lon < west:
-                        west = row.lon
-                    if row.lon > east:
-                        east = row.lon
+                        row.lon = lon_of_col
+                        # if row.lon < west:
+                        #     west = row.lon
+                        # if row.lon > east:
+                        #     east = row.lon
+                        lons.append(row.lon)
 
-                    row.lat = lat_of_row
-                    if row.lat < south:
-                        south = row.lat
-                    if row.lat > north:
-                        north = row.lat
+                        row.lat = lat_of_row
+                        # if row.lat < south:
+                        #     south = row.lat
+                        # if row.lat > north:
+                        #     north = row.lat
+                        lats.append(row.lat)
 
-                    row.satel_datetime_lon_lat = (
-                        f"""{row.satel_datetime}"""
-                        f"""_{row.lon}_{row.lat}""")
-                    row.smap_windspd = float(wind[y][x][i])
+                        row.satel_datetime_lon_lat = (
+                            f"""{row.satel_datetime}"""
+                            f"""_{row.lon}_{row.lat}""")
+                        row.smap_windspd = float(wind[y][x][i])
 
-                    this_hourtime = utils.hour_rounder(
-                        row.satel_datetime).hour
-                    # Skip situation that hour is rounded to next day
-                    if (row.satel_datetime.hour == 23
-                        and this_hourtime == 0):
-                        continue
+                        this_hourtime = utils.hour_rounder(
+                            row.satel_datetime).hour
+                        # Skip situation that hour is rounded to next day
+                        if (row.satel_datetime.hour == 23
+                            and this_hourtime == 0):
+                            continue
 
-                    # Strictest reading rule: None of columns is none
-                    skip = False
-                    for key in row.__dict__.keys():
-                        if getattr(row, key) is None:
-                            skip = True
-                            break
-                    if skip:
-                        continue
-                    else:
-                        data.append(row)
-                        hourtimes.add(this_hourtime)
+                        # Strictest reading rule: None of columns is none
+                        skip = False
+                        for key in row.__dict__.keys():
+                            if getattr(row, key) is None:
+                                skip = True
+                                break
+                        if skip:
+                            continue
+                        else:
+                            data.append(row)
+                            hourtimes.add(this_hourtime)
+                    except Exception as msg:
+                        breakpoint()
+                        exit(msg)
 
-        # North, West, South, East,
+        if not len(data):
+            return data, None, None
+
+        north = max(lats)
+        south = min(lats)
+        east = max(lons)
+        west = min(lons)
+        # 'area' parameter to request ERA5 data via API:
+        # North, West, South, East
         # e.g. [12.125, 188.875, 3.125, 197.875]
-        # ERA5 WebAPI will extract maximum area within area
+        #
         # Due to difference bewteen ERA5 and RSS grid, need
-        # to expand the area a little
+        # to expand the area a little to request an ERA5 grid
+        # consists of all minimum squares around all RSS points.
+        #
         # Considering the spatial resolution of ERA5 ocean waves
-        # are 0.5 degree x 0.5 degree and getting ERA5 corners
-        # of RSS cell, we could set padding to 0.5
+        # are 0.5 degree x 0.5 degree, not 0.25 x 0.25 degree of 
+        # atmosphere, we need to expand a little more, at least 0.5
+        # degree
         diff = 0.5
-        area = [north + diff, west - diff, south - diff, east + diff]
+        area = [north + diff, (west - diff + 360) % 360,
+                south - diff, (east + diff + 360) % 360]
+        # --------------------------------------------------
+        # Updated 2019/12/24
+        #
+        # It seems that ERA5 will autonomically extract grid according
+        # to user's input of 'area' parameter when requesting ERA5
+        # data via API.
+        #
+        # For example, if 'area' parameter is
+        # [1.125, 0.625, 0.125, 1.625], the ERA5 grib file's lats will
+        # be [0.125, 0.375, 0.625, 0.875, 1.125] and its lons will be
+        # [0.625, 0.875, 1.125. 1.375, 1.625], which is 0.25 degree
+        # grid but the coordinates are not the multiple of 0.25.
+        #
+        # Becaues we consider ERA5 reanalysis grid coordinates are the
+        # multiple of 0.25 before, so we will squeeze the expanded area
+        # a little to a range which corners' coordiantes are the
+        # multiple of 0.25.
+        #
+        # North, West, South, East
+        for idx, val in enumerate(area):
+            if utils.is_multiple_of(val, 0.125):
+                # decrease north and east a little
+                if not idx or idx == 3:
+                    area[idx] = val - 0.125
+                # increase west and south a little
+                else:
+                    area[idx] = val + 0.125
+        area[1] = (area[1] + 360) % 360
+        area[3] = (area[3] + 360) % 360
 
         return data, list(hourtimes), area
 
@@ -413,6 +500,7 @@ class matchManager(object):
         count = 0
 
         grbidx = pygrib.index(era5_file_path, 'dataTime')
+        indices_of_rows_to_delete = set()
 
         # For every hour, update corresponding rows with grbs
         for hourtime in range(0, 2400, 100):
@@ -435,11 +523,19 @@ class matchManager(object):
                 lats = np.flip(lats, 0)
                 lons = np.flip(lons, 0)
 
+                masked_data = False
+                # MUST check masked array like this, because if an array
+                # is numpy.ma.core.MaskedArray, it is numpy.ndarray too.
+                # So only directly check whether an array is instance
+                # of numpy.ma.core.MaskedArray is safe.
+                if isinstance(data, np.ma.core.MaskedArray):
+                    masked_data = True
+
                 # Update all rows which matching this hourtime
-                for idx in hourtime_row_mapper[hourtime]:
+                for row_idx in hourtime_row_mapper[hourtime]:
                     count += 1
                     print((f"""\r{name}: {count}/{total}"""), end='')
-                    row = satel_part[idx]
+                    row = satel_part[row_idx]
 
                     row.era5_datetime = datetime.datetime.combine(
                         tc_dt.date(), grb_time)
@@ -462,6 +558,18 @@ class matchManager(object):
                     lat1_idx, lat2_idx, lon1_idx, lon2_idx = \
                             latlon_indices
 
+                    # Check out whether there is masked cell in square
+                    if masked_data:
+                        skip_row = False
+                        for tmp_lat_idx in [lat1_idx, lat2_idx]:
+                            for tmp_lon_idx in [lon1_idx, lon2_idx]:
+                                if data.mask[tmp_lat_idx][tmp_lon_idx]:
+                                    skip_row = True
+                                    indices_of_rows_to_delete.add(
+                                        row_idx)
+                        if skip_row:
+                            continue
+
                     square_data = data[lat1_idx:lat2_idx+1,
                                        lon1_idx:lon2_idx+1]
                     square_lats = lats[lat1_idx:lat2_idx+1,
@@ -483,8 +591,15 @@ class matchManager(object):
 
             grbidx.close()
 
+        # Move rows of satel_part which should not deleted to a new
+        # list to accomplish filtering rows with masked data
+        new_satel_part = []
+        for idx, row in enumerate(satel_part):
+            if idx not in indices_of_rows_to_delete:
+                new_satel_part.append(row)
+
         pres_lvls = []
-        for row in satel_part:
+        for row in new_satel_part:
             nearest_pres_lvl, nearest_pres_lvl_idx = \
                     utils.get_nearest_element_and_index(
                         self.pres_lvls,
@@ -502,7 +617,7 @@ class matchManager(object):
 
             pres_lvls.append(nearest_pres_lvl)
 
-        return satel_part, pres_lvls
+        return new_satel_part, pres_lvls
 
     def value_of_rss_pt_in_era5_square(self, data, lats, lons,
                                        rss_lat, rss_lon):
@@ -569,6 +684,7 @@ class matchManager(object):
         count = 0
 
         grbidx = pygrib.index(era5_file_path, 'dataTime')
+        indices_of_rows_to_delete = set()
 
         # For every hour, update corresponding rows with grbs
         for hourtime in range(0, 2400, 100):
@@ -591,18 +707,26 @@ class matchManager(object):
                 lats = np.flip(lats, 0)
                 lons = np.flip(lons, 0)
 
+                masked_data = False
+                # MUST check masked array like this, because if an array
+                # is numpy.ma.core.MaskedArray, it is numpy.ndarray too.
+                # So only directly check whether an array is instance
+                # of numpy.ma.core.MaskedArray is safe.
+                if isinstance(data, np.ma.core.MaskedArray):
+                    masked_data = True
+
                 # Update all rows which matching this hourtime
-                for idx in hourtime_row_mapper[hourtime]:
+                for row_idx in hourtime_row_mapper[hourtime]:
                     count += 1
                     print((f"""\r{name}: {count}/{total}"""), end='')
 
                     # Skip this turn if pressure level of grb does not
                     # equal to the pressure level of point of
                     # era5_step_1
-                    if pres_lvls[idx] != grb.level:
+                    if pres_lvls[row_idx] != grb.level:
                         continue
 
-                    row = era5_step_1[idx]
+                    row = era5_step_1[row_idx]
 
                     era5_datetime = datetime.datetime.combine(
                         tc_dt.date(), grb_time)
@@ -629,6 +753,18 @@ class matchManager(object):
                     lat1_idx, lat2_idx, lon1_idx, lon2_idx = \
                             latlon_indices
 
+                    # Check out whether there is masked cell in square
+                    if masked_data:
+                        skip_row = False
+                        for tmp_lat_idx in [lat1_idx, lat2_idx]:
+                            for tmp_lon_idx in [lon1_idx, lon2_idx]:
+                                if data.mask[tmp_lat_idx][tmp_lon_idx]:
+                                    skip_row = True
+                                    indices_of_rows_to_delete.add(
+                                        row_idx)
+                        if skip_row:
+                            continue
+
                     square_data = data[lat1_idx:lat2_idx+1,
                                        lon1_idx:lon2_idx+1]
                     square_lats = lats[lat1_idx:lat2_idx+1,
@@ -650,10 +786,18 @@ class matchManager(object):
 
             grbidx.close()
 
-        return era5_step_1
+        # Move rows of era5_step_1 which should not deleted to a new
+        # list to accomplish filtering rows with masked data
+        result = []
+        for idx, row in enumerate(era5_step_1):
+            if idx not in indices_of_rows_to_delete:
+                result.append(row)
+
+        return result
 
     def create_smap_era5_table(self, dt):
-        table_name = utils.gen_tc_satel_era5_tablename('smap', dt)
+        table_name = utils.gen_tc_satel_era5_tablename('smap', dt,
+                                                       self.match_basin)
 
         class Satel(object):
             pass

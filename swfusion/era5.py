@@ -231,7 +231,7 @@ class ERA5Manager(object):
 
         if vars_mode == 'tc':
             file_dir = (
-                f"""{era5_dirs["tc"]}/{match_satel}/"""
+                f"""{era5_dirs["tc"]}{match_satel}/"""
                 f"""Y{target_datetime.year}/"""
                 f"""M{str(target_datetime.month).zfill(2)}/"""
             )
@@ -245,11 +245,29 @@ class ERA5Manager(object):
             variables = self.vars['request']\
                     ['reanalysis_single_levels']['tc']
             vars_name = 'TC-relevant single levels variables'
+        elif vars_mode == 'surface_wind':
+            file_dir = (
+                f"""{era5_dirs["10_metre_equivalent_neutral_wind"]}"""
+                f"""/{match_satel}/"""
+                f"""Y{target_datetime.year}/"""
+                f"""M{str(target_datetime.month).zfill(2)}/"""
+            )
+            file_name = target_datetime.strftime('%Y_%m%d')
+            for t in times:
+                file_name = f'{file_name}_{str(t).zfill(2)}'
+            for a in area:
+                file_name = f'{file_name}_{a}'
+            file_name = f'{file_name}_{file_name_suffix}.grib'
+            file_path = f'{file_dir}{file_name}'
+            variables = self.vars['request']\
+                    ['reanalysis_single_levels']\
+                    ['10_metre_equivalent_neutral_wind']
+            vars_name = '10 metre equivalent neutral wind'
         else:
             return None
 
-        if os.path.exists(file_path):
-            return file_path
+        # if os.path.exists(file_path):
+        #     return file_path
 
         self.logger.info((f"""Downloading {vars_name} of {times} """
                           f"""hours on {target_datetime.date()} """
@@ -262,6 +280,9 @@ class ERA5Manager(object):
         else:
             hour_times = [f'{str(x).zfill(2)}:00' for x in times]
 
+        # ATTENTION: if area crosses the prime merdian, e.g.
+        # area = [10, 358, 8, 2], ERA5 API cannot retrieve
+        # requested data correctly
         request = {
             'product_type':'reanalysis',
             'format':'grib',
@@ -289,7 +310,7 @@ class ERA5Manager(object):
 
         if vars_mode == 'tc':
             file_dir = (
-                f"""{era5_dirs["tc"]}/{match_satel}/"""
+                f"""{era5_dirs["tc"]}{match_satel}/"""
                 f"""Y{target_datetime.year}/"""
                 f"""M{str(target_datetime.month).zfill(2)}/"""
             )
@@ -306,8 +327,8 @@ class ERA5Manager(object):
         else:
             return None
 
-        if os.path.exists(file_path):
-            return file_path
+        # if os.path.exists(file_path):
+        #     return file_path
 
         self.logger.info((f"""Downloading {vars_name} of {times} """
                           f"""hours on {target_datetime.date()} """

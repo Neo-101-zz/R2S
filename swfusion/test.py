@@ -1,11 +1,17 @@
-import os
+import cdsapi
 
-dir = '/Users/lujingze/Programming/SWFusion/data/satel/smap_ncs/'
-files = [f for f in os.listdir(dir) if f.endswith('.nc')]
+c = cdsapi.Client()
 
-for f in files:
-    year = f.split('_')[4]
-    month = f.split('_')[5]
-    new_dir = f"""{dir}Y{year}/M{month}/"""
-    os.makedirs(new_dir, exist_ok=True)
-    os.rename(f'{dir}{f}', f'{new_dir}{f}')
+c.retrieve(
+    'reanalysis-era5-single-levels',
+    {
+        'product_type': 'reanalysis',
+        'format': 'grib',
+        'variable': '10m_u_component_of_wind',
+        'year': '2019',
+        'month': '07',
+        'day': '01',
+        'time': '00:00',
+        'area': [10, 358, 8, 2]
+    },
+    'download.grib')

@@ -37,13 +37,14 @@ class IBTrACSManager(object):
     sources.
 
     """
-    def __init__(self, CONFIG, period, region, passwd):
+    def __init__(self, CONFIG, period, region, basin, passwd):
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
         self.db_root_passwd = passwd
         self.engine = None
         self.session = None
+        self.basin = basin
 
         self.logger = logging.getLogger(__name__)
 
@@ -52,28 +53,28 @@ class IBTrACSManager(object):
         self.lat1, self.lat2 = self.region[0], self.region[1]
         self.lon1, self.lon2 = self.region[2], self.region[3]
 
-        self.download()
+        self.download(self.basin)
 
         utils.reset_signal_handler()
         utils.setup_database(self, Base)
-        self.read('wp', region_restriction=False)
+        self.read(self.basin, region_restriction=False)
 
-    def create_tc_table(self, tc_type):
+    def create_tc_table(self, basin):
         """Create the table which represents TC records from IBTrACS.
 
         """
-        table_name = self.CONFIG['ibtracs']['table_name'][tc_type]
+        table_name = self.CONFIG['ibtracs']['table_name'][basin]
 
-        class WMOWPTC(object):
+        class IBTrACSTable(object):
             pass
 
         # Return TC table if it exists
         if self.engine.dialect.has_table(self.engine, table_name):
             metadata = MetaData(bind=self.engine, reflect=True)
             t = metadata.tables[table_name]
-            mapper(WMOWPTC, t)
+            mapper(IBTrACSTable, t)
 
-            return WMOWPTC
+            return IBTrACSTable
 
         cols = []
         # IBTrACS columns
@@ -108,13 +109,13 @@ class IBTrACSManager(object):
         metadata = MetaData(bind=self.engine)
         t = Table(table_name, metadata, *cols)
         metadata.create_all()
-        mapper(WMOWPTC, t)
+        mapper(IBTrACSTable, t)
 
         self.session.commit()
 
-        return WMOWPTC
+        return IBTrACSTable
 
-    def download(self):
+    def download(self, basin):
         """Download IBTrACS data.
 
         """
@@ -124,7 +125,7 @@ class IBTrACSManager(object):
             self.CONFIG['ibtracs']['data_name_length'])
 
         # url = self.CONFIG['ibtracs']['urls']['since1980']
-        url = self.CONFIG['ibtracs']['urls']['wp']
+        url = self.CONFIG['ibtracs']['urls'][basin]
         file = url.split('/')[-1]
         file = file[:-3].replace('.', '_') + '.nc'
         dir = self.CONFIG['ibtracs']['dirs']
@@ -133,7 +134,7 @@ class IBTrACSManager(object):
 
         utils.download(url, self.ibtracs_file_path, progress=True)
 
-    def read(self, tc_type, region_restriction):
+    def read(self, basin, region_restriction):
         """Read IBTrACS data into TC table.
 
         """
@@ -162,18 +163,18 @@ class IBTrACSManager(object):
         info = (f"""Reading WMO records in """
                 f"""{self.ibtracs_file_path.split("/")[-1]}""")
         # Read detail of IBTrACS data
-        self._read_detail(tc_type, region_restriction, vars, storm_num,
+        self._read_detail(basin, region_restriction, vars, storm_num,
                           date_time_num, have_read, info)
 
-    def _read_detail(self, tc_type, region_restriction, vars,
+    def _read_detail(self, basin, region_restriction, vars,
                      storm_num, date_time_num, have_read, info):
         """Read detail of IBTrACS data.
 
         """
         total = storm_num
         # List to record all details
-        wmo_wp_tcs = []
-        WMOWPTC = self.create_tc_table(tc_type)
+        tc_list = []
+        IBTrACSTable = self.create_tc_table(basin)
 
         season_check_offset = self.CONFIG['ibtracs']\
                 ['season_check_offset']
@@ -230,7 +231,7 @@ class IBTrACSManager(object):
             name = name[name.mask == False].tostring().decode('utf-8')
 
             for j in range(date_time_num):
-                row = WMOWPTC()
+                row = IBTrACSTable()
 
                 # Read ISO time and check whether record is in period
                 iso_time = vars['iso_time'][i][j]
@@ -247,13 +248,13 @@ class IBTrACSManager(object):
                 # find next unread month
                 # year, month = row.date_time.year, row.date_time.month
                 # if not have_read[year][month]:
-                #     if len(wmo_wp_tcs):
+                #     if len(tc_list):
                 #         utils.bulk_insert_avoid_duplicate_unique(
-                #             wmo_wp_tcs, self.CONFIG['database']\
+                #             tc_list, self.CONFIG['database']\
                 #             ['batch_size']['insert'],
-                #             WMOWPTC, ['sid_date_time'], self.session,
+                #             IBTrACSTable, ['sid_date_time'], self.session,
                 #             check_self=True)
-                #         wmo_wp_tcs = []
+                #         tc_list = []
                 #     self.logger.debug((f'Reading WMO records of '
                 #                       + f'{year}-{str(month).zfill(2)}'))
                 #     have_read[year][month] = True
@@ -264,7 +265,7 @@ class IBTrACSManager(object):
                 # Read latitude, longitude, minimal centeral pressure,
                 # maximum sustained wind speed from official WMO agency
                 lat = vars['lat'][i][j]
-                lon = vars['lon'][i][j]
+                lon = (vars['lon'][i][j] + 360) % 360
                 # breakpoint()
                 if lat is MASKED or lon is MASKED:
                     continue
@@ -304,14 +305,14 @@ class IBTrACSManager(object):
                             setattr(row, f'{r}_{dirs[d]}',
                                     int(sum(radii[r][d])/len(radii[r][d])))
 
-                wmo_wp_tcs.append(row)
+                tc_list.append(row)
                 # breakpoint()
 
-        if len(wmo_wp_tcs):
+        if len(tc_list):
             utils.bulk_insert_avoid_duplicate_unique(
-                wmo_wp_tcs, self.CONFIG['database']\
+                tc_list, self.CONFIG['database']\
                 ['batch_size']['insert'],
-                WMOWPTC, ['sid_date_time'], self.session,
+                IBTrACSTable, ['sid_date_time'], self.session,
                 check_self=True)
 
         utils.delete_last_lines()

@@ -10,7 +10,7 @@ import re
 import os
 import time
 
-from bs4 import BeautifulSoup
+import bs4
 import mysql.connector
 import numpy as np
 import pandas as pd
@@ -22,6 +22,7 @@ from sqlalchemy import Column, Integer, Float, String, DateTime, Date
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import tuple_
 from sqlalchemy.schema import Table
+import netCDF4
 
 import utils
 import netcdf_util
@@ -44,6 +45,20 @@ class HurrSfmr(Base):
     max_lon = Column(Float, nullable=False)
     name_year = Column(String(20), nullable=False, unique=True)
 
+class SFMRDetail(Base):
+    __tablename__ = 'hurr_sfmr_brief_info'
+
+    key = Column(Integer, primary_key=True)
+    hurr_name = Column(String(length=20), nullable=False)
+    file_name = Column(String(30), nullable=False, unique=True)
+    file_url = Column(String(255), nullable=False)
+    start_datetime = Column(DateTime, nullable=False)
+    end_datetime = Column(DateTime, nullable=False)
+    min_lat = Column(Float, nullable=False)
+    max_lat = Column(Float, nullable=False)
+    min_lon = Column(Float, nullable=False)
+    max_lon = Column(Float, nullable=False)
+
 class SfmrManager(object):
 
     def __init__(self, CONFIG, period, region, passwd):
@@ -55,18 +70,24 @@ class SfmrManager(object):
         self.engine = None
         self.session = None
 
+        self.logger = logging.getLogger(__name__)
+        utils.setup_database(self, Base)
+
         self.years = [x for x in range(self.period[0].year,
                                        self.period[1].year+1)]
+        self.get_all_hurricanes_brief_info()
+
+        return
+
         self._gen_all_year_hurr()
         self._extract_year_hurr()
 
-        self.logger = logging.getLogger(__name__)
-
-        # self.download()
+        self.download()
 
         utils.reset_signal_handler()
-        utils.setup_database(self, Base)
-        self.read()
+        read_all = False
+        self._extract_year_hurr_file_path(read_all)
+        # self.read(read_all)
 
     def download(self):
         """Download SFMR data of hurricanes from NOAA HRD.
@@ -182,7 +203,6 @@ class SfmrManager(object):
     def _insert_sfmr(self, read_all=False):
         self.logger.info(
             self.SFMR_CONFIG['prompt']['info']['read_hurr_sfmr'])
-        self._extract_year_hurr_file_path(read_all)
         # Create SFMR table
         table_name_prefix = self.SFMR_CONFIG['table_names']['prefix']
         skip_vars = ['DATE', 'TIME']
@@ -354,7 +374,7 @@ class SfmrManager(object):
                 # Get page according to url
                 page = requests.get(url)
                 data = page.text
-                soup = BeautifulSoup(data, features='lxml')
+                soup = bs4.BeautifulSoup(data, features='lxml')
                 anchors = soup.find_all('a')
 
                 # Times of NetCDF file's date being in period
@@ -406,23 +426,365 @@ class SfmrManager(object):
         utils.delete_last_lines()
         print('Done')
 
+    def get_all_hurricanes_brief_info(self):
+        # Get dates of SFMR data of hurricanes during period
+        # brief_info = self.gen_sfmr_brief_info()
+        # if brief_info is None:
+        #     return False
+
+        pickle_dir = self.SFMR_CONFIG['dirs']['brief_info']
+        os.makedirs(pickle_dir, exist_ok=True)
+        pickle_path = f'{pickle_dir}brief_info.pkl'
+        # with open(pickle_path, 'wb') as f:
+        #     pickle.dump(brief_info, f)
+
+        with open(pickle_path, 'rb') as f:
+            brief_info = pickle.load(f)
+
+        # Download all SFMR files during period
+        # utils.setup_signal_handler()
+        # utils.set_format_custom_text(
+        #     self.SFMR_CONFIG['data_name_length'])
+        # self.download_with_brief_info(brief_info)
+
+        # Read all of them to update brief information
+        utils.reset_signal_handler()
+        brief_info = self.update_brief_info(brief_info)
+
+        brief_info_list = []
+        for year in brief_info:
+            for info in brief_info[year]:
+                if info is not None:
+                    brief_info_list.append(info)
+                else:
+                    brief_info[year].remove(info)
+
+        utils.bulk_insert_avoid_duplicate_unique(
+            brief_info_list,
+            self.CONFIG['database']['batch_size']['insert'],
+            SFMRDetail, ['file_name'], self.session, check_self=True)
+
+        self.brief_info = brief_info
+
+        return True
+
+    def update_brief_info(self, brief_info):
+        self.logger.info((f"""Updating brief information of SFMR"""))
+        root_dir = self.SFMR_CONFIG['dirs']['hurr']
+
+        for year in brief_info:
+            files_num_in_the_year = len(brief_info[year])
+            count = 0
+
+            for idx, info in enumerate(brief_info[year]):
+                count += 1
+                print(f'\r{count}/{files_num_in_the_year} in {year}',
+                      end='')
+                file_dir = f'{root_dir}{year}/{info.hurr_name}/'
+                file_path = f'{file_dir}{info.file_name}'
+                updated_info = self.update_single_info_with_nc_file(
+                    info, file_path)
+                brief_info[year][idx] = updated_info
+
+        # Remove none info
+        for year in brief_info:
+            for idx, info in enumerate(brief_info[year]):
+                if info is None:
+                    brief_info[year].remove(info)
+
+        utils.delete_last_lines()
+        print('Done')
+
+        return brief_info
+
+    def update_single_info_with_nc_file(self, info, file_path):
+        if not os.path.exists(file_path):
+            return None
+        dataset = netCDF4.Dataset(file_path)
+
+        # VERY VERY IMPORTANT: netCDF4 auto mask may cause problems,
+        # so must disable auto mask
+        dataset.set_auto_mask(False)
+        vars = dataset.variables
+
+        try:
+            masked_value = self.SFMR_CONFIG['masked_value']['custom']
+            valid_data = dict()
+            masked_indices = dict()
+            vars_name = ['DATE', 'TIME', 'LON', 'LAT']
+            # Process datetime relevant and lonlat relevant variables
+            # to filter out invalid values and mask them with -999
+            valid_data['TIME'], masked_indices['TIME'] = \
+                    utils.sfmr_vars_filter('TIME', vars['TIME'],
+                                           masked_value)
+            valid_data['DATE'], masked_indices['DATE'] = \
+                    utils.sfmr_vars_filter('DATE', vars['DATE'],
+                                           masked_value,
+                                           masked_indices['TIME'])
+            valid_data['LON'], masked_indices['LON'] = \
+                    utils.sfmr_vars_filter('LON', vars['LON'],
+                                           masked_value,
+                                           masked_indices['TIME'])
+            valid_data['LAT'], masked_indices['LAT'] = \
+                    utils.sfmr_vars_filter('LAT', vars['LAT'],
+                                           masked_value,
+                                           masked_indices['TIME'])
+
+            lengths = []
+            for name in vars_name:
+                lengths.append(len(valid_data[name]))
+
+            if len(set(lengths)) != 1:
+                self.logger.error((f"""Selected variables are not as """
+                                   f"""many as each other after """
+                                   f"""filtering: {file_path}"""))
+                breakpoint()
+                exit()
+
+                most_masked_var_index = lengths.index(min(lengths))
+                most_masked_var_name = vars_name[most_masked_var_index]
+                most_masked_indices = masked_indices[most_masked_var_name]
+                most_masked_include_others = True
+
+                breakpoint()
+
+                for idx, name in enumerate(vars_name):
+                    if idx == most_masked_var_index:
+                        continue
+                    # Check if most_masked_indices include other variables'
+                    # indices of masked elements
+                    flag = set(masked_indices[name]).issubset(
+                        set(most_masked_indices))
+                    if not flag:
+                        most_masked_include_others = False
+                        break
+
+                breakpoint()
+
+                if not most_masked_include_others:
+                    self.logger.error((f"""Selected variables are not as """
+                                       f"""many as each other after """
+                                       f"""filtering: {file_path}"""))
+                    breakpoint()
+                    exit()
+                else:
+                    new_valid_data = dict()
+                    # Drop left elements like most masked variable
+                    for idx, name in enumerate(vars_name):
+                        if idx == most_masked_var_index:
+                            new_valid_data[name] = valid_data[name]
+                            continue
+                        tmp = vars[name]
+                        for i in most_masked_indices:
+                            tmp.pop(i)
+                        new_valid_data[name] = tmp
+                    del valid_data
+                    valid_data = new_valid_data
+
+            start_date, end_date = utils.get_min_max_from_nc_var(
+                'DATE', valid_data['DATE'])
+            start_time, end_time = utils.get_min_max_from_nc_var(
+                'TIME', valid_data['TIME'])
+            min_lon, max_lon = utils.get_min_max_from_nc_var(
+                'LON', valid_data['LON'])
+            min_lat, max_lat = utils.get_min_max_from_nc_var(
+                'LAT', valid_data['LAT'])
+            start_datetime = datetime.datetime.combine(start_date,
+                                                       start_time)
+            end_datetime = datetime.datetime.combine(end_date, end_time)
+
+            info.start_datetime = start_datetime
+            info.end_datetime = end_datetime
+            info.min_lon = float(min_lon)
+            info.max_lon = float(max_lon)
+            info.min_lat = float(min_lat)
+            info.max_lat = float(max_lat)
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
+
+        return info
+
+    def download_with_brief_info(self, brief_info):
+        self.logger.info((f"""Downloading SFMR files"""))
+        root_dir = self.SFMR_CONFIG['dirs']['hurr']
+
+        for year in brief_info:
+            files_num_in_the_year = len(brief_info[year])
+            count = 0
+
+            for info in brief_info[year]:
+                count += 1
+                print(f'\r{count}/{files_num_in_the_year} in {year}',
+                      end='')
+                file_dir = f'{root_dir}{year}/{info.hurr_name}/'
+                os.makedirs(file_dir, exist_ok=True)
+                file_path = f'{file_dir}{info.file_name}'
+                file_url = info.file_url
+
+                utils.download(file_url, file_path, True)
+
+        utils.delete_last_lines()
+        print('Done')
+
+        return
+
+    def get_sfmr_latest_year(self):
+        url = self.SFMR_CONFIG["urls"]["hurricane"]
+
+        page = requests.get(url)
+        data = page.text
+        soup = bs4.BeautifulSoup(data, features='lxml')
+        anchors = soup.find_all('b')
+
+        latest_year = None
+
+        for bold in anchors:
+            text = bold.text
+            if text.endswith('Hurricane Season'):
+                latest_year = int(text[:4])
+
+        return latest_year
+
+    def gen_sfmr_brief_info(self):
+        self.logger.info((f"""Generating brief information of SFMR"""))
+        latest_year = self.get_sfmr_latest_year()
+        start_year = max(self.SFMR_CONFIG['period_limit']['start'].year,
+                         self.period[0].year)
+        end_year = min(self.SFMR_CONFIG['period_limit']['end'].year,
+                       self.period[1].year, latest_year)
+
+        if start_year > end_year:
+            return None
+
+        brief_info = dict()
+        for year in range(start_year, end_year+1):
+            info = f'Finding hurricanes of year {year}'
+            self.logger.debug(info)
+            print(f'\r{info}', end='')
+
+            if year < 1994:
+                year_str = 'prior1994'
+            elif year == latest_year:
+                year_str = ''
+            else:
+                year_str = f'{year}'
+            url = (f'{self.SFMR_CONFIG["urls"]["hurricane"][:-5]}'
+                   + f'{year_str}.html')
+            one_year_brief_info = self.get_one_year_sfmr_brief_info(url)
+            brief_info[year] = one_year_brief_info
+
+        utils.delete_last_lines()
+        print('Done')
+
+        return brief_info
+
+    def get_one_year_sfmr_brief_info(self, url):
+        """Get ALTANTIC BASIN SFMR.
+
+        """
+        one_year_brief_info = []
+
+        page = requests.get(url)
+        data = page.text
+        soup = bs4.BeautifulSoup(data, features='lxml')
+        all_bolds = soup.find_all('b')
+
+        for i, header in enumerate(all_bolds):
+            if 'Atlantic Basin' in header.text:
+                next_tag = header.parent.parent
+                while True:
+                    next_tag = next_tag.next_sibling
+                    if next_tag is None:
+                        break
+                    if not isinstance(next_tag, bs4.element.Tag):
+                        continue
+                    bolds = next_tag.find_all('b')
+                    if len(bolds) and 'Basin' in bolds[0].text:
+                        break
+                    if next_tag.name == 'tr':
+                        anchors = next_tag.find_all('a')
+                        for link in anchors:
+                            if not link.contents:
+                                continue
+                            text = link.contents[0]
+                            if text != 'SFMR':
+                                continue
+                            href = link.get('href')
+
+                            one_hurricane_brief_info = \
+                                    self.get_one_hurricane_brief_info(href)
+                            one_year_brief_info += one_hurricane_brief_info
+
+        return one_year_brief_info
+
+    def get_one_hurricane_brief_info(self, hurricane_sfmr_url):
+        brief_info = []
+
+        try:
+            page = requests.get(hurricane_sfmr_url)
+            data = page.text
+            soup = bs4.BeautifulSoup(data, features='lxml')
+            anchors = soup.find_all('a')
+            filename_suffix = '.nc'
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
+
+        for link in anchors:
+            href = link.get('href')
+            # Find href of netcdf file
+            if href.endswith(filename_suffix):
+                # Extract file name
+                file_name = href.split('/')[-1]
+                tail_half = file_name.split('SFMR')[1]
+                try:
+                    # There may be NetCDF name format
+                    # like 'USAF_SFMR0809221638.nc'
+                    # from 'https://www.aoml.noaa.gov/hrd'
+                    # '/Storm_pages/kyle2008/sfmr.html'
+                    # It is very annoying and there seems
+                    # no simple rule to check this problem.
+                    # Because it hard to distinguish
+                    # 'SFMR20110536' and 'SFMR20110524'.
+                    # First one is the case as kyle2008, its
+                    # actually date is 2020/11/05.
+                    # Second one is a normal case, its
+                    # actually date is 2011/05/24.
+                    # Before 2020, following rule may work.
+                    if (tail_half.startswith('20')
+                        or tail_half.startswith('199')):
+                        date_str = tail_half[:8]
+                        date_ = datetime.date(int(date_str[:4]),
+                                        int(date_str[4:6]),
+                                        int(date_str[6:]))
+                    else:
+                        date_str = tail_half[:6]
+                        date_ = datetime.date(
+                            int(f'20{date_str[:2]}'),
+                            int(date_str[2:4]),
+                            int(date_str[4:]))
+                        file_name = (
+                            f'{file_name.split("SFMR")[0]}SFMR20'
+                            + f'{file_name.split("SFMR")[1]}')
+                except Exception as msg:
+                    breakpoint()
+                    exit(msg)
+                if not utils.check_period(date_, self.period):
+                    continue
+
+                info = SFMRDetail()
+
+                info.hurr_name = hurricane_sfmr_url.split('/')[-2][:-4]
+                info.file_name = file_name
+                info.file_url = href
+
+                brief_info.append(info)
+
+        return brief_info
+
     def _gen_all_year_hurr(self):
         this_year = datetime.datetime.today().year
-        lastest_year = True
-
-        if os.path.exists(
-            self.SFMR_CONFIG['vars_path']['all_year_hurr']):
-            if datetime.datetime.fromtimestamp(os.path.getmtime(
-                self.SFMR_CONFIG['vars_path']['all_year_hurr'])
-            ).year < this_year:
-                latest_year = False
-
-            if lastest_year:
-                with open(self.SFMR_CONFIG['vars_path']\
-                          ['all_year_hurr'], 'rb') as file:
-                    self.all_year_hurr = pickle.load(file)
-
-                return
 
         self.all_year_hurr = {}
 
@@ -444,7 +806,7 @@ class SfmrManager(object):
                    + f'{year}.html')
             page = requests.get(url)
             data = page.text
-            soup = BeautifulSoup(data, features='lxml')
+            soup = bs4.BeautifulSoup(data, features='lxml')
             anchors = soup.find_all('a')
 
             self.all_year_hurr[year] = set()

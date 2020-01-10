@@ -28,6 +28,7 @@ import matplotlib.pyplot as plt
 from matplotlib import patches as mpatches
 import pygrib
 from global_land_mask import globe
+from scipy import interpolate
 
 from amsr2_daily import AMSR2daily
 from ascat_daily import ASCATDaily
@@ -44,6 +45,44 @@ DEGREE_OF_ONE_NMILE = float(1)/60
 KM_OF_ONE_NMILE = 1.852
 KM_OF_ONE_DEGREE = KM_OF_ONE_NMILE / DEGREE_OF_ONE_NMILE
 RADII_LEVELS = [34, 50, 64]
+
+# Python program to check if rectangles overlap 
+class Point: 
+    def __init__(self, x, y): 
+        self.x = x 
+        self.y = y 
+
+# Returns true if two rectangles(l1, r1)
+# and (l2, r2) overlap 
+def doOverlap(l1, r1, l2, r2):
+    """Check if two rectangles overlap.
+
+    Parameters
+    ----------
+    l1: Point
+        The left-top corner of the first rectangle.
+    r1: Point
+        The right-bottom corner of the first rectangle.
+    l2: Point
+        The left-top corner of the second rectangle.
+    r2: Point
+        The right-bottom corner of the second rectangle.
+
+    Returns
+    -------
+    bool
+        True if two rectangles overlap, False otherwise.
+
+    """
+    # If one rectangle is on left side of other 
+    if(l1.x > r2.x or l2.x > r1.x): 
+        return False
+
+    # If one rectangle is above other 
+    if(l1.y < r2.y or l2.y < r1.y): 
+        return False
+
+    return True
 
 def delete_last_lines(n=1):
     CURSOR_UP_ONE = '\x1b[1A'
@@ -1588,8 +1627,8 @@ def get_data_indices_around_grid_pts(workload):
 def gen_satel_era5_tablename(satel_name, dt):
     return f'{satel_name}_{dt.year}_{str(dt.month).zfill(2)}'
 
-def gen_tc_satel_era5_tablename(satel_name, dt):
-    return f'tc_{satel_name}_era5_{dt.year}'
+def gen_tc_satel_era5_tablename(satel_name, dt, basin):
+    return f'tc_{satel_name}_era5_{dt.year}_{basin}'
 
 def backtime_to_last_entire_hour(dt):
     # Initial datetime is not entire-houred
@@ -1616,10 +1655,18 @@ def load_grid_lonlat_xy(the_class):
 
         setattr(the_class, f'grid_{key}', var)
 
-def draw_SCS_basemap(the_class, ax):
-    map = Basemap(llcrnrlon=the_class.lon1, llcrnrlat=the_class.lat1,
-                  urcrnrlon=the_class.lon2, urcrnrlat=the_class.lat2,
-                  ax=ax, resolution='h')
+def draw_SCS_basemap(the_class, ax, custom, area):
+    if not custom:
+        lat1 = the_class.lat1
+        lat2 = the_class.lat2
+        lon1 = the_class.lon1
+        lon2 = the_class.lon2
+    else:
+        # North, West, South, East
+        lat2, lon1, lat1, lon2 = area
+
+    map = Basemap(llcrnrlon=lon1, llcrnrlat=lat1, urcrnrlon=lon2,
+                  urcrnrlat=lat2, ax=ax, resolution='h')
 
     map.drawcoastlines(zorder=the_class.zorders['coastlines'])
     map.drawmapboundary(fill_color='white',
@@ -1763,8 +1810,8 @@ def draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
     fig.colorbar(cf, cax=cax, orientation='vertical', format='%.1f')
 
 def draw_windspd(the_class, fig, ax, dt, lons, lats, windspd,
-                 max_windspd, mesh):
-    draw_SCS_basemap(the_class, ax)
+                 max_windspd, mesh, custom=False, area=None):
+    draw_SCS_basemap(the_class, ax, custom, area)
 
     draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
                                the_class.zorders['contourf'],
@@ -2137,26 +2184,47 @@ def get_subplots_row_col(subplots_num):
 
 def get_era5_corners_of_rss_cell(lat, lon, era5_lats_grid,
                                  era5_lons_grid, grb_spa_resolu):
-    if grb_spa_resolu == 0.25:
-        delta = 0.5 * 0.25
-        lat1 = lat - delta
-        lat2 = lat + delta
-        lon1 = lon - delta
-        lon2 = (lon + delta) % 360
-    elif grb_spa_resolu == 0.5:
-        lat1, lat2 = find_neighbours_of_pt_in_half_degree_grid(lat)
-        lon1, lon2 = find_neighbours_of_pt_in_half_degree_grid(lon)
-        if lon2 == 360:
-            lon2 = 0
+    era5_lats = list(era5_lats_grid[:, 0])
+    era5_lons = list(era5_lons_grid[0, :])
 
     try:
-        era5_lats = list(era5_lats_grid[:, 0])
-        era5_lons = list(era5_lons_grid[0, :])
+        if grb_spa_resolu == 0.25:
+            delta = 0.5 * 0.25
+            lat1 = lat - delta
+            lat2 = lat + delta
+            lon1 = lon - delta
+            lon2 = (lon + delta) % 360
 
-        lat1_idx = era5_lats.index(lat1)
-        lat2_idx = era5_lats.index(lat2)
-        lon1_idx = era5_lons.index(lon1)
-        lon2_idx = era5_lons.index(lon2)
+            lat1_idx = era5_lats.index(lat1)
+            lat2_idx = era5_lats.index(lat2)
+            lon1_idx = era5_lons.index(lon1)
+            lon2_idx = era5_lons.index(lon2)
+        elif grb_spa_resolu == 0.5:
+            nearest_lat, nearest_lat_idx = get_nearest_element_and_index(
+                era5_lats, lat)
+            if nearest_lat < lat:
+                lat1 = nearest_lat
+                lat1_idx = nearest_lat_idx
+                lat2_idx = lat1_idx + 1
+                lat2 = era5_lats[lat2_idx]
+            else:
+                lat2 = nearest_lat
+                lat2_idx = nearest_lat_idx
+                lat1_idx = lat2_idx - 1
+                lat1 = era5_lats[lat1_idx]
+
+            nearest_lon, nearest_lon_idx = get_nearest_element_and_index(
+                era5_lons, lon)
+            if nearest_lon < lon:
+                lon1 = nearest_lon
+                lon1_idx = nearest_lon_idx
+                lon2_idx = lon1_idx + 1
+                lon2 = era5_lons[lon2_idx]
+            else:
+                lon2 = nearest_lon
+                lon2_idx = nearest_lon_idx
+                lon1_idx = lon2_idx - 1
+                lon1 = era5_lons[lon1_idx]
     except Exception as msg:
         breakpoint()
         # exit(msg)
@@ -2174,9 +2242,21 @@ def find_neighbours_of_pt_in_half_degree_grid(pt):
 def get_center_shift_of_two_tcs(next_tc, tc):
     next_tc_center = get_tc_center(next_tc)
     tc_center = get_tc_center(tc)
+    # Set the value to check whether the line between two TC center across
+    # the prime meridian
+    threshold = 20
+    if abs(tc_center[0] - next_tc_center[0]) > threshold:
+        if tc_center[0] < next_tc_center[0]:
+            # E.g. `tc` lon: 0.5, `next_tc` lon: 359.5
+            tc_center = (tc_center[0] + 360, tc_center[1])
+        elif tc_center[0] > next_tc_center[0]:
+            # E.g. `tc` lon: 359.5, `next_tc` lon: 0.5
+            next_tc_center = (next_tc_center[0] + 360, next_tc_center[1])
 
-    return (next_tc_center[0] - tc_center[0],
-            next_tc_center[1] - tc_center[1])
+    lons_shift = next_tc_center[0] - tc_center[0]
+    lats_shift = next_tc_center[1] - tc_center[1]
+
+    return lons_shift, lats_shift
 
 def get_tc_center(tc_row):
     lon_converted = tc_row.lon + 360 if tc_row.lon < 0 else tc_row.lon
@@ -2221,3 +2301,320 @@ def filter_dataframe_by_column_value_divide(df, col_name, divide,
     condition = f'{col_name}_{large_or_small}_than_{divide}'
 
     return df[in_range], condition
+
+def is_multiple_of(a, b):
+    result = a % b
+    return (result < 1e-3)
+
+def get_sharpened_lats_of_era5_ocean_grid(
+    lats, new_lats_num, new_lons_num, spa_resolu_diff):
+    """Increase resolution of new lats grid to half of before.
+
+    """
+    new_lats = np.ndarray(shape=(new_lats_num, new_lons_num),
+                          dtype=float)
+    lats_num = lats.shape[0]
+
+    for y in range(lats_num - 1):
+        lat = lats[y][0]
+        for x in range(new_lons_num):
+            new_lats[y * 2][x] = lat
+        lat += spa_resolu_diff
+        for x in range(new_lons_num):
+            new_lats[y * 2 + 1][x] = lat
+    lat = lats[-1][0]
+    for x in range(new_lons_num):
+        new_lats[-1][x] = lat
+
+    return new_lats
+
+def get_sharpened_lons_of_era5_ocean_grid(
+    lons, new_lats_num, new_lons_num, spa_resolu_diff):
+    """Increase resolution of new lons grid to half of before.
+
+    """
+    new_lons = np.ndarray(shape=(new_lats_num, new_lons_num),
+                          dtype=float)
+    lons_num = lons.shape[1]
+
+    for x in range(lons_num - 1):
+        lon = lons[0][x]
+        for y in range(new_lats_num):
+            new_lons[y][x * 2] = lon
+        lon += spa_resolu_diff
+        for y in range(new_lats_num):
+            new_lons[y][x * 2 + 1] = lon
+    lon = lons[0][-1]
+    for y in range(new_lats_num):
+        new_lons[y][-1] = lon
+
+    return new_lons
+
+def sharpen_era5_ocean_grid(data, lats, lons):
+    """Sharpen ERA5 ocean grid to resolution of 0.25 x 0.25 degree.
+    If `data` is an instance of numpy.ma.core.MaskedArray, the returned
+    `new_data` is also an instance of numpy.ma.core.MaskedArray.
+
+    """
+    spa_resolu_diff = 0.25
+    lats_num = lats.shape[0]
+    lons_num = lons.shape[1]
+    new_lats_num = lats_num * 2 - 1
+    new_lons_num = lons_num * 2 - 1
+
+    new_lats = get_sharpened_lats_of_era5_ocean_grid(
+        lats, new_lats_num, new_lons_num, spa_resolu_diff)
+    new_lons = get_sharpened_lons_of_era5_ocean_grid(
+        lons, new_lats_num, new_lons_num, spa_resolu_diff)
+    masked_value = -999
+    new_data = np.full(shape=(new_lats_num, new_lons_num),
+                       fill_value=masked_value, dtype=float)
+
+    if isinstance(data, np.ma.core.MaskedArray):
+        masked = True
+    else:
+        masked = False
+
+    new_data = fill_era5_masked_and_not_masked_ocean_data(
+        masked, data, new_data, lats, lons, masked_value)
+
+    return new_data, new_lats, new_lons
+
+def fill_era5_masked_and_not_masked_ocean_data(
+    masked, data, new_data, lats, lons, masked_value):
+    """
+
+    """
+    lats_num = data.shape[0]
+    lons_num = data.shape[1]
+    new_lats_num = lats_num * 2 - 1
+    new_lons_num = lons_num * 2 - 1
+
+    # Project from data to new_data
+    if masked:
+        for y in range(lats_num):
+            for x in range(lons_num):
+                if not data.mask[y][x]:
+                    new_data[2 * y][2 * x] = data[y][x]
+    else:
+        for y in range(lats_num):
+            for x in range(lons_num):
+                new_data[2 * y][2 * x] = data[y][x]
+
+    # Fill gaps if possible
+    for y in range(lats_num):
+        if y + 1 >= lats_num:
+            break
+        for x in range(lons_num):
+            if x + 1 >= lons_num:
+                break
+            if masked:
+                # Check if there is a minimum square with four corners
+                whole_square = True
+                for tmp_y in [y, y + 1]:
+                    for tmp_x in [x, x + 1]:
+                        if data.mask[tmp_y][tmp_x]:
+                            whole_square = False
+                            break
+                    if not whole_square:
+                        break
+            # Interpolate in square
+            #
+            # Before
+            # ------
+            # fill   masked fill
+            # masked masked masked
+            # fill   masked fill
+            #
+            # After
+            # -----
+            # fill   fill   fill
+            # fill   fill   fill
+            # fill   fill   fill
+            if not masked or (masked and whole_square):
+                square_data = data[y:y+2, x:x+2]
+                square_lats = lats[y:y+2, x:x+2]
+                square_lons = lons[y:y+2, x:x+2]
+                f = interpolate.interp2d(square_lons, square_lats,
+                                         square_data)
+                # center
+                center_lon = (lons[y][x] + lons[y][x + 1]) / 2
+                center_lat = (lats[y][x] + lats[y + 1][x]) / 2
+                value = f(center_lon, center_lat)
+                new_data[2 * y + 1][2 * x + 1] = value
+                # top
+                top_lon = center_lon
+                top_lat = lats[y][x]
+                value = f(top_lon, top_lat)
+                new_data[2 * y][2 * x + 1] = value
+                # bottom
+                bottom_lon = center_lon
+                bottom_lat = lats[y + 1][x]
+                value = f(bottom_lon, bottom_lat)
+                new_data[2 * y + 2][2 * x + 1] = value
+                # left
+                left_lon = lons[y][x]
+                left_lat = center_lat
+                value = f(left_lon, left_lat)
+                new_data[2 * y + 1][2 * x] = value
+                # right
+                right_lon = lons[y][x + 1]
+                right_lat = center_lat
+                value = f(right_lon, right_lat)
+                new_data[2 * y + 1][2 * x + 2] = value
+
+    if masked:
+        # Make new_data to be a masked array
+        new_data = np.ma.masked_where(new_data==masked_value, new_data)
+
+    return new_data
+
+def load_best_xgb_model(model_dir):
+    model_files = [f for f in os.listdir(model_dir)
+                   if f.endswith('.pickle.dat')]
+    min_mse = 99999999
+    best_model_name = None
+    # Find best model
+    for file in model_files:
+        mse = float(file.split('.pickle')[0].split('mse_')[1])
+        if mse < min_mse:
+            min_mse = mse
+            best_model_name = file
+    # load model from file
+    best_model = pickle.load(
+        open(f'{model_dir}{best_model_name}', 'rb'))
+
+    return best_model
+
+def sfmr_nc_converter(var_name, value, file_path=None):
+    value = str(value)
+    try:
+        if var_name == 'DATE':
+            return datetime.datetime.strptime(value,
+                                              '%Y%m%d').date()
+        elif var_name == 'TIME':
+            return sfmr_nc_time_converter(value)
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+def sfmr_vars_filter(var_name, nc_var, masked_value,
+                     time_masked_indices=None):
+    # NetCDF original variable is read-only
+    # So make a copy of it
+    var = []
+    for val in nc_var:
+        var.append(val)
+
+    result = []
+    masked_indices = []
+    invalid_value = 0
+
+    # Although for TIME, there are two possibilities:
+    # One: True invalid value
+    # Two: 00:00:00 is invalid value 0
+
+    # However, in SFMR files, there are TWO possibilities when TIME is
+    # invalid value 0:
+    # One: For 00:00:00, corresponding variables (DATE, LAT, LON)
+    # are 0.
+    # Two: For 00:00:00, corresponding variables (DATE, LAT, LON)
+    # are valid values.
+    if var_name == 'TIME':
+        for idx, val in enumerate(var):
+            if val == invalid_value:
+                # Not around terminals
+                if idx >= 1 and idx < len(var) - 1:
+                    # So if any side of the point with invalid value
+                    # is invalid value too, then this point is
+                    # invalid
+                    if (var[idx - 1] == invalid_value
+                        or var[idx + 1] == invalid_value):
+                        var[idx] = masked_value
+                else:
+                    var[idx] = masked_value
+    elif var_name == 'DATE' or var_name == 'LON' or var_name == 'LAT':
+        # Assuming that SFMR data are all in NA around USA,
+        # so the longitude and latitude are far away from 0
+        for idx, val in enumerate(var):
+            if val == invalid_value:
+                if idx in time_masked_indices:
+                    var[idx] = masked_value
+                # When TIME is 00:00:00, given invalid DATE/LON/LAT
+                # a neighbouring value
+                else:
+                    if idx >= 1:
+                        var[idx] = var[idx - 1]
+                    else:
+                        var[idx] = var[idx + 1]
+
+    for index, value in enumerate(var):
+        if value != masked_value:
+            result.append(value)
+        else:
+            masked_indices.append(index)
+
+    # for value in var:
+    #     if value != masked_value:
+    #         result.append(value)
+
+    return result, masked_indices
+
+def get_min_max_from_nc_var(name, var):
+    if name == 'DATE':
+        the_min = datetime.datetime.strptime(str(var[0]),
+                                             '%Y%m%d').date()
+        the_max = datetime.datetime.strptime(str(var[-1]),
+                                             '%Y%m%d').date()
+    elif name == 'TIME':
+        min_time_str = str(var[0])
+        max_time_str = str(var[-1])
+        the_min = sfmr_nc_time_converter(min_time_str)
+        the_max = sfmr_nc_time_converter(max_time_str)
+    elif name == 'LON':
+        the_min = (min(var) + 360) % 360
+        the_max = (max(var) + 360) % 360
+    elif name == 'LAT':
+        the_min = min(var)
+        the_max = max(var)
+
+    return the_min, the_max
+
+def sfmr_nc_time_converter(time_str):
+    # Only seconds
+    if len(time_str) <= 2:
+        the_time = datetime.datetime.strptime(
+            time_str, '%S').time()
+    elif len(time_str) == 3:
+        the_time = datetime.datetime.strptime(
+            f'0{time_str}', '%M%S').time()
+    elif len(time_str) == 4:
+        the_time = datetime.datetime.strptime(
+            time_str, '%M%S').time()
+    elif len(time_str) == 5:
+        the_time = datetime.datetime.strptime(
+            f'0{time_str}', '%H%M%S').time()
+    elif len(time_str) == 6:
+        the_time = datetime.datetime.strptime(
+            time_str, '%H%M%S').time()
+    else:
+        logger.error('Length of SFMR TIME input is longer than 6')
+        exit()
+
+    return the_time
+
+def get_terminal_index_among_vars(side, vars, masked_value):
+    terminal_indices = []
+    for var in vars:
+        one_var_termianl_indices = get_terminal_indices_of_nc_var(
+            var, masked_value)
+        terminal_indices.append(one_var_indices)
+
+def get_terminal_indices_of_nc_var(var, masked_value):
+    encounter_masked = False
+    start_indices = []
+    for idx, val in enumerate(var):
+        if val == masked_value and not encounter_masked:
+            encounter_masked = True
+            start_indices.append(idx)
+

@@ -82,9 +82,11 @@ ibtracs:
   table_name:
     scs: 'ibtracs_scs'
     wp: 'ibtracs_wp'
+    na: 'ibtracs_na'
     global_since_1980: 'ibtracs_global'
   urls:
     wp: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.WP.v04r00.nc'
+    na: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.NA.v04r00.nc'
     since1980: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.since1980.v04r00.nc'
   dirs: '../data/ibtracs/'
   data_name_length: 22
@@ -98,6 +100,7 @@ rss:
 era5:
   subset_edge_in_degree: 12
   spatial_resolution: 0.25
+  ocean_spatial_resolution: 0.5
   lat_grid_points_number: 721
   lon_grid_points_number: 1440
   main_hours:
@@ -137,6 +140,64 @@ era5:
           - '10_metre_v_wind_component'
           - '2_metre_dewpoint_temperature'
           - '2_metre_temperature'
+          - 'air_density_over_the_oceans'
+          - 'benjamin_feir_index'
+          - 'boundary_layer_height'
+          - 'charnock'
+          - 'coefficient_of_drag_with_waves'
+          - 'convective_available_potential_energy'
+          - 'forecast_surface_roughness'
+          - 'free_convective_velocity_over_the_oceans'
+          - 'low_cloud_cover'
+          - 'maximum_individual_wave_height'
+          - 'mean_direction_of_total_swell'
+          - 'mean_direction_of_wind_waves'
+          - 'mean_period_of_total_swell'
+          - 'mean_period_of_wind_waves'
+          - 'mean_sea_level_pressure'
+          - 'mean_square_slope_of_waves'
+          - 'mean_wave_direction'
+          - 'mean_wave_direction_of_first_swell_partition'
+          - 'mean_wave_direction_of_second_swell_partition'
+          - 'mean_wave_direction_of_third_swell_partition'
+          - 'mean_wave_period'
+          - 'mean_wave_period_based_on_first_moment'
+          - 'mean_wave_period_based_on_first_moment_for_swell'
+          - 'mean_wave_period_based_on_first_moment_for_wind_waves'
+          - 'mean_wave_period_based_on_second_moment_for_swell'
+          - 'mean_wave_period_based_on_second_moment_for_wind_waves'
+          - 'mean_wave_period_of_first_swell_partition'
+          - 'mean_wave_period_of_second_swell_partition'
+          - 'mean_wave_period_of_third_swell_partition'
+          - 'normalized_energy_flux_into_waves'
+          - 'normalized_stress_into_ocean'
+          - '10_metre_wind_direction'
+          - '10_metre_wind_speed'
+          - 'peak_wave_period'
+          - 'period_corresponding_to_maximum_individual_wave_height'
+          - 'sea_surface_temperature'
+          - 'significant_height_of_combined_wind_waves_and_swell'
+          - 'significant_height_of_total_swell'
+          - 'significant_height_of_wind_waves'
+          - 'significant_wave_height_of_first_swell_partition'
+          - 'significant_wave_height_of_second_swell_partition'
+          - 'significant_wave_height_of_third_swell_partition'
+          - 'total_column_rain_water'
+          - 'total_column_water'
+          - 'u_component_stokes_drift'
+          - 'v_component_stokes_drift'
+          - 'wave_spectral_directional_width_for_swell'
+          - 'wave_spectral_directional_width_for_wind_waves'
+          - 'wave_spectral_kurtosis'
+          - 'wave_spectral_peakedness'
+          - 'wave_spectral_skewness'
+        tc_less_vars:
+          - 'neutral_wind_at_10_m_u_component'
+          - '10_metre_u_wind_component'
+          - 'neutral_wind_at_10_m_v_component'
+          - '10_metre_v_wind_component'
+          - '2_metre_dewpoint_temperature'
+          - '2_metre_temperature'
           - 'mean_sea_level_pressure'
           - 'sea_surface_temperature'
           - 'significant_height_of_combined_wind_waves_and_swell'
@@ -170,9 +231,57 @@ era5:
           - '10m_v_component_of_wind'
           - '2m_dewpoint_temperature'
           - '2m_temperature'
+          - 'air_density_over_the_oceans'
+          - 'benjamin_feir_index'
+          - 'boundary_layer_height'
+          - 'charnock'
+          - 'coefficient_of_drag_with_waves'
+          - 'convective_available_potential_energy'
+          - 'forecast_surface_roughness'
+          - 'free_convective_velocity_over_the_oceans'
+          - 'low_cloud_cover'
+          - 'maximum_individual_wave_height'
+          - 'mean_direction_of_total_swell'
+          - 'mean_direction_of_wind_waves'
+          - 'mean_period_of_total_swell'
+          - 'mean_period_of_wind_waves'
           - 'mean_sea_level_pressure'
+          - 'mean_square_slope_of_waves'
+          - 'mean_wave_direction'
+          - 'mean_wave_direction_of_first_swell_partition'
+          - 'mean_wave_direction_of_second_swell_partition'
+          - 'mean_wave_direction_of_third_swell_partition'
+          - 'mean_wave_period'
+          - 'mean_wave_period_based_on_first_moment'
+          - 'mean_wave_period_based_on_first_moment_for_swell'
+          - 'mean_wave_period_based_on_first_moment_for_wind_waves'
+          - 'mean_wave_period_based_on_second_moment_for_swell'
+          - 'mean_wave_period_based_on_second_moment_for_wind_waves'
+          - 'mean_wave_period_of_first_swell_partition'
+          - 'mean_wave_period_of_second_swell_partition'
+          - 'mean_wave_period_of_third_swell_partition'
+          - 'normalized_energy_flux_into_waves'
+          - 'normalized_stress_into_ocean'
+          - 'ocean_surface_stress_equivalent_10m_neutral_wind_direction'
+          - 'ocean_surface_stress_equivalent_10m_neutral_wind_speed'
+          - 'peak_wave_period'
+          - 'period_corresponding_to_maximum_individual_wave_height'
           - 'sea_surface_temperature'
           - 'significant_height_of_combined_wind_waves_and_swell'
+          - 'significant_height_of_total_swell'
+          - 'significant_height_of_wind_waves'
+          - 'significant_wave_height_of_first_swell_partition'
+          - 'significant_wave_height_of_second_swell_partition'
+          - 'significant_wave_height_of_third_swell_partition'
+          - 'total_column_rain_water'
+          - 'total_column_water'
+          - 'u_component_stokes_drift'
+          - 'v_component_stokes_drift'
+          - 'wave_spectral_directional_width_for_swell'
+          - 'wave_spectral_directional_width_for_wind_waves'
+          - 'wave_spectral_kurtosis'
+          - 'wave_spectral_peakedness'
+          - 'wave_spectral_skewness'
       reanalysis_pressure_levels:
         all_vars:
           - 'divergence'
@@ -277,6 +386,8 @@ cwind:
       fail_download_cwind_station: |-
         Fail downloading infromation of cwind station: 
 sfmr:
+  masked_value:
+    custom: -999
   urls:
     hurricane: 'https://www.aoml.noaa.gov/hrd/data_sub/hurr.html'
     prefix: 'https://www.aoml.noaa.gov/hrd/Storm_pages/'
@@ -288,9 +399,10 @@ sfmr:
   dirs:
     vars: '../data/sfmr/variable/'
     hurr: '../data/sfmr/hurr_data/'
-    pickle: '../data/sfmr/sfmr_pickle/'
+    brief_info: '../data/sfmr/brief_info/'
   table_names:
     prefix: 'sfmr_'
+    brief_info: 'hurr_sfmr_brief_info'
   vars_path:
     all_year_hurr: '../data/sfmr/variable/all_year_hurr.pkl'
   prompt:
@@ -418,6 +530,9 @@ result:
   dirs:
     fig:
       root: '../fig/'
+      hist_of_regression_features:
+        original: '../fig/hist_of_regression_features/original/'
+        after_normalization: '../fig/hist_of_regression_features/after_normalizatiion/'
       isd_stations: '../fig/isd_stations/'
       ibtracs_vs_ccmp: '../fig/btracs_vs_ccmp/'
       ibtracs_vs_era5: '../fig/ibtracs_vs_era5/'
@@ -491,11 +606,20 @@ workflow:
 regression:
   edge_in_degree: 8
   dirs:
-    scs: '../regression/NN/scs/checkpoint/'
+    scs: '../regression/scs/'
     tc:
-      model_summary: '../regression/NN/tc/model_summary/'
-      checkpoint: '../regression/NN/tc/checkpoint/'
-      evaluation: '../regression/NN/tc/evaluation/'
+      neural_network:
+        model_summary: '../regression/tc/neural_network/model_summary/'
+        checkpoint: '../regression/tc/neural_network/checkpoint/'
+        evaluation: '../regression/tc/neural_network/evaluation/'
+        fit_history: '../regression/tc/neural_network/fit_history/'
+        logs: '../regression/tc/neural_network/logs/'
+      xgboost:
+        evaluation: '../regression/tc/xgboost/evaluation/'
+        model: '../regression/tc/xgboost/model/'
+        importance: '../regression/tc/xgboost/importance/'
+      decision_tree:
+        evaluation: '../regression/tc/decision_tree/evaluation/'
   target:
     smap_era5: 'smap_windspd'
     ascat:

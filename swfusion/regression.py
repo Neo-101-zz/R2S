@@ -1,5 +1,7 @@
 import logging
+import math
 import os
+import pickle
 import shutil
 import warnings
 warnings.filterwarnings('ignore')
@@ -7,6 +9,7 @@ warnings.filterwarnings('ignore', category=DeprecationWarning)
 
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 from sqlalchemy.orm import mapper
 from sqlalchemy import MetaData
 from sqlalchemy.ext.declarative import declarative_base
@@ -16,29 +19,97 @@ import seaborn as sb
 from keras import backend as K
 from keras.models import Sequential
 from keras.callbacks import ModelCheckpoint
+from keras.callbacks import TensorBoard
+from keras import optimizers
 from keras.layers import Dense, Activation, Flatten
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
-from xgboost import XGBRegressor
+import xgboost as xgb
 from mpl_toolkits.basemap import Basemap
 from matplotlib import patches as mpatches
 import matplotlib.pyplot as plt
 from keras.models import model_from_yaml
 import yaml
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.metrics import mean_squared_error
+from sklearn.utils import shuffle
+from scipy import stats
+from sklearn.preprocessing import MinMaxScaler
 
 import utils
 import era5
 
 Base = declarative_base()
 
+class DNNLayerConf(object):
+
+    def __init__(self, units):
+        self.units = units
+
+class DNNLayerStructure(object):
+
+    def __init__(self):
+        self.input_layer = None
+        self.hidden_layer = None
+        self.output_layer = None
+
+    def set_input_layer(self, units):
+        self.input_layer = DNNLayerConf(units)
+
+    def set_output_layer(self, units):
+        self.output_layer = DNNLayerConf(units)
+
+    def set_hidden_layer(self, hidden_list):
+        self.hidden_layer = []
+        for hidden in hidden_list:
+            self.hidden_layer.append(DNNLayerConf(hidden['units']))
+
 def root_mean_squared_error(y_true, y_pred):
     return K.sqrt(K.mean(K.square(y_pred - y_true)))
 
+class TrainValTensorBoard(TensorBoard):
+    def __init__(self, log_dir='./logs', **kwargs):
+        # Make the original `TensorBoard` log to a subdirectory 'training'
+        training_log_dir = os.path.join(log_dir, 'training')
+        super(TrainValTensorBoard, self).__init__(training_log_dir,
+                                                  **kwargs)
+
+        # Log the validation metrics to a separate subdirectory
+        self.val_log_dir = os.path.join(log_dir, 'validation')
+
+    def set_model(self, model):
+        # Setup writer for validation metrics
+        self.val_writer = tf.summary.FileWriter(self.val_log_dir)
+        super(TrainValTensorBoard, self).set_model(model)
+
+    def on_epoch_end(self, epoch, logs=None):
+        # Pop the validation logs and handle them separately with
+        # `self.val_writer`. Also rename the keys so that they can
+        # be plotted on the same figure with the training metrics
+        logs = logs or {}
+        val_logs = {k.replace('val_', ''): v for k, v in logs.items()
+                    if k.startswith('val_')}
+        for name, value in val_logs.items():
+            summary = tf.Summary()
+            summary_value = summary.value.add()
+            summary_value.simple_value = value.item()
+            summary_value.tag = name
+            self.val_writer.add_summary(summary, epoch)
+        self.val_writer.flush()
+
+        # Pass the remaining logs to `TensorBoard.on_epoch_end`
+        logs = {k: v for k, v in logs.items() if not k.startswith('val_')}
+        super(TrainValTensorBoard, self).on_epoch_end(epoch, logs)
+
+    def on_train_end(self, logs=None):
+        super(TrainValTensorBoard, self).on_train_end(logs)
+        self.val_writer.close()
+
 class Regression(object):
 
-    def __init__(self, CONFIG, train_period, test_period, region, passwd,
-                 save_disk):
+    def __init__(self, CONFIG, train_period, test_period, region, basin,
+                 passwd, save_disk, instructions):
         self.logger = logging.getLogger(__name__)
         self.CONFIG = CONFIG
         self.train_period = train_period
@@ -48,6 +119,8 @@ class Regression(object):
         self.engine = None
         self.session = None
         self.save_disk = save_disk
+        self.basin = basin
+        self.instructions = instructions
 
         self.smap_columns = ['x', 'y', 'lon', 'lat', 'windspd']
         # self.era5_columns = self.CONFIG['era5']['all_vars']
@@ -62,8 +135,10 @@ class Regression(object):
         self.lon_grid_points = [x * self.spa_resolu for x in range(
             self.CONFIG['era5']['lon_grid_points_number'])]
 
-        self.epochs = 500
-        self.batch_size = 32
+        self.model_dir = dict()
+        self.model_dir['xgb'] = self.CONFIG['regression']['dirs']['tc']\
+                ['xgboost']['model']
+
         self.validation_split = 0.2
 
         self.predict_table_name_prefix = 'predicted_smap_tc'
@@ -74,26 +149,286 @@ class Regression(object):
 
         utils.setup_database(self, Base)
 
-        self.read_smap_era5(None, 15, 'small')
-        self.bulid_DNN()
-        self.train_DNN()
-        self.predict_and_evaluate()
+        self.target_name = self.CONFIG['regression']['target']\
+                ['smap_era5']
 
-    def predict_and_evaluate(self):
-        self.logger.info((f"""Predicting and evaluating"""))
-        # Get ERA file in test period according to IBTrACS data in
-        # SCS/WP ?
+        self.read_smap_era5(False, '', 15, 'large')
+        if 'dt' in self.instructions:
+            self.decision_tree()
+        if 'xgb' in self.instructions:
+            # self.evaluation_df_visualition()
+            self.xgb_regressor()
+            # self.xgb_importance()
+        if 'dnn' in self.instructions:
+            self.deep_neural_network()
 
-        # Generate ERA5 fields from ERA5 file
+    def evaluation_df_visualition(self):
+        reg_tc_dir = self.CONFIG['regression']['dirs']['tc']
+        if self.reg_xgb:
+            df_dir = reg_tc_dir['xgboost']['evaluation']
+            df_files = [f for f in os.listdir(df_dir)
+                        if f.endswith('.pkl')]
+            for file in df_files:
+                fig_name_prefix = file.split('.pkl')[0]
+                df = pd.read_pickle(f'{df_dir}{file}')
+                x_is_learning_rate = df.pivot(index='learning_rate',
+                                              columns='max_depth',
+                                              values='mse')
+                x_is_learning_rate.plot()
+                plt.ylabel('mse')
+                plt.savefig((f"""{df_dir}{fig_name_prefix}_"""
+                             f"""mse_learning_rate.png"""))
+                plt.clf()
 
-        # Predict SMAP windspd
-        score = self.NN_model.evaluate(self.test, self.test_target,
-                                       verbose=0)
+                x_is_max_depth = df.pivot(index='max_depth',
+                                          columns='learning_rate',
+                                          values='mse')
+                x_is_max_depth.plot()
+                plt.ylabel('mse')
+                plt.savefig((f"""{df_dir}{fig_name_prefix}_"""
+                             f"""mse_max_depth.png"""))
+                plt.clf()
 
-        self.logger.info((f"""Evaluating on test dataset"""))
-        metrics_names = self.NN_model.metrics_names
-        for i in range(len(metrics_names)):
-            print(f'{metrics_names[i]}: {score[i]}')
+    def xgb_importance(self):
+        model_files = [f for f in os.listdir(self.model_dir['xgb'])
+                       if f.endswith('.pickle.dat')]
+        min_mse = 99999999
+        best_model_name = None
+        # Find best model
+        for file in model_files:
+            mse = float(file.split('.pickle')[0].split('mse_')[1])
+            if mse < min_mse:
+                min_mse = mse
+                best_model_name = file
+        # load model from file
+        best_model = pickle.load(
+            open(f'{self.model_dir["xgb"]}{best_model_name}', 'rb'))
+        fig_dir = self.CONFIG['regression']['dirs']['tc']['xgboost']\
+                ['importance']
+        os.makedirs(fig_dir, exist_ok=True)
+        selected_features_num = int(self.train.shape[1] / 3)
+
+        for max_feat_num in [None, selected_features_num]:
+            if max_feat_num is None:
+                fig = plt.figure(figsize=(20, 40))
+            else:
+                fig = plt.figure(figsize=(20, 20))
+            for imp_type in ['weight', 'gain', 'cover']:
+                ax = xgb.plot_importance(
+                    best_model, importance_type=imp_type,
+                    max_num_features=max_feat_num,
+                    title=f'Feature importance ({imp_type})')
+
+                plt.subplots_adjust(left=0.4, right=0.9,
+                                    top=0.9, bottom=0.1)
+                for text in ax.texts:
+                    text.set_text(text._text.split('.')[0])
+
+                if max_feat_num is None:
+                    plt.tick_params('y', labelsize=4)
+                    for text in ax.texts:
+                        text.set_fontsize(4)
+                    fig_name = f'{imp_type}_all_features.png'
+                else:
+                    plt.tick_params('y', labelsize=6)
+                    for text in ax.texts:
+                        text.set_fontsize(6)
+                    fig_name = (f"""{imp_type}_top_{max_feat_num}"""
+                                f"""_features.png""")
+                plt.tight_layout()
+
+                plt.savefig(f'{fig_dir}{fig_name}', dpi=300)
+                plt.clf()
+
+    def xgb_regressor(self):
+        self.logger.info((f"""Regressing with XGBRegressor"""))
+
+        # 5 ~ 10, best: 10
+        depth_range = [d + 5 for d in range(6)]
+        # 0 ~ 0.2, best: 0.1
+        learning_rate_range = [0.05 * r for r in range(1, 5)]
+        n_estimators_range = [200 * i for i in range(1, 6)]
+        total = len(depth_range ) * len(learning_rate_range)
+        count = 0
+
+        best_max_depth = 10
+        best_learning_rate = 0.1
+        # actually is 1000, 100 for test
+        best_estimators_num = 1000
+        # total = len(n_estimators_range)
+
+        column_names = ['estimators_num', 'mse']
+        all_tests = []
+
+        os.makedirs(self.model_dir['xgb'], exist_ok=True)
+
+        # for depth in depth_range:
+        #     for learning_rate in learning_rate_range:
+        # for estimators_num in n_estimators_range:
+        #     count += 1
+        #     print(f'\r{count}/{total}', end='')
+
+        # one_test = dict()
+        # one_test['estimators_num'] = estimators_num
+
+        model = xgb.XGBRegressor(max_depth=best_max_depth,
+                                 learning_rate=best_learning_rate,
+                                 n_estimators=best_estimators_num,
+                                 objective='reg:squarederror')
+        model.fit(self.train, self.target)
+
+        self.logger.info((f"""Evaluating on test set"""))
+        predicted = model.predict(data=self.test)
+        truth = self.test_target.to_numpy()
+        mse = mean_squared_error(truth, predicted)
+        print(f'MSE: {mse}')
+        # one_test['mse'] = mse
+
+        # save model to file
+        pickle.dump(
+            model, open(f'{self.model_dir["xgb"]}mse_{mse}.pickle.dat',
+                        'wb'))
+
+        # all_tests.append(one_test)
+
+        utils.delete_last_lines()
+        print('Done')
+
+        # df = pd.DataFrame(all_tests, columns=column_names)
+        # evaluation_dir = self.CONFIG['regression']['dirs']['tc']\
+        #         ['xgboost']['evaluation']
+        # os.makedirs(evaluation_dir, exist_ok=True)
+        # df.to_pickle(f'{evaluation_dir}test_set.pkl')
+        # print(df)
+
+    def decision_tree(self):
+        self.logger.info((f"""Regressing with decision tree"""))
+        self.logger.info((f"""Evaluating on test set"""))
+
+        for depth in range(3, 20):
+            tree = DecisionTreeRegressor(criterion='mse', max_depth=depth)
+            tree.fit(self.train, self.target)
+
+            predicted = tree.predict(self.test)
+            truth = self.test_target.to_numpy()
+            mse = mean_squared_error(truth, predicted)
+
+            print(f"""Max depth {depth}: MSE {mse:.2f}""")
+
+    def deep_neural_network(self):
+        self.logger.info((f"""Regressing with deep neural network"""))
+        """
+        At least 4 variables to trail and error:
+
+        Number of hidden layers
+        -----------------------
+        3, 6, 9
+
+        Number of neurons
+        -----------------
+        Plan A: 1/3, 2/3, 3/3 of the size of input layer, plus the size of
+        output layer.
+        Plan B: 64, 128, 256
+
+        The number of hidden neurons should be between the size of the
+        input layer and the size of the output layer.
+        The number of hidden neurons should be 2/3 the size of the
+        input layer, plus the size of the output layer.
+        The number of hidden neurons should be less than twice the
+        size of the input layer.
+
+        Learning rate
+        -------------
+        First test on 0.0001, 0.001 and 0.01.  Then ajust the range more
+        precisely.
+
+        Batch size
+        ----------
+        2, 4, 8, 16, 32
+
+        Epochs
+        ------
+        100, 500, 1000
+
+        Optimizer
+        ---------
+        Adam
+
+        """
+        # Numbers of hidden layer
+        hidden_layers_num_range = [3 * i for i in range(1, 4)]
+        # hidden_neurons_num_range = [
+        #     int(self.train.shape[1] * x / 3) for x in range(1, 4)
+        # ]
+        hidden_neurons_num_range = [32, 64, 128, 256]
+        # Learning rate
+        self.learning_rate = 0.001
+        # Batch size
+        self.batch_size = 32
+        # Epochs
+        self.epochs = 500
+
+        column_names = ['hidden_layers_num', 'hidden_neurons_num',
+                        'mse']
+        all_tests = []
+
+        for hidden_layers_num in hidden_layers_num_range:
+            for hidden_neurons_num in hidden_neurons_num_range:
+                # Structure of neural network
+                self.DNN_structure = self.gen_DNN_structure(
+                    hidden_neurons_num, hidden_layers_num)
+                self.DNN_structure_str = self.gen_DNN_structure_str()
+
+                self.build_DNN()
+                self.train_DNN()
+
+                self.logger.info((f"""Evaluating on test set"""))
+                # Predict SMAP windspd
+                score = self.NN_model.evaluate(self.test,
+                                               self.test_target,
+                                               verbose=0)
+                metrics_names = self.NN_model.metrics_names
+                one_test = dict()
+                one_test['hidden_layers_num'] = hidden_layers_num
+                one_test['hidden_neurons_num'] = hidden_neurons_num
+                one_test['mse'] = score[
+                    metrics_names.index('mean_squared_error')
+                ]
+                print(one_test)
+
+                all_tests.append(one_test)
+
+        df = pd.DataFrame(all_tests, columns=column_names)
+        evaluation_dir = self.CONFIG['regression']['dirs']['tc']\
+                ['neural_network']['evaluation']
+        os.makedirs(evaluation_dir, exist_ok=True)
+        df.to_pickle(f'{evaluation_dir}test_set.pkl')
+        print(df)
+
+    def gen_DNN_structure(self, hidden_neurons_num, hidden_layers_num):
+        structure = DNNLayerStructure()
+        structure.set_input_layer(hidden_neurons_num)
+        hidden_list = []
+        for i in range(hidden_layers_num):
+            hidden_list.append({'units': hidden_neurons_num})
+        structure.set_hidden_layer(hidden_list)
+        structure.set_output_layer(1)
+
+        return structure
+
+    def gen_DNN_structure_str(self):
+        structure_str = (
+            f"""input_{self.DNN_structure.input_layer.units}"""
+            f"""_hidden"""
+        )
+        for hidden in self.DNN_structure.hidden_layer:
+            structure_str = (f"""{structure_str}"""
+                               f"""_{hidden.units}""")
+        structure_str = (
+            f"""{structure_str}_output_"""
+            f"""{self.DNN_structure.output_layer.units}""")
+
+        return structure_str
 
     def predict_old(self):
         the_mode = 'surface_all_vars'
@@ -223,13 +558,40 @@ class Regression(object):
         return windspd
 
     def train_DNN(self, skip_fit=False):
+        strucuture_str = ''
         self.logger.info((f"""Training DNN"""))
         if not skip_fit:
-            self.NN_model.fit(self.train, self.target,
-                              epochs=self.epochs,
-                              batch_size=self.batch_size,
-                              validation_split=self.validation_split,
-                              callbacks=self.callbacks_list, verbose=0)
+            history = self.NN_model.fit(
+                self.train, self.target, epochs=self.epochs,
+                batch_size=self.batch_size,
+                validation_split=self.validation_split,
+                callbacks=self.callbacks_list, verbose=0)
+
+            fig_dir = self.CONFIG['regression']['dirs']['tc']\
+                    ['neural_network']['fit_history']
+            os.makedirs(fig_dir, exist_ok=True)
+
+            fig_name_suffix = (f"""{self.DNN_structure_str}.png""")
+
+            # Summarize history for mean squared error
+            plt.plot(history.history['mean_squared_error'])
+            plt.plot(history.history['val_mean_squared_error'])
+            plt.title('model mean_squared_error')
+            plt.ylabel('mean_squared_error')
+            plt.xlabel('epoch')
+            plt.legend(['train', 'validation'], loc='upper left')
+            plt.savefig((f"""{fig_dir}mean_squared_error_"""
+                         f"""{fig_name_suffix}"""))
+            plt.clf()
+            # summarize history for loss
+            plt.plot(history.history['loss'])
+            plt.plot(history.history['val_loss'])
+            plt.title('model loss')
+            plt.ylabel('loss')
+            plt.xlabel('epoch')
+            plt.legend(['train', 'validation'], loc='upper left')
+            plt.savefig(f'{fig_dir}loss_{fig_name_suffix}')
+            plt.clf()
 
         # Load weights file of the best model:
         # choose the best checkpoint
@@ -237,52 +599,54 @@ class Regression(object):
             self.checkpoint_dir)
         # load it
         self.NN_model.load_weights(weights_file)
-        self.NN_model.compile(loss=root_mean_squared_error,
-                              optimizer='adam',
-                              metrics=[root_mean_squared_error])
+        adam = optimizers.Adam(lr=self.learning_rate)
+        self.NN_model.compile(loss='mean_squared_error',
+                              optimizer=adam,
+                              metrics=['mean_squared_error'])
 
-        # self.logger.info((f"""Evaluating on train dataset"""))
-        # score = self.NN_model.evaluate(self.train, self.target,
-        #                                verbose=0)
-
-        # metrics_names = self.NN_model.metrics_names
-        # for i in range(len(metrics_names)):
-        #     print(f'{metrics_names[i]}: {score[i]}')
-
-        # evaluation_dir = self.CONFIG['regression']['dirs']['tc']\
-        #         ['evaluation']
-
-    def bulid_DNN(self):
+    def build_DNN(self):
         self.logger.info((f"""Building DNN"""))
-        self.NN_model = Sequential()
-        self.NN_model.add(Dense(128, kernel_initializer='normal',
-                                input_dim = self.train.shape[1],
-                                activation='relu'))
-        for i in range(3):
-            self.NN_model.add(Dense(256, kernel_initializer='normal',
-                                    activation='relu'))
-        self.NN_model.add(Dense(1, kernel_initializer='normal',
-                                activation='linear'))
-        self.NN_model.compile(loss=root_mean_squared_error,
-                              optimizer='adam',
-                              metrics=[root_mean_squared_error])
+        input_confs = self.DNN_structure.input_layer
+        hidden_confs = self.DNN_structure.hidden_layer
+        output_confs = self.DNN_structure.output_layer
 
-        self.NN_model.summary()
+        K.clear_session()
+        self.NN_model = Sequential()
+        # Input layer
+        self.NN_model.add(Dense(input_confs.units,
+                                kernel_initializer='normal',
+                                input_dim=self.train.shape[1],
+                                activation='relu'))
+        # Hidden layers
+        for hidden in hidden_confs:
+            self.NN_model.add(Dense(hidden.units,
+                                    kernel_initializer='normal',
+                                    activation='relu'))
+        # Output layer
+        self.NN_model.add(Dense(output_confs.units,
+                                kernel_initializer='normal',
+                                activation='linear'))
+        adam = optimizers.Adam(lr=self.learning_rate)
+        self.NN_model.compile(loss='mean_squared_error',
+                              optimizer=adam,
+                              metrics=['mean_squared_error'])
+
+        # self.NN_model.summary()
 
         yaml_string = self.NN_model.to_yaml()
         # model = model_from_yaml(yaml_string)
         model_summary_dir = self.CONFIG['regression']['dirs']['tc']\
-                ['model_summary']
+                ['neural_network']['model_summary']
         os.makedirs(model_summary_dir, exist_ok=True)
         model_summary_path = f'{model_summary_dir}model.yml'
         with open(model_summary_path, 'w') as outfile:
             yaml.dump(yaml_string, outfile, default_flow_style=False)
 
         checkpoint_root_dir = self.CONFIG['regression']['dirs']\
-                ['tc']['checkpoint']
+                ['tc']['neural_network']['checkpoint']
 
-        self.checkpoint_dir = (f"""{checkpoint_root_dir}"""
-                               f"""{self.condition}/""")
+        self.checkpoint_dir = (f"""{checkpoint_root_dir}""")
+                               # f"""{self.condition}/""")
         # Remove old checkpoint files
         if os.path.exists(self.checkpoint_dir):
             shutil.rmtree(self.checkpoint_dir)
@@ -293,16 +657,35 @@ class Regression(object):
         checkpoint_path = (f"""{self.checkpoint_dir}"""
                            f"""{checkpoint_name}""")
 
-        checkpoint = ModelCheckpoint(checkpoint_path,
-                                     monitor='val_loss',
-                                     verbose=2, save_best_only=True,
-                                     mode='auto')
-        self.callbacks_list = [checkpoint]
+        checkpoint_callback = ModelCheckpoint(
+            checkpoint_path, monitor='val_loss', verbose=0,
+            save_best_only=True, mode='auto')
 
-    def read_smap_era5(self, col_name, divide, large_or_small):
+        log_dir = self.CONFIG['regression']['dirs']['tc']\
+                ['neural_network']['logs']
+        log_dir = f'{log_dir}{self.DNN_structure_str}/'
+        # Remove old tensorboard files
+        if os.path.exists(log_dir):
+            shutil.rmtree(log_dir)
+        os.makedirs(log_dir, exist_ok=True)
+
+        tensorboard_callback = TrainValTensorBoard(
+            log_dir=log_dir, histogram_freq=int(self.epochs / 10),
+            batch_size=32, write_graph=True, write_grads=False,
+            write_images=False,
+            embeddings_freq=0, embeddings_layer_names=None,
+            embeddings_metadata=None, embeddings_data=None,
+            update_freq='epoch')
+        self.callbacks_list = [checkpoint_callback, tensorboard_callback]
+
+    def read_smap_era5(self, sample, col_name, divide, large_or_small):
         self.logger.info((f"""Reading SMAP-ERA5 data"""))
         combined, target, test_target, train_length = \
-                self.get_combined_data(col_name, divide, large_or_small)
+                self.get_combined_data(sample, col_name, divide,
+                                       large_or_small)
+
+        if combined is None:
+            return
 
         # num_cols = utils.get_dataframe_cols_with_no_nans(combined,
         #                                                  'num')
@@ -326,16 +709,18 @@ class Regression(object):
 
         return train, test
 
-    def get_combined_data(self, col_name, divide, large_or_small):
-        train, test = self._get_train_test(col_name, divide,
+    def get_combined_data(self, sample, col_name, divide, large_or_small):
+        train, test = self._get_train_test(sample, col_name, divide,
                                            large_or_small)
+        if train is None:
+            return None, None, None, None,
+
         train_length = len(train)
 
-        target_name = self.CONFIG['regression']['target']['smap_era5']
-        target = getattr(train, target_name)
-        test_target = getattr(test, target_name)
-        train.drop([target_name], axis=1, inplace=True)
-        test.drop([target_name], axis=1, inplace=True)
+        target = getattr(train, self.target_name)
+        test_target = getattr(test, self.target_name)
+        train.drop([self.target_name], axis=1, inplace=True)
+        test.drop([self.target_name], axis=1, inplace=True)
 
         combined = train.append(test)
         combined.reset_index(inplace=True)
@@ -343,13 +728,13 @@ class Regression(object):
 
         return combined, target, test_target, train_length
 
-    def _get_train_test(self, col_name, divide, large_or_small):
-        # years = [y for y in range(self.train_period[0].year,
-        #                           self.train_period[1].year+1)]
-        years = [2015, 2016, 2017, 2018, 2019]
+    def _get_train_test(self, sample, col_name, divide, large_or_small):
+        years = [y for y in range(self.train_period[0].year,
+                                  self.train_period[1].year+1)]
+        # years = [2015, 2016, 2017, 2018, 2019]
         df = None
         for y in years:
-            table_name = f'tc_smap_era5_{y}'
+            table_name = f'tc_smap_era5_{y}_{self.basin}'
             if (utils.get_class_by_tablename(self.engine, table_name)
                 is not None):
                 tmp_df = pd.read_sql(f'SELECT * FROM {table_name}',
@@ -362,20 +747,78 @@ class Regression(object):
         df.drop(self.CONFIG['regression']['useless_columns']\
                 ['smap_era5'], axis=1, inplace=True)
 
-        if col_name is not None:
-            df, self.condition = \
-                    utils.filter_dataframe_by_column_value_divide(
-                        df, col_name, divide, large_or_small)
-        else:
-            self.condition = 'all'
+        if sample:
+            df = shuffle(df)
+            rows, cols = df.shape
+            cut_rows = int(rows * 0.3)
+            df = df[:cut_rows]
+
+        # if col_name is not None:
+        #     df, self.condition = \
+        #             utils.filter_dataframe_by_column_value_divide(
+        #                 df, col_name, divide, large_or_small)
+        # else:
+        #     self.condition = 'all'
+
+        # Fiiter outilers by z score
+        z = np.abs(stats.zscore(df))
+        threshold = 3
+        outliers = np.where(z > threshold)
+
+        cols = list(df.columns)
+        cols_num = len(df.columns)
+        group_size = 1
+        groups_num = math.ceil(cols_num / group_size)
+        fig_dir = self.CONFIG['result']['dirs']['fig']\
+                ['hist_of_regression_features']['original']
+        os.makedirs(fig_dir, exist_ok=True)
+        for i in range(groups_num):
+            try:
+                start = i * group_size
+                end = min(cols_num, (i + 1) * group_size)
+                self.save_features_histogram(df, cols[start:end], fig_dir)
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
+
+        if 'no-normalization' not in self.instructions:
+            # Normalization
+            normalized_columns = df.columns.drop(self.target_name)
+            scaler = MinMaxScaler()
+            df[normalized_columns] = scaler.fit_transform(
+                df[normalized_columns])
+
+            fig_dir = self.CONFIG['result']['dirs']['fig']\
+                    ['hist_of_regression_features']\
+                    ['after_normalization']
+            os.makedirs(fig_dir, exist_ok=True)
+            for i in range(groups_num):
+                try:
+                    start = i * group_size
+                    end = min(cols_num, (i + 1) * group_size)
+                    self.save_features_histogram(df, cols[start:end],
+                                                 fig_dir)
+                except Exception as msg:
+                    breakpoint()
+                    exit(msg)
 
         train, test = train_test_split(df, test_size=0.2)
 
-        return train, test
+        if 'only_hist' in self.instructions:
+            return None, None
+        else:
+            return train, test
 
-    def _show_dataframe_hist(self, df, columns):
-        df.hist(column=columns, figsize = (12,10))
-        plt.show()
+    def save_features_histogram(self, df, columns, fig_dir):
+        try:
+            df.hist(column=columns, figsize = (12,10))
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
+
+        fig_name = '-'.join(columns)
+        fig_name = f'{fig_name}.png'
+        plt.savefig(f'{fig_dir}{fig_name}')
 
     def _show_correlation_heatmap(self, data):
         C_mat = data.corr()
