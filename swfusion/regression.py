@@ -285,9 +285,9 @@ class Regression(object):
         # one_test['mse'] = mse
 
         # save model to file
-        pickle.dump(
-            model, open(f'{self.model_dir["xgb"]}mse_{mse}.pickle.dat',
-                        'wb'))
+        pickle.dump(model, open((f"""{self.model_dir["xgb"]}"""
+                                 f"""{self.basin}_mse_{mse}.pickle.dat"""),
+                                'wb'))
 
         # all_tests.append(one_test)
 
@@ -781,7 +781,7 @@ class Regression(object):
                 breakpoint()
                 exit(msg)
 
-        if 'no-normalization' not in self.instructions:
+        if 'normalization' in self.instructions:
             # Normalization
             normalized_columns = df.columns.drop(self.target_name)
             scaler = MinMaxScaler()

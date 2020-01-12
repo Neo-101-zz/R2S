@@ -28,7 +28,7 @@ class matchManager(object):
         self.save_disk = save_disk
         self.engine = None
         self.session = None
-        self.match_basin = basin
+        self.basin = basin
 
         self.logger = logging.getLogger(__name__)
         utils.setup_database(self, Base)
@@ -79,7 +79,7 @@ class matchManager(object):
     def extract(self):
         # Get IBTrACS table
         table_name = self.CONFIG['ibtracs']['table_name'][
-            self.match_basin]
+            self.basin]
         IBTrACS = utils.get_class_by_tablename(self.engine,
                                                table_name)
         tc_query = self.session.query(IBTrACS).filter(
@@ -797,7 +797,7 @@ class matchManager(object):
 
     def create_smap_era5_table(self, dt):
         table_name = utils.gen_tc_satel_era5_tablename('smap', dt,
-                                                       self.match_basin)
+                                                       self.basin)
 
         class Satel(object):
             pass

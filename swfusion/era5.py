@@ -225,7 +225,8 @@ class ERA5Manager(object):
 
     def download_single_levels_vars(self, vars_mode, target_datetime,
                                     time_mode, times, area,
-                                    match_satel, file_name_suffix):
+                                    match_satel, file_name_suffix,
+                                    show_info=True):
         era5_dirs = self.CONFIG['era5']['dirs']\
                 ['reanalysis_single_levels']
 
@@ -269,9 +270,10 @@ class ERA5Manager(object):
         # if os.path.exists(file_path):
         #     return file_path
 
-        self.logger.info((f"""Downloading {vars_name} of {times} """
-                          f"""hours on {target_datetime.date()} """
-                          f"""from ERA5"""))
+        if show_info:
+            self.logger.info((f"""Downloading {vars_name} of {times} """
+                              f"""hours on {target_datetime.date()} """
+                              f"""from ERA5"""))
 
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
@@ -304,7 +306,8 @@ class ERA5Manager(object):
     def download_pressure_levels_vars(self, vars_mode,
                                       target_datetime, time_mode,
                                       times, area, pressure_levels,
-                                      match_satel, file_name_suffix):
+                                      match_satel, file_name_suffix,
+                                      show_info=True):
         era5_dirs = self.CONFIG['era5']['dirs']\
                 ['reanalysis_pressure_levels']
 
@@ -330,9 +333,10 @@ class ERA5Manager(object):
         # if os.path.exists(file_path):
         #     return file_path
 
-        self.logger.info((f"""Downloading {vars_name} of {times} """
-                          f"""hours on {target_datetime.date()} """
-                          f"""from ERA5"""))
+        if show_info:
+            self.logger.info((f"""Downloading {vars_name} of {times} """
+                              f"""hours on {target_datetime.date()} """
+                              f"""from ERA5"""))
 
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
 

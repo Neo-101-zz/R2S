@@ -1375,6 +1375,7 @@ def set_basemap_title(ax, tc_row, data_name):
     title_suffix = f'on {tc_row.date_time}'
     ax.set_title(f'{title_prefix} {tc_name} {title_suffix}')
 
+"""
 def draw_windspd(ax, lats, lons, windspd, zorders):
     # Plot windspd in knots with matplotlib's contour
     X, Y = np.meshgrid(lons, lats)
@@ -1388,6 +1389,7 @@ def draw_windspd(ax, lats, lons, windspd, zorders):
     ax.contourf(X, Y, Z, levels=windspd_levels,
                 zorder=zorders['contourf'],
                 cmap=plt.cm.rainbow)
+"""
 
 def get_radii_from_tc_row(tc_row):
     r34 = dict()
@@ -1628,7 +1630,11 @@ def gen_satel_era5_tablename(satel_name, dt):
     return f'{satel_name}_{dt.year}_{str(dt.month).zfill(2)}'
 
 def gen_tc_satel_era5_tablename(satel_name, dt, basin):
-    return f'tc_{satel_name}_era5_{dt.year}_{basin}'
+    if isinstance(dt, datetime.datetime):
+        return f'tc_{satel_name}_era5_{dt.year}_{basin}'
+    # `dt` is year
+    elif isinstance(dt, int):
+        return f'tc_{satel_name}_era5_{dt}_{basin}'
 
 def backtime_to_last_entire_hour(dt):
     # Initial datetime is not entire-houred
@@ -1654,30 +1660,6 @@ def load_grid_lonlat_xy(the_class):
             var = pickle.load(f)
 
         setattr(the_class, f'grid_{key}', var)
-
-def draw_SCS_basemap(the_class, ax, custom, area):
-    if not custom:
-        lat1 = the_class.lat1
-        lat2 = the_class.lat2
-        lon1 = the_class.lon1
-        lon2 = the_class.lon2
-    else:
-        # North, West, South, East
-        lat2, lon1, lat1, lon2 = area
-
-    map = Basemap(llcrnrlon=lon1, llcrnrlat=lat1, urcrnrlon=lon2,
-                  urcrnrlat=lat2, ax=ax, resolution='h')
-
-    map.drawcoastlines(zorder=the_class.zorders['coastlines'])
-    map.drawmapboundary(fill_color='white',
-                        zorder=the_class.zorders['mapboundary'])
-    map.fillcontinents(color='grey', lake_color='white',
-                       zorder=the_class.zorders['continents'])
-
-    map.drawmeridians(np.arange(100, 126, 5), labels=[1, 0, 0, 1],
-                      zorder=the_class.zorders['grid'])
-    map.drawparallels(np.arange(0, 31, 5), labels=[1, 0 , 0, 1],
-                      zorder=the_class.zorders['grid'])
 
 def decompose_wind(windspd, winddir, input_convention):
     """Decompose windspd with winddir into u and v component of wind.
@@ -1792,14 +1774,15 @@ def draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
     # windspd_levels = [5*x for x in range(1, 15)]
     windspd_levels = np.linspace(0, max_windspd, 10)
 
-
     # cs = ax.contour(X, Y, Z, levels=windspd_levels,
     #                 zorder=self.zorders['contour'], colors='k')
     # ax.clabel(cs, inline=1, colors='k', fontsize=10)
     try:
-        cf = ax.contourf(X, Y, Z, levels=windspd_levels,
+        cf = ax.contourf(X, Y, Z,
+                         # levels=windspd_levels,
                          zorder=wind_zorder,
-                         cmap=plt.cm.rainbow)
+                         cmap=plt.cm.rainbow,
+                         vmin=0, vmax=max_windspd)
     except Exception as msg:
         breakpoint()
         exit(msg)
@@ -1809,17 +1792,79 @@ def draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
 
     fig.colorbar(cf, cax=cax, orientation='vertical', format='%.1f')
 
-def draw_windspd(the_class, fig, ax, dt, lons, lats, windspd,
-                 max_windspd, mesh, custom=False, area=None):
-    draw_SCS_basemap(the_class, ax, custom, area)
+def draw_SCS_basemap(the_class, ax, custom, region):
+    if not custom:
+        lat1 = the_class.lat1
+        lat2 = the_class.lat2
+        lon1 = the_class.lon1
+        lon2 = the_class.lon2
+    else:
+        # North, West, South, East
+        lat1, lat2, lon1, lon2 = region
 
-    draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
-                               the_class.zorders['contourf'],
+    map = Basemap(llcrnrlon=lon1, llcrnrlat=lat1, urcrnrlon=lon2,
+                  urcrnrlat=lat2, ax=ax, resolution='h')
+
+    map.drawcoastlines(zorder=the_class.zorders['coastlines'])
+    map.drawmapboundary(fill_color='white',
+                        zorder=the_class.zorders['mapboundary'])
+    map.fillcontinents(color='grey', lake_color='white',
+                       zorder=the_class.zorders['continents'])
+
+    map.drawmeridians(np.arange(lon1, lon2, (lon2 - lon1) / 6),
+                      labels=[1, 0, 0, 1],  fmt='%.2f',
+                      zorder=the_class.zorders['grid'])
+    map.drawparallels(np.arange(lat1, lat2, (lat2 - lat1) / 6),
+                      labels=[1, 0 , 0, 1], fmt='%.2f',
+                      zorder=the_class.zorders['grid'])
+
+    return map
+
+def draw_windspd_with_imshow(map, fig, ax, lons, lats, windspd,
+                               wind_zorder, max_windspd, mesh):
+    rows_num, cols_num = windspd.shape
+    for i in range(rows_num):
+        for j in range(cols_num):
+            if windspd[i][j] < 0:
+                windspd[i][j] = None
+
+    if mesh:
+        X, Y = np.meshgrid(lons, lats)
+    else:
+        X, Y = lons, lats
+    Z = windspd
+
+    try:
+        image = map.imshow(Z, ax=ax, zorder=wind_zorder,
+                           cmap=plt.cm.rainbow,
+                           vmin=0, vmax=max_windspd,
+                           interpolation='none',
+                           extent=(X.min(), X.max(), Y.min(), Y.max()))
+        # plt.colorbar()
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes('right', size='5%', pad=0.05)
+
+    fig.colorbar(image, cax=cax, orientation='vertical', format='%.1f')
+
+def draw_windspd(the_class, fig, ax, dt, lons, lats, windspd,
+                 max_windspd, mesh, custom=False, region=None):
+    map = draw_SCS_basemap(the_class, ax, custom, region)
+
+    # draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
+    #                            the_class.zorders['contourf'],
+    #                            max_windspd, mesh)
+
+    draw_windspd_with_imshow(map, fig, ax, lons, lats, windspd,
+                             the_class.zorders['contourf'],
                                max_windspd, mesh)
 
 def get_latlon_and_index_in_grid(value, range, grid_lat_or_lon_list):
     """Getting region corners' lat or lon's value and its index
-    in CCMP grid.
+    in RSS grid.
 
     Parameters
     ----------
@@ -1829,18 +1874,22 @@ def get_latlon_and_index_in_grid(value, range, grid_lat_or_lon_list):
         The range of latitude or longtitude of region.  The first
         element is smaller than the second element.
     grid_lat_or_lon_list: list
-        The latitude or longitutde of CCMP grid.  Ascending sorted.
+        The latitude or longitutde of RSS grid.  Ascending sorted.
 
     Return
     ------
     grid_pt_value: float
-        The value of latitude or longtitude of matching CCMP grid point.
+        The value of latitude or longtitude of matching RSS grid point.
     grid_pt_index: int
-        The index of latitude or longtitude of matching CCMP grid point.
+        The index of latitude or longtitude of matching RSS grid point.
 
     """
     tmp_value, tmp_index = get_nearest_element_and_index(
         grid_lat_or_lon_list, value)
+
+    # To avoid gap near margin of map due to little difference
+    # between different grid, expand region a little
+
     # value is the first element (smaller one) of range
     if not range.index(value):
         if tmp_value > value:
@@ -1908,7 +1957,8 @@ def get_pixel_of_smap_windspd(smap_file_path, dt, lon, lat):
 
     return windspd
 
-def get_xyz_of_smap_windspd(smap_file_path, dt, region):
+def get_xyz_matrix_of_smap_windspd_or_diff_mins(
+    target, smap_file_path, tc_dt, region):
     """Temporal window is one hour.
 
     """
@@ -1932,6 +1982,8 @@ def get_xyz_of_smap_windspd(smap_file_path, dt, region):
     lats = [round(y, 3) for y in lats]
     windspd = np.full(shape=(len(lats), len(lons)), fill_value=-1,
                       dtype=float)
+    diff_mins = np.full(shape=(len(lats), len(lons)), fill_value=-999,
+                      dtype=int)
 
     dataset = netCDF4.Dataset(smap_file_path)
     # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which
@@ -1948,25 +2000,101 @@ def get_xyz_of_smap_windspd(smap_file_path, dt, region):
     for y in range(len(lats)):
         for x in range(len(lons)):
             for i in range(passes_num):
-                if (minute[y][x][i] == minute_missing
-                    or wind[y][x][i] == wind_missing):
-                    continue
-                if minute[y][x][0] == minute[y][x][1]:
-                    continue
-                time_ = datetime.time(
-                    *divmod(int(minute[y][x][i]), 60), 0)
-                # Temporal window is one hour
-                if time_.hour != dt.hour - 1 and time_.hour != dt.hour:
-                    continue
+                try:
+                    if (minute[y][x][i] == minute_missing
+                        or wind[y][x][i] == wind_missing):
+                        continue
+                    if minute[y][x][0] == minute[y][x][1]:
+                        continue
+                    pt_time = datetime.time(
+                        *divmod(int(minute[y][x][i]), 60), 0)
+                    pt_dt = datetime.datetime.combine(tc_dt.date(), pt_time)
+                    delta = abs(pt_dt - tc_dt)
+                    # Temporal window is one hour
+                    if delta.seconds > 1800:
+                        continue
 
-                # SMAP originally has land mask, so it's not necessary
-                # to check whether each pixel is land or ocean
-                windspd[y][x] = float(wind[y][x][i])
+                    # SMAP originally has land mask, so it's not necessary
+                    # to check whether each pixel is land or ocean
+                    windspd[y][x] = float(wind[y][x][i])
+                    diff_mins[y][x] = int(delta.seconds / 60)
+                except Exception as msg:
+                    breakpoint()
+                    exit(msg)
 
-    if windspd.max() > 0:
+    if target == 'windspd' and windspd.max() > 0:
         return lons, lats, windspd
+    elif target == 'diff_mins' and diff_mins.max() > 0:
+        return lons, lats, diff_mins
     else:
         return None, None, None
+
+# def get_xyz_matrix_of_smap_windspd(smap_file_path, tc_dt, region):
+#     """Temporal window is one hour.
+# 
+#     """
+#     spa_resolu = 0.25
+# 
+#     smap_lats = [y * spa_resolu - 89.875 for y in range(720)]
+#     smap_lons = [x * spa_resolu + 0.125 for x in range(1440)]
+# 
+#     lat1, lat1_idx = get_latlon_and_index_in_grid(
+#         region[0], (region[0], region[1]), smap_lats)
+#     lat2, lat2_idx = get_latlon_and_index_in_grid(
+#         region[1], (region[0], region[1]), smap_lats)
+#     lon1, lon1_idx = get_latlon_and_index_in_grid(
+#         region[2], (region[2], region[3]), smap_lons)
+#     lon2, lon2_idx = get_latlon_and_index_in_grid(
+#         region[3], (region[2], region[3]), smap_lons)
+# 
+#     lons = list(np.arange(lon1, lon2 + 0.5 * spa_resolu, spa_resolu))
+#     lats = list(np.arange(lat1, lat2 + 0.5 * spa_resolu, spa_resolu))
+#     lons = [round(x, 3) for x in lons]
+#     lats = [round(y, 3) for y in lats]
+#     windspd = np.full(shape=(len(lats), len(lons)), fill_value=-1,
+#                       dtype=float)
+# 
+#     dataset = netCDF4.Dataset(smap_file_path)
+#     # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which
+#     # faster than 1 m/s, so must disable auto mask
+#     dataset.set_auto_mask(False)
+#     vars = dataset.variables
+#     minute = vars['minute'][lat1_idx:lat2_idx+1, lon1_idx:lon2_idx+1, :]
+#     wind = vars['wind'][lat1_idx:lat2_idx+1, lon1_idx:lon2_idx+1, :]
+# 
+#     rows, cols = minute.shape[:2]
+#     passes_num = 2
+#     minute_missing = -9999
+#     wind_missing = -99.99
+#     for y in range(len(lats)):
+#         for x in range(len(lons)):
+#             for i in range(passes_num):
+#                 try:
+#                     if (minute[y][x][i] == minute_missing
+#                         or wind[y][x][i] == wind_missing):
+#                         continue
+#                     if minute[y][x][0] == minute[y][x][1]:
+#                         continue
+#                     pt_time = datetime.time(
+#                         *divmod(int(minute[y][x][i]), 60), 0)
+#                     pt_dt = datetime.datetime.combine(tc_dt.date(), pt_time)
+#                     delta = abs(pt_dt - tc_dt)
+#                     # Temporal window is one hour
+#                     if delta.seconds > 1800:
+#                         continue
+#                         continue
+# 
+#                     # SMAP originally has land mask, so it's not necessary
+#                     # to check whether each pixel is land or ocean
+#                     windspd[y][x] = float(wind[y][x][i])
+#                 except Exception as msg:
+#                     breakpoint()
+#                     exit(msg)
+# 
+#     if windspd.max() > 0:
+#         return lons, lats, windspd
+#     else:
+#         return None, None, None
 
 def satel_data_cover_tc_center(lons, lats, windspd, tc):
     # (lon, lat)
@@ -2022,7 +2150,7 @@ def draw_ibtracs_radii(ax, tc_row, zorders):
 
     return ibtracs_area
 
-def get_xyz_of_ccmp_windspd(ccmp_file_path, dt, region):
+def get_xyz_matrix_of_ccmp_windspd(ccmp_file_path, dt, region):
     ccmp_hours = [0, 6, 12, 18]
     if dt.hour not in ccmp_hours:
         return None, None, None
@@ -2118,7 +2246,7 @@ def get_pixel_of_era5_windspd(era5_file_path, product_type, dt,
 
     return windspd
 
-def get_xyz_of_era5_windspd(era5_file_path, product_type, dt, region):
+def get_xyz_matrix_of_era5_windspd(era5_file_path, product_type, dt, region):
     grbidx = pygrib.index(era5_file_path, 'dataTime')
     hourtime = dt.hour * 100
     selected_grbs = grbidx.select(dataTime=hourtime)
@@ -2469,9 +2597,10 @@ def fill_era5_masked_and_not_masked_ocean_data(
 
     return new_data
 
-def load_best_xgb_model(model_dir):
+def load_best_xgb_model(model_dir, basin):
     model_files = [f for f in os.listdir(model_dir)
-                   if f.endswith('.pickle.dat')]
+                   if (f.startswith(f'{basin}')
+                       and f.endswith('.pickle.dat'))]
     min_mse = 99999999
     best_model_name = None
     # Find best model
@@ -2618,9 +2747,8 @@ def get_terminal_indices_of_nc_var(var, masked_value):
             encounter_masked = True
             start_indices.append(idx)
 
-def update_sfmr_windspd_matrix(grid_lons, grid_lats, sfmr_windspd,
-                               nc_file_path, data_indices):
-    dataset = netCDF4.Dataset(smap_file_path)
+def get_sfmr_track_and_windspd(nc_file_path, data_indices):
+    dataset = netCDF4.Dataset(nc_file_path)
     # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which
     # faster than 1 m/s, so must disable auto mask
     dataset.set_auto_mask(False)
@@ -2628,25 +2756,208 @@ def update_sfmr_windspd_matrix(grid_lons, grid_lats, sfmr_windspd,
     lons = vars['LON']
     lats = vars['LAT']
     wind = vars['SWS']
+    track = []
+    track_wind = []
+    avg_lons = []
+    avg_lats = []
+    avg_windspd = []
 
-    used_sfmr_lonlats = set()
-    filled_grid_lonlats = set()
-
+    # Get track
     for idx in data_indices:
-        lon = lons[idx]
+        lon = (lons[idx] + 360) % 360
         lat = lats[idx]
-        if (lon, lat) in used_sfmr_lonlats:
+        track.append((lon, lat))
+        track_wind.append(wind[idx])
+
+    square_edge = 0.25
+    half_square_edge = square_edge / 2
+    # Split track with `square_edge` * `square_edge` degree squares
+    # around SFMR points
+    # For each point along track, there are two possibilities:
+    # 1. center of square
+    # 2. not center of square
+
+    # First find all centers of square
+    square_center_indices = []
+    for idx, pt in enumerate(track):
+        # Set start terminal along track as first square center
+        if not idx:
+            avg_lons.append(pt[0])
+            avg_lats.append(pt[1])
+            square_center_indices.append(idx)
+        # Then search for next square center
+        # If the difference between longitude or latitude is not smaller
+        # than square edge, we encounter the center point of next square
+        if (abs(pt[0] - avg_lons[-1]) >= square_edge
+            or abs(pt[1] - avg_lats[-1]) >= square_edge):
+            # Record the new square center
+            avg_lons.append(pt[0])
+            avg_lats.append(pt[1])
+            square_center_indices.append(idx)
+
+    # There may be some points left near the end terminal of track.
+    # from which cannot select the square center using method above.
+    # But they are out of the range of last square.
+    # So we need to set the end terminal of track to be the last square
+    # center.
+    end_is_center = False
+    for idx, pt in enumerate(track):
+        if idx <= square_center_indices[-1]:
             continue
-        used_sfmr_lonlats.add((lon, lat))
+        if (abs(pt[0] - avg_lons[-1]) >= half_square_edge
+            or abs(pt[1] - avg_lats[-1]) >= half_square_edge):
+            # Make sure of the necessity of setting the end terminal as
+            # the last square center
+            end_is_center = True
 
-        mapped_grid_lon, mapped_grid_lon_idx = get_nearest_element_and_index(
-            grid_lons, lon)
-        mapped_grid_lat, mapped_grid_lat_idx = get_nearest_element_and_index(
-            grid_lats, lat)
-        if (mapped_grid_lon, mapped_grid_lat) in filled_grid_lonlats:
+    if end_is_center:
+        avg_lons.append(track[-1][0])
+        avg_lats.append(track[-1][1])
+        square_center_indices.append(len(track) - 1)
+
+    # Save result of spliting into a list of list:
+    # [[square_0_pt_0, square_0_pt_1, ...], [square_1_pt_0,
+    # square_1_pt_1, ...], ...]
+    square_groups = []
+    for center in square_center_indices:
+        square_groups.append([])
+
+    for idx, pt in enumerate(track):
+        try:
+            min_dis = 999
+            idx_of_nearest_center_idx = None
+            for index_of_center_index in range(len(square_center_indices)):
+                center_index = square_center_indices[index_of_center_index]
+                tmp_center = track[center_index]
+                lon_diff = abs(pt[0] - tmp_center[0])
+                lat_diff = abs(pt[1] - tmp_center[1])
+                if (lon_diff <= half_square_edge
+                    and lat_diff <= half_square_edge):
+                    dis = math.sqrt(math.pow(lon_diff, 2)
+                                    + math.pow(lat_diff, 2))
+                    if dis < min_dis:
+                        min_dis = dis
+                        idx_of_nearest_center_idx = index_of_center_index
+                    # This point along track is in one square
+
+            if idx_of_nearest_center_idx is not None:
+                square_groups[idx_of_nearest_center_idx].append(idx)
+            else:
+                continue
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
+
+    """
+    tmp_group = []
+    # The index of center in `square_center_indices`
+    center_idx = 0
+    for idx, pt in enumerate(track):
+        try:
+            if not idx:
+                tmp_group.append(idx)
+                continue
+            # Encounter points belonging to next square
+            if (abs(pt[0] - avg_lons[center_idx]) >= half_square_edge
+                or abs(pt[1] - avg_lats[center_idx]) >= half_square_edge):
+                if len(data_indices) == 3308:
+                    breakpoint()
+                # Move index of center to next center
+                center_idx += 1
+                # Save the group the indices of points in previous square
+                square_groups.append(tmp_group)
+                # Clear temporary group to store indices of points in
+                # new square
+                tmp_group = []
+                tmp_group.append(idx)
+            else:
+                tmp_group.append(idx)
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
+
+    # Append last `tmp_group` into `square_groups`
+    square_groups.append(tmp_group)
+    """
+
+    if len(square_groups) != len(square_center_indices):
+        logger.error(f"""Number of groups does not equal to """
+                     f"""number of centers""")
+        breakpoint()
+
+    # Average wind speed in square to the center point
+    for index_of_center_index in range(len(square_center_indices)):
+        try:
+            group_size = len(square_groups[index_of_center_index])
+            windspd_sum = 0
+            for pt_index in square_groups[index_of_center_index]:
+                # Masked wind is smaller than 0
+                if track_wind[pt_index] > 0:
+                    windspd_sum += track_wind[pt_index]
+
+            avg_windspd.append(windspd_sum / group_size)
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
+
+    return track, avg_lons, avg_lats, avg_windspd
+
+def draw_sfmr_windspd_and_track(the_class, fig, ax, tc_datetime,
+                                sfmr_tracks, sfmr_lons, sfmr_lats,
+                                sfmr_windspd, max_windspd):
+    track_lons = []
+    track_lats = []
+    for single_track in sfmr_tracks:
+        for pt in single_track:
+            track_lons.append(pt[0])
+            track_lats.append(pt[1])
+        ax.plot(track_lons, track_lats, color='black',
+                zorder=the_class.zorders['sfmr_track'])
+
+    try:
+        tracks_num = len(sfmr_windspd)
+        for i in range(tracks_num):
+            # for j in range(len(sfmr_windspd[i])):
+            ax.scatter(sfmr_lons[i], sfmr_lats[i], s=30,
+                       c=sfmr_windspd[i], cmap=plt.cm.rainbow,
+                       vmin=0, vmax=max_windspd,
+                       zorder=the_class.zorders['sfmr_point'],
+                       edgecolors='black')
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+def interp_satel_era5_diff_mins_matrix(diff_mins):
+    rows_num, cols_num = diff_mins.shape
+    # Fill row by row
+    for i in range(rows_num):
+        row_valid_sum = 0
+        row_valid_count = 0
+        for j in range(cols_num):
+            if diff_mins[i][j] >= 0:
+                row_valid_sum += diff_mins[i][j]
+                row_valid_count += 1
+        if not row_valid_count:
             continue
-        filled_grid_lonlats.add((mapped_grid_lon, mapped_grid_lat))
+        row_valid_avg = int(row_valid_sum / row_valid_count)
 
-        sfmr_windspd[mapped_grid_lat_idx][mapped_grid_lon_idx] = wind[idx]
+        for j in range(cols_num):
+            if diff_mins[i][j] < 0:
+                diff_mins[i][j] = row_valid_avg
+    # Fill column by column
+    for j in range(cols_num):
+        col_valid_sum = 0
+        col_valid_count = 0
+        for i in range(rows_num):
+            if diff_mins[i][j] >= 0:
+                col_valid_sum += diff_mins[i][j]
+                col_valid_count += 1
+        if not col_valid_count:
+            continue
+        col_valid_avg = int(col_valid_sum / col_valid_count)
 
-    return sfmr_windspd
+        for i in range(rows_num):
+            if diff_mins[i][j] < 0:
+                diff_mins[i][j] = col_valid_avg
+
+    return diff_mins

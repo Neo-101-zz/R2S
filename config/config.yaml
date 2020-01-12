@@ -40,10 +40,13 @@ plot:
     compare:
       coastlines: 4
       mapboundary: 0
+      continents: 8
       contour: 3
       contourf: 2
-      wedge: 7
-      grid: 10
+      wedge: 9
+      sfmr_track: 9
+      sfmr_point: 10
+      grid: 11
     scs_basemap:
       coastlines: 4
       mapboundary: 0

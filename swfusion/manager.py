@@ -27,11 +27,11 @@ import compare_tc
 import statistic
 import match_era5_smap
 
-unixOptions = 'p:a:er:c:si:'
+unixOptions = 'p:r:eg:c:si:'
 # gnuOptions = ['extract', 'reg-dnn', 'reg-xgb', 'reg-dt',
 #               'reg-hist', 'reg-normalization', 'compare',
 #               'sfmr', 'ibtracs-wp', 'ibtracs-na']
-gnuOptions = ['period=', 'area=', 'basin=', 'extract', 'reg=', 'compare=',
+gnuOptions = ['period=', 'region=', 'basin=', 'extract', 'reg=', 'compare=',
               'sfmr', 'ibtracs=']
 
 def work_flow():
@@ -61,7 +61,7 @@ def work_flow():
         sys.exit(2)
 
     input_custom_period = False
-    input_custom_area = False
+    input_custom_region = False
     specify_basin = False
     basin = None
     do_extract = False
@@ -79,11 +79,11 @@ def work_flow():
             period_parts = current_value.split(',')
             if len(period_parts) != 2:
                 logger.error('Inputted period is wrong: need 2 parameters')
-        elif current_argument in ('-a', '--area'):
-            input_custom_area = True
-            area_parts = current_value.split(',')
-            if len(area_parts) != 4:
-                logger.error('Inputted area is wrong: need 4 parameters')
+        elif current_argument in ('-r', '--region'):
+            input_custom_region = True
+            region_parts = current_value.split(',')
+            if len(region_parts) != 4:
+                logger.error('Inputted region is wrong: need 4 parameters')
         elif current_argument in ('-b', '--basin'):
             specify_basin = True
             basin_parts = current_value.split(',')
@@ -92,7 +92,7 @@ def work_flow():
             basin = basin_parts[0]
         elif current_argument in ('-e', '--extract'):
             do_extract = True
-        elif current_argument in ('-r', '--reg'):
+        elif current_argument in ('-g', '--reg'):
             do_regression = True
             reg_instructions = current_value.split(',')
         elif current_argument in ('-c', '--compare'):
@@ -117,56 +117,56 @@ def work_flow():
     else:
         period = [datetime.datetime(2015, 4, 1, 0, 0, 0),
                   datetime.datetime.now()]
-    if input_custom_area:
+    if input_custom_region:
         # Area parts
-        custom_area = []
-        for part in area_parts:
-            custom_area.append(float(part))
+        custom_region = []
+        for part in region_parts:
+            custom_region.append(float(part))
     else:
-        area = [-90, 90, 0, 360]
+        region = [-90, 90, 0, 360]
 
     # Period
     logger.info(f'Period: {period}')
     # Region
-    logger.info(f'Region: {area}')
+    logger.info(f'Region: {region}')
     # MySQL Server root password
     passwd = '399710'
     # Download and read
     try:
         if do_extract:
             extract_ = match_era5_smap.matchManager(
-                CONFIG, period, area, basin, passwd, False)
-        # sta = statistic.StatisticManager(CONFIG, period, area,
+                CONFIG, period, region, basin, passwd, False)
+        # sta = statistic.StatisticManager(CONFIG, period, region,
         #                                  passwd, save_disk=False)
         if do_compare:
-            com_tc = compare_tc.TCComparer(CONFIG, period, area, basin,
+            com_tc = compare_tc.TCComparer(CONFIG, period, region, basin,
                                            passwd, False,
                                            compare_instructions)
-        # ccmp_ = ccmp.CCMPManager(CONFIG, period, area, passwd,
+        # ccmp_ = ccmp.CCMPManager(CONFIG, period, region, passwd,
         #                          work_mode='fetch_and_compare')
-        # era5_ = era5.ERA5Manager(CONFIG, period, area, passwd,
+        # era5_ = era5.ERA5Manager(CONFIG, period, region, passwd,
         #                          work=True, save_disk=False, 'scs',
         #                          'surface_all_vars')
-        # isd_ = isd.ISDManager(CONFIG, period, area, passwd,
+        # isd_ = isd.ISDManager(CONFIG, period, region, passwd,
         #                       work_mode='fetch_and_read')
-        # grid_ = grid.GridManager(CONFIG, area, passwd, run=True)
+        # grid_ = grid.GridManager(CONFIG, region, passwd, run=True)
         # satel_scs_ = satel_scs.SCSSatelManager(CONFIG, period,
-        #                                        area, passwd,
+        #                                        region, passwd,
         #                                        save_disk=False,
         #                                        work=True)
         # coverage_ = coverage.CoverageManager(CONFIG, period,
-        #                                      area, passwd)
+        #                                      region, passwd)
         if do_ibtracs:
-            ibtracs_ = ibtracs.IBTrACSManager(CONFIG, period, area, basin,
+            ibtracs_ = ibtracs.IBTrACSManager(CONFIG, period, region, basin,
                                               passwd)
-        # cwind_ = cwind.CwindManager(CONFIG, period, area, passwd)
-        # stdmet_ = stdmet.StdmetManager(CONFIG, period, area, passwd)
+        # cwind_ = cwind.CwindManager(CONFIG, period, region, passwd)
+        # stdmet_ = stdmet.StdmetManager(CONFIG, period, region, passwd)
         if do_sfmr:
-            sfmr_ = sfmr.SfmrManager(CONFIG, period, area, passwd)
-        # satel_ = satel.SatelManager(CONFIG, period, area, passwd,
+            sfmr_ = sfmr.SfmrManager(CONFIG, period, region, passwd)
+        # satel_ = satel.SatelManager(CONFIG, period, region, passwd,
         #                             save_disk=False)
         # compare_ = compare_offshore.CompareCCMPWithInStu(
-        #     CONFIG, period, area, passwd)
+        #     CONFIG, period, region, passwd)
         pass
     except Exception as msg:
         logger.exception('Exception occured when downloading and reading')
@@ -177,14 +177,14 @@ def work_flow():
     try:
         if do_regression:
             regression_ = regression.Regression(
-                CONFIG, period, test_period, area, basin, passwd, False,
+                CONFIG, period, test_period, region, basin, passwd, False,
                 reg_instructions)
         # new_reg = reg_scs.NewReg(CONFIG, period, test_period,
-        #                          area, passwd, save_disk=True)
+        #                          region, passwd, save_disk=True)
         # ibtracs_ = ibtracs.IBTrACSManager(CONFIG, test_period,
-        #                                   area, passwd)
-        # hwind_ = hwind.HWindManager(CONFIG, test_period, area, passwd)
-        # era5_ = era5.ERA5Manager(CONFIG, test_period, area, passwd,
+        #                                   region, passwd)
+        # hwind_ = hwind.HWindManager(CONFIG, test_period, region, passwd)
+        # era5_ = era5.ERA5Manager(CONFIG, test_period, region, passwd,
         #                          work=True, save_disk=False)
         pass
     except Exception as msg:
