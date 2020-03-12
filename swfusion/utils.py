@@ -29,6 +29,8 @@ from matplotlib import patches as mpatches
 import pygrib
 from global_land_mask import globe
 from scipy import interpolate
+import pandas as pd
+from geopy import distance
 
 from amsr2_daily import AMSR2daily
 from ascat_daily import ASCATDaily
@@ -1180,50 +1182,69 @@ def add_column(engine, table_name, column):
     column_name = column.compile(dialect=engine.dialect)
     column_type = column.type.compile(engine.dialect)
     connection = engine.connect()
-    result = connection.execute('ALTER TABLE %s ADD COLUMN %s %s' % (table_name, column_name, column_type))
+    result = connection.execute('ALTER TABLE %s ADD COLUMN %s %s' % (
+        table_name, column_name, column_type))
     connection.close()
-
-def get_mysql_connector(the_class):
-    DB_CONFIG = the_class.CONFIG['database']
-    PROMPT = the_class.CONFIG['workflow']['prompt']
-    DBAPI = DB_CONFIG['db_api']
-    USER = DB_CONFIG['user']
-    # password_ = input(PROMPT['input']['db_root_password'])
-    password_ = the_class.db_root_passwd
-    HOST = DB_CONFIG['host']
-    PORT = DB_CONFIG['port']
-    DB_NAME = DB_CONFIG['db_name']
-    ARGS = DB_CONFIG['args']
-
-    cnx = mysql.connector.connect(user=USER, password=password_,
-                                  host=HOST, port=PORT, use_pure=True)
-    return cnx
 
 def setup_database(the_class, Base):
     DB_CONFIG = the_class.CONFIG['database']
     PROMPT = the_class.CONFIG['workflow']['prompt']
     DBAPI = DB_CONFIG['db_api']
     USER = DB_CONFIG['user']
-    # password_ = input(PROMPT['input']['db_root_password'])
     password_ = the_class.db_root_passwd
     HOST = DB_CONFIG['host']
     PORT = DB_CONFIG['port']
     DB_NAME = DB_CONFIG['db_name']
     ARGS = DB_CONFIG['args']
 
-    # the_class.cnx = mysql.connector.connect(user=USER, password=password_,
-    #                                    host=HOST, use_pure=True)
-    # the_class.cursor = the_class.cnx.cursor()
-    # create_database(the_class.cnx, DB_NAME)
-    # use_database(the_class.cnx, DB_NAME)
-    mysql_connector = get_mysql_connector(the_class)
-    create_database(mysql_connector, DB_NAME)
-    use_database(mysql_connector, DB_NAME)
-    mysql_connector.close()
+    try:
+        # ATTENTION
+        #
+        # Before connect to MySQL server, we need to check the way
+        # of connection first.
+        # According to 'https://dev.mysql.com/doc/refman/8.0/en/'
+        # 'can-not-connect-to-server.html',
+        # a MySQL client on Unix can connect to the mysqld server in
+        # two different ways:
+        # 1) By using a Unix socket file to connect
+        # through a file in the file system (default /tmp/mysql.sock).
+        # 2) By using TCP/IP, which connects through a port number.
+        #
+        # We can check it by this command:
+        # shell> mysqladmin version
+        # Maybe need user name and password.
+        #
+        # If we are connecting to mysqld server by using a Unix socket,
+        # there should not be 'host' and 'port' parameters in the
+        # function mysql.connector.connect()
+        #
+        # If we are connecting to mysqld server by using TCP/IP,
+        # 'host' and 'port' are needed.
+        the_class.cnx = mysql.connector.connect(
+            user=USER, password=password_,
+            # host=HOST, port=PORT,
+            use_pure=True)
+        the_class.cursor = the_class.cnx.cursor()
+        create_database(the_class.cnx, DB_NAME)
+        use_database(the_class.cnx, DB_NAME)
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
 
-    # Define the MySQL engine using MySQL Connector/Python
-    connect_string = ('{0}://{1}:{2}@{3}:{4}/{5}?{6}'.format(
-        DBAPI, USER, password_, HOST, PORT, DB_NAME, ARGS))
+    # ATTENTION
+    # According to docs of SQLAlchemy, we would better not to
+    # use MySQL Connector/Python as DBAPI.
+    # The MySQL Connector/Python DBAPI has had many issues
+    # since its release, some of which may remain unresolved,
+    # and the mysqlconnector dialect is not tested as part of
+    # SQLAlchemy’s continuous integration.
+    # The recommended MySQL dialects are mysqlclient and PyMySQL.
+    # Reference: 'https://docs.sqlalchemy.org/en/13/dialects/'
+    # 'mysql.html#module-sqlalchemy.dialects.mysql.mysqlconnector'
+
+    # Define the MySQL engine using mysqlclient DBAPI
+    connect_string = (f"""{DBAPI}://{USER}:{password_}@{HOST}"""
+                      f"""/{DB_NAME}""")
     the_class.engine = create_engine(connect_string, echo=False)
     # Create table of the class
     Base.metadata.create_all(the_class.engine)
@@ -1310,6 +1331,10 @@ def get_subset_range_of_grib(lat, lon, lat_grid_points, lon_grid_points,
     lat2 = lat_match + half_edge
     lon1 = (lon_match - half_edge + 360) % 360
     lon2 = (lon_match + half_edge + 360) % 360
+
+    # When the edge of square along parallel crosses the primie meridian
+    if lon2 - lon1 != 2 * half_edge:
+        return False, None, None, None, None
 
     if mode == 'era5':
         lat2 += spatial_resolution
@@ -1765,21 +1790,21 @@ def gen_scs_era5_table_name(dt_cursor, hourtime):
 
 def draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
                                wind_zorder, max_windspd, mesh):
-    if mesh:
+    if not mesh:
         X, Y = np.meshgrid(lons, lats)
     else:
         X, Y = lons, lats
     Z = windspd
 
     # windspd_levels = [5*x for x in range(1, 15)]
-    windspd_levels = np.linspace(0, max_windspd, 10)
+    windspd_levels = np.linspace(0, max_windspd, 30)
 
     # cs = ax.contour(X, Y, Z, levels=windspd_levels,
     #                 zorder=self.zorders['contour'], colors='k')
     # ax.clabel(cs, inline=1, colors='k', fontsize=10)
     try:
         cf = ax.contourf(X, Y, Z,
-                         # levels=windspd_levels,
+                         levels=windspd_levels,
                          zorder=wind_zorder,
                          cmap=plt.cm.rainbow,
                          vmin=0, vmax=max_windspd)
@@ -1790,7 +1815,8 @@ def draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
     divider = make_axes_locatable(ax)
     cax = divider.append_axes('right', size='5%', pad=0.05)
 
-    fig.colorbar(cf, cax=cax, orientation='vertical', format='%.1f')
+    clb = fig.colorbar(cf, cax=cax, orientation='vertical', format='%.1f')
+    clb.ax.set_title('m/s')
 
 def draw_SCS_basemap(the_class, ax, custom, region):
     if not custom:
@@ -1799,22 +1825,26 @@ def draw_SCS_basemap(the_class, ax, custom, region):
         lon1 = the_class.lon1
         lon2 = the_class.lon2
     else:
-        # North, West, South, East
+        # South, North, West, East
         lat1, lat2, lon1, lon2 = region
 
-    map = Basemap(llcrnrlon=lon1, llcrnrlat=lat1, urcrnrlon=lon2,
-                  urcrnrlat=lat2, ax=ax, resolution='h')
+    adjust = 0.0
+    map = Basemap(llcrnrlon=lon1-adjust, llcrnrlat=lat1-adjust,
+                  urcrnrlon=lon2+adjust, urcrnrlat=lat2+adjust,
+                  ax=ax, resolution='h')
 
     map.drawcoastlines(zorder=the_class.zorders['coastlines'])
-    map.drawmapboundary(fill_color='white',
+    map.drawmapboundary(fill_color='white', linewidth=1,
                         zorder=the_class.zorders['mapboundary'])
     map.fillcontinents(color='grey', lake_color='white',
                        zorder=the_class.zorders['continents'])
 
-    map.drawmeridians(np.arange(lon1, lon2, (lon2 - lon1) / 6),
+    meridians_interval = (lon2 - lon1) / 4
+    parallels_interval = (lat2 - lat1) / 4
+    map.drawmeridians(np.arange(lon1, lon2+0.01, meridians_interval),
                       labels=[1, 0, 0, 1],  fmt='%.2f',
                       zorder=the_class.zorders['grid'])
-    map.drawparallels(np.arange(lat1, lat2, (lat2 - lat1) / 6),
+    map.drawparallels(np.arange(lat1, lat2+0.01, parallels_interval),
                       labels=[1, 0 , 0, 1], fmt='%.2f',
                       zorder=the_class.zorders['grid'])
 
@@ -1828,7 +1858,7 @@ def draw_windspd_with_imshow(map, fig, ax, lons, lats, windspd,
             if windspd[i][j] < 0:
                 windspd[i][j] = None
 
-    if mesh:
+    if not mesh:
         X, Y = np.meshgrid(lons, lats)
     else:
         X, Y = lons, lats
@@ -1848,19 +1878,21 @@ def draw_windspd_with_imshow(map, fig, ax, lons, lats, windspd,
     divider = make_axes_locatable(ax)
     cax = divider.append_axes('right', size='5%', pad=0.05)
 
-    fig.colorbar(image, cax=cax, orientation='vertical', format='%.1f')
+    clb = fig.colorbar(image, cax=cax, orientation='vertical',
+                       format='%.1f')
+    clb.ax.set_title('m/s')
 
 def draw_windspd(the_class, fig, ax, dt, lons, lats, windspd,
                  max_windspd, mesh, custom=False, region=None):
     map = draw_SCS_basemap(the_class, ax, custom, region)
 
-    # draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
-    #                            the_class.zorders['contourf'],
-    #                            max_windspd, mesh)
-
-    draw_windspd_with_imshow(map, fig, ax, lons, lats, windspd,
-                             the_class.zorders['contourf'],
+    draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
+                               the_class.zorders['contourf'],
                                max_windspd, mesh)
+
+    # draw_windspd_with_imshow(map, fig, ax, lons, lats, windspd,
+    #                          the_class.zorders['contourf'],
+    #                            max_windspd, mesh)
 
 def get_latlon_and_index_in_grid(value, range, grid_lat_or_lon_list):
     """Getting region corners' lat or lon's value and its index
@@ -1963,6 +1995,8 @@ def get_xyz_matrix_of_smap_windspd_or_diff_mins(
 
     """
     spa_resolu = 0.25
+    windspd_masked_value = -999
+    diff_mins_masked_value = -999
 
     smap_lats = [y * spa_resolu - 89.875 for y in range(720)]
     smap_lons = [x * spa_resolu + 0.125 for x in range(1440)]
@@ -1980,10 +2014,10 @@ def get_xyz_matrix_of_smap_windspd_or_diff_mins(
     lats = list(np.arange(lat1, lat2 + 0.5 * spa_resolu, spa_resolu))
     lons = [round(x, 3) for x in lons]
     lats = [round(y, 3) for y in lats]
-    windspd = np.full(shape=(len(lats), len(lons)), fill_value=-1,
-                      dtype=float)
-    diff_mins = np.full(shape=(len(lats), len(lons)), fill_value=-999,
-                      dtype=int)
+    windspd = np.full(shape=(len(lats), len(lons)),
+                      fill_value=windspd_masked_value, dtype=float)
+    diff_mins = np.full(shape=(len(lats), len(lons)),
+                        fill_value=diff_mins_masked_value, dtype=int)
 
     dataset = netCDF4.Dataset(smap_file_path)
     # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which
@@ -2006,6 +2040,8 @@ def get_xyz_matrix_of_smap_windspd_or_diff_mins(
                         continue
                     if minute[y][x][0] == minute[y][x][1]:
                         continue
+                    if minute[y][x][i] == 1440:
+                        continue
                     pt_time = datetime.time(
                         *divmod(int(minute[y][x][i]), 60), 0)
                     pt_dt = datetime.datetime.combine(tc_dt.date(), pt_time)
@@ -2017,14 +2053,18 @@ def get_xyz_matrix_of_smap_windspd_or_diff_mins(
                     # SMAP originally has land mask, so it's not necessary
                     # to check whether each pixel is land or ocean
                     windspd[y][x] = float(wind[y][x][i])
-                    diff_mins[y][x] = int(delta.seconds / 60)
+                    if pt_dt < tc_dt:
+                        diff_mins[y][x] = -int(delta.seconds / 60)
+                    else:
+                        diff_mins[y][x] = int(delta.seconds / 60)
                 except Exception as msg:
                     breakpoint()
                     exit(msg)
 
     if target == 'windspd' and windspd.max() > 0:
         return lons, lats, windspd
-    elif target == 'diff_mins' and diff_mins.max() > 0:
+    elif (target == 'diff_mins'
+          and diff_mins.max() > diff_mins_masked_value):
         return lons, lats, diff_mins
     else:
         return None, None, None
@@ -2280,7 +2320,9 @@ def get_xyz_matrix_of_era5_windspd(era5_file_path, product_type, dt, region):
     for y in range(lats_num):
         for x in range(lons_num):
             try:
-                if not bool(globe.is_land(lats[y][x], lons[y][x])):
+                lon_180_mode = longtitude_converter(lons[y][x], '360',
+                                                    '-180')
+                if not bool(globe.is_land(lats[y][x], lon_180_mode)):
                     windspd[y][x] = math.sqrt(u_wind[y][x] ** 2
                                               + v_wind[y][x] ** 2)
                 else:
@@ -2294,21 +2336,22 @@ def get_xyz_matrix_of_era5_windspd(era5_file_path, product_type, dt, region):
 
 def if_mesh(lons):
     if isinstance(lons, list):
-        return True
+        return False
     elif isinstance(lons, np.ndarray):
         if len(lons.shape) == 2:
-            return False
-        return False
+            return True
+        return True
 
-def get_subplots_row_col(subplots_num):
+def get_subplots_row_col_and_fig_size(subplots_num):
     if subplots_num == 1:
-        return 1, 1
+        return 1, 1, (7, 7)
     elif subplots_num == 2:
-        return 1, 2
-    elif subplots_num == 3:
-        return 1, 3
-    elif subplots_num >= 4 and subplots_num <= 6:
-        return 2, 3
+        return 1, 2, (15, 7)
+    elif subplots_num == 3 or subplots_num == 4:
+        return 2, 2, (15, 15)
+    else:
+        logger.error('Too many subplots, should not more than 4.')
+        exit()
 
 def get_era5_corners_of_rss_cell(lat, lon, era5_lats_grid,
                                  era5_lons_grid, grb_spa_resolu):
@@ -2732,6 +2775,7 @@ def sfmr_nc_time_converter(time_str):
 
     return the_time
 
+"""
 def get_terminal_index_among_vars(side, vars, masked_value):
     terminal_indices = []
     for var in vars:
@@ -2746,8 +2790,39 @@ def get_terminal_indices_of_nc_var(var, masked_value):
         if val == masked_value and not encounter_masked:
             encounter_masked = True
             start_indices.append(idx)
+"""
 
 def get_sfmr_track_and_windspd(nc_file_path, data_indices):
+    """Get data points along SFMR track, averaged points' longtitude,
+    averaged points' latitude and averaged points' wind speed.
+
+    Parameters
+    ----------
+    nc_file_path : str
+        Path of SFMR data file.
+    data_indices : list of int
+        The indices of data points in single SFMR data file that in
+        the spatial and temporal window around TC center.
+
+    Returns
+    -------
+    track : list of float tuple
+        All points' coordinate along SFMR track that in the spatial and
+        temporal window around TC center.
+    new_avg_dts : list of datetime
+        Datetime of averaged points along SFMR track that in the spatial
+        and temporal window around TC center.
+    new_avg_lons : list of float
+        Longitude of averaged points along SFMR track that in the spatial
+        and temporal window around TC center.
+    new_avg_lats : list of float
+        Latitude of averaged points along SFMR track that in the spatial
+        and temporal window around TC center.
+    new_avg_windspd : list of float
+        Wind speed of averaged points along SFMR track that in the
+        spatial and temporal window around TC center.
+
+    """
     dataset = netCDF4.Dataset(nc_file_path)
     # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which
     # faster than 1 m/s, so must disable auto mask
@@ -2758,6 +2833,8 @@ def get_sfmr_track_and_windspd(nc_file_path, data_indices):
     wind = vars['SWS']
     track = []
     track_wind = []
+    track_dt = []
+    avg_dts = []
     avg_lons = []
     avg_lats = []
     avg_windspd = []
@@ -2768,6 +2845,12 @@ def get_sfmr_track_and_windspd(nc_file_path, data_indices):
         lat = lats[idx]
         track.append((lon, lat))
         track_wind.append(wind[idx])
+        track_dt.append(datetime.datetime.combine(
+            sfmr_nc_converter('DATE', vars['DATE'][idx]),
+            sfmr_nc_converter('TIME', vars['TIME'][idx])
+        ))
+
+    earliest_dt_of_track = min(track_dt)
 
     square_edge = 0.25
     half_square_edge = square_edge / 2
@@ -2809,6 +2892,7 @@ def get_sfmr_track_and_windspd(nc_file_path, data_indices):
             # Make sure of the necessity of setting the end terminal as
             # the last square center
             end_is_center = True
+            break
 
     if end_is_center:
         avg_lons.append(track[-1][0])
@@ -2826,8 +2910,11 @@ def get_sfmr_track_and_windspd(nc_file_path, data_indices):
         try:
             min_dis = 999
             idx_of_nearest_center_idx = None
-            for index_of_center_index in range(len(square_center_indices)):
-                center_index = square_center_indices[index_of_center_index]
+            for index_of_center_indices in range(
+                len(square_center_indices)):
+                #
+                center_index = square_center_indices[
+                    index_of_center_indices]
                 tmp_center = track[center_index]
                 lon_diff = abs(pt[0] - tmp_center[0])
                 lat_diff = abs(pt[1] - tmp_center[1])
@@ -2837,7 +2924,8 @@ def get_sfmr_track_and_windspd(nc_file_path, data_indices):
                                     + math.pow(lat_diff, 2))
                     if dis < min_dis:
                         min_dis = dis
-                        idx_of_nearest_center_idx = index_of_center_index
+                        idx_of_nearest_center_idx = \
+                                index_of_center_indices
                     # This point along track is in one square
 
             if idx_of_nearest_center_idx is not None:
@@ -2848,59 +2936,65 @@ def get_sfmr_track_and_windspd(nc_file_path, data_indices):
             breakpoint()
             exit(msg)
 
-    """
-    tmp_group = []
-    # The index of center in `square_center_indices`
-    center_idx = 0
-    for idx, pt in enumerate(track):
-        try:
-            if not idx:
-                tmp_group.append(idx)
-                continue
-            # Encounter points belonging to next square
-            if (abs(pt[0] - avg_lons[center_idx]) >= half_square_edge
-                or abs(pt[1] - avg_lats[center_idx]) >= half_square_edge):
-                if len(data_indices) == 3308:
-                    breakpoint()
-                # Move index of center to next center
-                center_idx += 1
-                # Save the group the indices of points in previous square
-                square_groups.append(tmp_group)
-                # Clear temporary group to store indices of points in
-                # new square
-                tmp_group = []
-                tmp_group.append(idx)
-            else:
-                tmp_group.append(idx)
-        except Exception as msg:
-            breakpoint()
-            exit(msg)
-
-    # Append last `tmp_group` into `square_groups`
-    square_groups.append(tmp_group)
-    """
-
     if len(square_groups) != len(square_center_indices):
         logger.error(f"""Number of groups does not equal to """
                      f"""number of centers""")
         breakpoint()
 
+    to_delete_empty_groups_indices = []
     # Average wind speed in square to the center point
-    for index_of_center_index in range(len(square_center_indices)):
+    for index_of_center_indices in range(len(square_center_indices)):
         try:
-            group_size = len(square_groups[index_of_center_index])
+            group_size = len(square_groups[index_of_center_indices])
+            if not group_size:
+                to_delete_empty_groups_indices.append(
+                    index_of_center_indices)
+                continue
+
+            # Calculated the average datetime of each group
+            seconds_shift_sum = 0
+            for pt_index in square_groups[index_of_center_indices]:
+                temporal_shift = (track_dt[pt_index]
+                                  - earliest_dt_of_track)
+                seconds_shift_sum += (temporal_shift.days * 24 * 3600
+                                      + temporal_shift.seconds)
+            avg_seconds_shift = seconds_shift_sum / group_size
+            avg_dts.append(earliest_dt_of_track + datetime.timedelta(
+                seconds=avg_seconds_shift))
+
+            # Calculate the average wind speed of each group
             windspd_sum = 0
-            for pt_index in square_groups[index_of_center_index]:
+            for pt_index in square_groups[index_of_center_indices]:
                 # Masked wind is smaller than 0
                 if track_wind[pt_index] > 0:
                     windspd_sum += track_wind[pt_index]
-
             avg_windspd.append(windspd_sum / group_size)
         except Exception as msg:
             breakpoint()
             exit(msg)
 
-    return track, avg_lons, avg_lats, avg_windspd
+    if len(to_delete_empty_groups_indices):
+        new_avg_dts = []
+        new_avg_lons = []
+        new_avg_lats = []
+        new_avg_windspd = []
+        for i in range(len(avg_windspd)):
+            if i not in to_delete_empty_groups_indices:
+                new_avg_dts.append(avg_dts[i])
+                new_avg_lons.append(avg_lons[i])
+                new_avg_lats.append(avg_lats[i])
+                new_avg_windspd.append(avg_windspd[i])
+
+        del avg_dts
+        del avg_lons
+        del avg_lats
+        del avg_windspd
+        avg_dts = new_avg_dts
+        avg_lons = new_avg_lons
+        avg_lats = new_avg_lats
+        avg_windspd = new_avg_windspd
+
+    return track, avg_dts, avg_lons, avg_lats, avg_windspd
 
 def draw_sfmr_windspd_and_track(the_class, fig, ax, tc_datetime,
                                 sfmr_tracks, sfmr_lons, sfmr_lats,
@@ -2918,7 +3012,7 @@ def draw_sfmr_windspd_and_track(the_class, fig, ax, tc_datetime,
         tracks_num = len(sfmr_windspd)
         for i in range(tracks_num):
             # for j in range(len(sfmr_windspd[i])):
-            ax.scatter(sfmr_lons[i], sfmr_lats[i], s=30,
+            ax.scatter(sfmr_lons[i], sfmr_lats[i], s=60,
                        c=sfmr_windspd[i], cmap=plt.cm.rainbow,
                        vmin=0, vmax=max_windspd,
                        zorder=the_class.zorders['sfmr_point'],
@@ -2934,7 +3028,8 @@ def interp_satel_era5_diff_mins_matrix(diff_mins):
         row_valid_sum = 0
         row_valid_count = 0
         for j in range(cols_num):
-            if diff_mins[i][j] >= 0:
+            # In one-hour window
+            if abs(diff_mins[i][j]) <= 30:
                 row_valid_sum += diff_mins[i][j]
                 row_valid_count += 1
         if not row_valid_count:
@@ -2942,14 +3037,16 @@ def interp_satel_era5_diff_mins_matrix(diff_mins):
         row_valid_avg = int(row_valid_sum / row_valid_count)
 
         for j in range(cols_num):
-            if diff_mins[i][j] < 0:
+            if abs(diff_mins[i][j]) > 30:
                 diff_mins[i][j] = row_valid_avg
+
     # Fill column by column
     for j in range(cols_num):
         col_valid_sum = 0
         col_valid_count = 0
         for i in range(rows_num):
-            if diff_mins[i][j] >= 0:
+            # In one-hour window
+            if abs(diff_mins[i][j]) <= 30:
                 col_valid_sum += diff_mins[i][j]
                 col_valid_count += 1
         if not col_valid_count:
@@ -2957,7 +3054,132 @@ def interp_satel_era5_diff_mins_matrix(diff_mins):
         col_valid_avg = int(col_valid_sum / col_valid_count)
 
         for i in range(rows_num):
-            if diff_mins[i][j] < 0:
+            if abs(diff_mins[i][j]) > 30:
                 diff_mins[i][j] = col_valid_avg
 
     return diff_mins
+
+def validate_with_sfmr(tgt_name, tc_dt, sfmr_dts, sfmr_lons,
+                       sfmr_lats, sfmr_windspd, tgt_lons, tgt_lats,
+                       tgt_windspd, tgt_mesh):
+    """'tgt' is the abbreviation for word 'target'.
+
+    """
+    num_sfmr_tracks = len(sfmr_dts)
+    num_tgt_lats, num_tgt_lons = tgt_windspd.shape
+
+    grid_edge = 0.25
+    half_grid_edge = grid_edge / 2
+    max_min_dis = math.sqrt(half_grid_edge ** 2 + half_grid_edge ** 2)
+
+    # 'tb' is the abbreviation for word 'table'
+    tb_tgt_names = []
+    tb_sfmr_dts = []
+    tb_sfmr_lons = []
+    tb_sfmr_lats = []
+    tb_sfmr_windspd = []
+    tb_tgt_dts = []
+    tb_tgt_lons = []
+    tb_tgt_lats = []
+    tb_tgt_windspd = []
+    tb_dis_minutes = []
+    tb_dis_kms = []
+    tb_windspd_bias = []
+
+    # Traverse SFMR data points
+    logger.info('Starting fucking loop')
+    for t in range(num_sfmr_tracks):
+        for i in range(len(sfmr_dts[t])):
+            base_lon = sfmr_lons[t][i]
+            base_lat = sfmr_lats[t][i]
+            # Traverse tgt data points which have valid wind speed to
+            # find the one closest to the SFMR data point
+            min_dis = 999999.9
+            min_dis_lat_idx = None
+            min_dis_lon_idx = None
+            min_dis_lat = None
+            min_dis_lon = None
+            try:
+                for j in range(num_tgt_lats):
+                    if not tgt_mesh:
+                        tmp_lat = tgt_lats[j]
+                    for k in range(num_tgt_lons):
+                        # Skip if the data point from target source is
+                        # invalid
+                        if (tgt_windspd[j][k] is None
+                            or tgt_windspd[j][k] <= 0):
+                            continue
+                        if not tgt_mesh:
+                            tmp_lon = tgt_lons[k]
+                        else:
+                            tmp_lat = tgt_lats[j][k]
+                            tmp_lon = tgt_lons[j][k]
+                        # Calculate the distance between SFMR data point
+                        # and data point from target source
+                        dis = math.sqrt(
+                            math.pow(base_lon - tmp_lon, 2)
+                            + math.pow(base_lat - tmp_lat, 2))
+                        if dis < min_dis:
+                            min_dis = dis
+                            min_dis_lat_idx = j
+                            min_dis_lon_idx = k
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
+
+            # Skip if there are no data point from target source in the
+            # spatial window around SFMR data point
+            if min_dis > max_min_dis:
+                continue
+
+            if tgt_mesh:
+                min_dis_lat = tgt_lats[min_dis_lat_idx][min_dis_lon_idx]
+                min_dis_lon = tgt_lons[min_dis_lat_idx][min_dis_lon_idx]
+            else:
+                min_dis_lat = tgt_lats[min_dis_lat_idx]
+                min_dis_lon = tgt_lons[min_dis_lon_idx]
+            min_dis_windspd = tgt_windspd[min_dis_lat_idx][
+                min_dis_lon_idx]
+
+            tb_tgt_names.append(tgt_name)
+            tb_sfmr_dts.append(sfmr_dts[t][i])
+            tb_sfmr_lons.append(base_lon)
+            tb_sfmr_lats.append(base_lat)
+            tb_sfmr_windspd.append(sfmr_windspd[t][i])
+            tb_tgt_dts.append(tc_dt)
+            tb_tgt_lons.append(min_dis_lon)
+            tb_tgt_lats.append(min_dis_lat)
+            tb_tgt_windspd.append(min_dis_windspd)
+
+            # Temporal distance in minutes
+            temporal_dis = tc_dt - sfmr_dts[t][i]
+            tb_dis_minutes.append(temporal_dis.days * 24 * 60
+                                  + temporal_dis.seconds / 60)
+            # Spatial distance in kilo meters
+            sfmr_pt = (base_lat,
+                       longtitude_converter(base_lon, '360', '-180'))
+            tgt_pt = (min_dis_lat,
+                      longtitude_converter(min_dis_lon, '360', '-180'))
+            tb_dis_kms.append(distance.distance(tgt_pt, sfmr_pt).km)
+            # Bias of wind speed
+            tb_windspd_bias.append(min_dis_windspd - sfmr_windspd[t][i])
+
+    # Combine lists for table to pandas DataFrame
+    res_dict = {
+        'tgt_name': tb_tgt_names,
+        'sfmr_dt': tb_sfmr_dts,
+        'sfmr_lon': tb_sfmr_lons,
+        'sfmr_lat': tb_sfmr_lats,
+        'sfmr_windspd': tb_sfmr_windspd,
+        'tgt_dt': tb_tgt_dts,
+        'tgt_lon': tb_tgt_lons,
+        'tgt_lat': tb_tgt_lats,
+        'tgt_windspd': tb_tgt_windspd,
+        'dis_minutes': tb_dis_minutes,
+        'dis_kms': tb_dis_kms,
+        'windspd_bias': tb_windspd_bias,
+    }
+    # Will datetime columns remain their type?
+    res_df = pd.DataFrame(res_dict)
+
+    return res_df

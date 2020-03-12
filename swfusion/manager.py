@@ -27,12 +27,12 @@ import compare_tc
 import statistic
 import match_era5_smap
 
-unixOptions = 'p:r:eg:c:si:'
+unixOptions = 'p:r:eg:c:si'
 # gnuOptions = ['extract', 'reg-dnn', 'reg-xgb', 'reg-dt',
 #               'reg-hist', 'reg-normalization', 'compare',
 #               'sfmr', 'ibtracs-wp', 'ibtracs-na']
-gnuOptions = ['period=', 'region=', 'basin=', 'extract', 'reg=', 'compare=',
-              'sfmr', 'ibtracs=']
+gnuOptions = ['period=', 'region=', 'basin=', 'extract', 'reg=',
+              'compare=', 'sfmr', 'ibtracs']
 
 def work_flow():
     """The work flow of blending several TC OSW.
@@ -78,12 +78,14 @@ def work_flow():
             input_custom_period = True
             period_parts = current_value.split(',')
             if len(period_parts) != 2:
-                logger.error('Inputted period is wrong: need 2 parameters')
+                logger.error((f"""Inputted period is wrong: """
+                              f"""need 2 parameters"""))
         elif current_argument in ('-r', '--region'):
             input_custom_region = True
             region_parts = current_value.split(',')
             if len(region_parts) != 4:
-                logger.error('Inputted region is wrong: need 4 parameters')
+                logger.error((f"""Inputted region is wrong: """
+                              f"""need 4 parameters"""))
         elif current_argument in ('-b', '--basin'):
             specify_basin = True
             basin_parts = current_value.split(',')
@@ -157,8 +159,8 @@ def work_flow():
         # coverage_ = coverage.CoverageManager(CONFIG, period,
         #                                      region, passwd)
         if do_ibtracs:
-            ibtracs_ = ibtracs.IBTrACSManager(CONFIG, period, region, basin,
-                                              passwd)
+            ibtracs_ = ibtracs.IBTrACSManager(CONFIG, period, region,
+                                              basin, passwd)
         # cwind_ = cwind.CwindManager(CONFIG, period, region, passwd)
         # stdmet_ = stdmet.StdmetManager(CONFIG, period, region, passwd)
         if do_sfmr:

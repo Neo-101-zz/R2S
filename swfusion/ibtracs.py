@@ -147,7 +147,8 @@ class IBTrACSManager(object):
         wmo_wind = vars['wmo_wind']
 
         if wmo_pres.shape != wmo_wind.shape:
-            self.logger.error('shape of wmo_pres is not equal to wmo_wind')
+            self.logger.error((f"""shape of wmo_pres is not equal to """
+                               f"""wmo_wind"""))
 
         wmo_shape = wmo_pres.shape
         # Get two dimensions of IBTrACS data
@@ -180,9 +181,9 @@ class IBTrACSManager(object):
                 ['season_check_offset']
         for i in range(storm_num):
             print(f'\r{info} {i+1}/{total}', end='')
-            # Season is not just the year, so to ensure correctly skipping
-            # loop by checking season, we need to set an offset for
-            # checking season
+            # Season is not just the year, so to ensure correctly
+            # skipping loop by checking season, we need to set an offset
+            # for checking season
             if int(vars['season'][i]) < (self.period[0].year
                                          - season_check_offset):
                 continue
@@ -190,9 +191,10 @@ class IBTrACSManager(object):
                                          + season_check_offset):
                 continue
 
-            # Skip this loop is datetime of first record is earlier than
+            # Skip this loop if datetime of first record is earlier than
             # start date of period of more than 60 days,
-            # or datetime of first record is later than end date of period
+            # or datetime of first record is later than end date of
+            # period
             iso_times = vars['iso_time'][i]
             not_masked_count = np.count_nonzero(iso_times.count(1))
 
@@ -260,7 +262,8 @@ class IBTrACSManager(object):
                 #     have_read[year][month] = True
 
                 # Read basin of TC
-                row.basin = vars['basin'][i][j].tostring().decode('utf-8')
+                row.basin = vars['basin'][i][j].tostring().decode(
+                    'utf-8')
 
                 # Read latitude, longitude, minimal centeral pressure,
                 # maximum sustained wind speed from official WMO agency
@@ -276,8 +279,8 @@ class IBTrACSManager(object):
 
                 pres = vars['wmo_pres'][i][j]
                 wind = vars['wmo_wind'][i][j]
-                if pres is MASKED or wind is MASKED:
-                    continue
+                # if pres is MASKED or wind is MASKED:
+                #     continue
 
                 # Set attributes of row
                 row.sid = sid
@@ -289,8 +292,9 @@ class IBTrACSManager(object):
                 row.wind = int(wind) if wind is not MASKED else None
                 row.sid_date_time = f'{sid}_{row.date_time}'
 
-                # Average radius of 34/50/64 knot winds in four directoins
-                # (ne, se, sw, nw) from three agencies (bom, reunion, usa)
+                # Average radius of 34/50/64 knot winds in four
+                # directions (ne, se, sw, nw) from three agencies
+                # (bom, reunion, usa)
                 dirs = ['ne', 'se', 'sw', 'nw']
                 radii = dict()
                 for r in ['r34', 'r50', 'r64']:
@@ -303,7 +307,8 @@ class IBTrACSManager(object):
                                 radii[r][d].append(int(r_d_a))
                         if len(radii[r][d]):
                             setattr(row, f'{r}_{dirs[d]}',
-                                    int(sum(radii[r][d])/len(radii[r][d])))
+                                    int(sum(radii[r][d])/len(
+                                        radii[r][d])))
 
                 tc_list.append(row)
                 # breakpoint()

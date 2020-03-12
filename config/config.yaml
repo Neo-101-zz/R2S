@@ -548,8 +548,13 @@ result:
       hist_of_same_mingmt: '../fig/hist_of_same_mingmt/'
       hist_of_same_latitude_at_same_mingmt: '../fig/hist_of_same_latitude_at_same_mingmt/'
       hist_of_same_longitude_at_same_mingmt: '../fig/hist_of_same_longitude_at_same_mingmt/'
+    statistic:
+      root: '../statistic/'
+      windspd_bias_to_sfmr: '../statistic/windspd_bias_to_sfmr/'
 database:
-  db_api: 'mysql+mysqlconnector'
+  # db_api: 'mysql+mysqlconnector'
+  db_api: 'mysql+mysqldb'
+  # db_api: 'mysql+pymysql'
   user: 'root'
   host: 'localhost'
   port: '3306'

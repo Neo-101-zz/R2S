@@ -267,8 +267,8 @@ class ERA5Manager(object):
         else:
             return None
 
-        # if os.path.exists(file_path):
-        #     return file_path
+        if os.path.exists(file_path):
+            return file_path
 
         if show_info:
             self.logger.info((f"""Downloading {vars_name} of {times} """
@@ -330,8 +330,8 @@ class ERA5Manager(object):
         else:
             return None
 
-        # if os.path.exists(file_path):
-        #     return file_path
+        if os.path.exists(file_path):
+            return file_path
 
         if show_info:
             self.logger.info((f"""Downloading {vars_name} of {times} """

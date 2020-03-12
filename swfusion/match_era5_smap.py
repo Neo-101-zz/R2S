@@ -326,8 +326,9 @@ class matchManager(object):
                         # Temporal window is one hour
                         pixel_dt = datetime.datetime.combine(
                             tc_dt.date(), time_)
-                        delta = pixel_dt - tc_dt
-                        if delta.days or abs(delta.seconds) >= 1800:
+                        # MUST use abs() method
+                        delta = abs(pixel_dt - tc_dt)
+                        if delta.days or delta.seconds > 1800:
                             continue
 
                         # SMAP originally has land mask, so it's not
@@ -335,8 +336,7 @@ class matchManager(object):
                         # or ocean
                         row = SMAPERA5()
                         row.sid = tc_id
-                        row.satel_datetime = datetime.datetime.combine(
-                            tc_dt.date(), time_)
+                        row.satel_datetime = pixel_dt
                         row.x = x - self.half_edge_grid_intervals
                         row.y = y - self.half_edge_grid_intervals
 
@@ -482,8 +482,11 @@ class matchManager(object):
                 era5_manager.download_single_levels_vars(
                     'tc', tc_dt, '', hourtimes, area, 'smap', tc_id)
 
-        era5_step_1, pres_lvls = self.add_era5_single_levels(
-            era5_file_path, tc_dt, satel_part, hourtimes, area)
+        try:
+            era5_step_1, pres_lvls = self.add_era5_single_levels(
+                era5_file_path, tc_dt, satel_part, hourtimes, area)
+        except Exception as msg:
+            breakpoint()
 
         return era5_step_1, pres_lvls
 
@@ -589,7 +592,7 @@ class matchManager(object):
                 utils.delete_last_lines()
                 print(f'{name}: Done')
 
-            grbidx.close()
+        grbidx.close()
 
         # Move rows of satel_part which should not deleted to a new
         # list to accomplish filtering rows with masked data
@@ -784,7 +787,7 @@ class matchManager(object):
                 utils.delete_last_lines()
                 print(f'{name}: Done')
 
-            grbidx.close()
+        grbidx.close()
 
         # Move rows of era5_step_1 which should not deleted to a new
         # list to accomplish filtering rows with masked data
