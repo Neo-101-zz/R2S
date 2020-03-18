@@ -250,14 +250,17 @@ class TCComparer(object):
                                 windspd_bias_df_between_two_tcs)
 
         if 'sfmr' in self.sources and len(windspd_bias_frames):
-            all_windspd_bias_to_sfmr = pd.concat(windspd_bias_frames)
-            save_dir = self.CONFIG['result']['dirs']['statistic'][
+            all_windspd_bias_to_sfmr = pd.concat(windspd_bias_frames).\
+                    reset_index(drop=True, inplace=True)
+
+            save_root_dir = self.CONFIG['result']['dirs']['statistic'][
                 'windspd_bias_to_sfmr']
-            os.makedirs(save_dir, exist_ok=True)
             save_name = (f"""{self.basin}_{self.period[0]}"""
-                         f"""_{self.period[1]}.pkl""")
+                         f"""_{self.period[1]}""")
+            save_dir = f'{save_root_dir}{save_name}/'
+            os.makedirs(save_dir, exist_ok=True)
             all_windspd_bias_to_sfmr.to_pickle(
-                f'{save_dir}{save_name}')
+                f'{save_dir}{save_name}.pkl')
 
         print('Done')
 
@@ -728,7 +731,8 @@ class TCComparer(object):
 
     def compare_with_one_tc_record(self, tc):
         subplots_row, subplots_col, fig_size = \
-                utils.get_subplots_row_col_and_fig_size(len(self.sources))
+                utils.get_subplots_row_col_and_fig_size(len(
+                    self.sources))
         if subplots_row * subplots_col > 1:
             text_subplots_serial_number = True
         else:

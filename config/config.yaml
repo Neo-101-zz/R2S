@@ -36,6 +36,13 @@ grid:
     x: '../data/grid/x.pkl'
     y: '../data/grid/y.pkl'
 plot:
+  axis_label_mapper:
+    dis_minutes: 'T(SSSW)-T(SFMRW) (s)'
+    dis_kms: 'D(SSSW, SFMRW) (km)'
+    windspd_bias: 'W(SSSW)-W(SFMRW) (m/s)'
+    sfmr_windspd: 'W(SFMRW) (m/s)'
+  scatter_count:
+    interval: 3
   zorders:
     compare:
       coastlines: 4

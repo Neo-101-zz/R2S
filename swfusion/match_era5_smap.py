@@ -194,11 +194,11 @@ class matchManager(object):
         """
         try:
             tc_lon_in_grid, tc_lon_in_grid_idx = \
-                    utils.get_nearest_element_and_index(self.lons['smap'],
-                                                        tc_lon)
+                    utils.get_nearest_element_and_index(
+                        self.lons['smap'], tc_lon)
             tc_lat_in_grid, tc_lat_in_grid_idx = \
-                    utils.get_nearest_element_and_index(self.lats['smap'],
-                                                        tc_lat)
+                    utils.get_nearest_element_and_index(
+                        self.lats['smap'], tc_lat)
             lat1_idx = tc_lat_in_grid_idx - self.half_edge_grid_intervals
             lat1 = self.lats['smap'][lat1_idx]
             lat2_idx = tc_lat_in_grid_idx + self.half_edge_grid_intervals

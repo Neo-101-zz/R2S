@@ -26,13 +26,14 @@ import ccmp
 import compare_tc
 import statistic
 import match_era5_smap
+import validate
 
-unixOptions = 'p:r:eg:c:si'
+unixOptions = 'p:r:eg:c:siv'
 # gnuOptions = ['extract', 'reg-dnn', 'reg-xgb', 'reg-dt',
 #               'reg-hist', 'reg-normalization', 'compare',
 #               'sfmr', 'ibtracs-wp', 'ibtracs-na']
 gnuOptions = ['period=', 'region=', 'basin=', 'extract', 'reg=',
-              'compare=', 'sfmr', 'ibtracs']
+              'compare=', 'sfmr', 'ibtracs', 'validate']
 
 def work_flow():
     """The work flow of blending several TC OSW.
@@ -72,6 +73,7 @@ def work_flow():
     sfmr_instructions = None
     do_ibtracs = False
     ibtracs_instructions = None
+    do_validation = False
     # evaluate given options
     for current_argument, current_value in arguments:
         if current_argument in ('-p', '--period'):
@@ -104,6 +106,8 @@ def work_flow():
             do_sfmr = True
         elif current_argument in ('-i', '--ibtracs'):
             do_ibtracs = True
+        elif current_argument in ('-v', '--validate'):
+            do_validation = True
 
     if not specify_basin:
         logger.error('Must specify basin')
@@ -113,8 +117,10 @@ def work_flow():
         # Period parts
         # yyyy-mm-dd-HH-MM-SS
         period = [
-            datetime.datetime.strptime(period_parts[0], '%Y-%m-%d-%H-%M-%S'),
-            datetime.datetime.strptime(period_parts[1], '%Y-%m-%d-%H-%M-%S')
+            datetime.datetime.strptime(period_parts[0],
+                                       '%Y-%m-%d-%H-%M-%S'),
+            datetime.datetime.strptime(period_parts[1],
+                                       '%Y-%m-%d-%H-%M-%S')
         ]
     else:
         period = [datetime.datetime(2015, 4, 1, 0, 0, 0),
@@ -135,6 +141,8 @@ def work_flow():
     passwd = '399710'
     # Download and read
     try:
+        if do_validation:
+            validate.ValidationManager(CONFIG, period, basin)
         if do_extract:
             extract_ = match_era5_smap.matchManager(
                 CONFIG, period, region, basin, passwd, False)

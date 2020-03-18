@@ -3183,3 +3183,24 @@ def validate_with_sfmr(tgt_name, tc_dt, sfmr_dts, sfmr_lons,
     res_df = pd.DataFrame(res_dict)
 
     return res_df
+
+def get_bound_of_multiple_int(lims, interval):
+    """lims[0] < lims[1]
+
+    """
+    bottom_lim = closest_multiple_int('bottom', lims[0], interval)
+    top_lim = closest_multiple_int('top', lims[1], interval)
+
+    return (bottom_lim, top_lim)
+
+def closest_multiple_int(direction, value, interval):
+    nearest = round(value / interval) * interval
+
+    if direction == 'bottom':
+        if nearest > value:
+            nearest -= interval
+    elif direction == 'top':
+        if nearest < value:
+            nearest += interval
+
+    return int(nearest)
