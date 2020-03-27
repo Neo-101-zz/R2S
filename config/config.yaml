@@ -37,7 +37,7 @@ grid:
     y: '../data/grid/y.pkl'
 plot:
   axis_label_mapper:
-    dis_minutes: 'T(SSSW)-T(SFMRW) (s)'
+    dis_minutes: 'T(SSSW)-T(SFMRW) (min)'
     dis_kms: 'D(SSSW, SFMRW) (km)'
     windspd_bias: 'W(SSSW)-W(SFMRW) (m/s)'
     sfmr_windspd: 'W(SFMRW) (m/s)'
@@ -657,7 +657,7 @@ regression:
       - 'key'
       - 'sid'
       - 'satel_datetime'
-      - 'era5_datetime'
+      # - 'era5_datetime'
       - 'satel_datetime_lon_lat'
       - 'smap_u_wind'
       - 'smap_v_wind'

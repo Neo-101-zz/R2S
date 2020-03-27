@@ -252,18 +252,15 @@ def url_exists(url):
     """
     if url.startswith('http'):
         req = requests.head(url)
-        if url.endswith('.gz'):
-            try:
-                if req.headers['Content-Type'].startswith('application'):
-                    return True
-                else:
-                    return False
-            except Exception as msg:
-                breakpoint()
-                exit(msg)
-        # elif url.endswith('.nc'):
-        else:
-            return True
+        # Works for '.gz' file and '.nc' file
+        try:
+            if req.headers['Content-Type'].startswith('application'):
+                return True
+            else:
+                return False
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
     else:
         # if url.startswith('ftp'):
         return True
@@ -1815,7 +1812,8 @@ def draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
     divider = make_axes_locatable(ax)
     cax = divider.append_axes('right', size='5%', pad=0.05)
 
-    clb = fig.colorbar(cf, cax=cax, orientation='vertical', format='%.1f')
+    clb = fig.colorbar(cf, cax=cax, orientation='vertical',
+                       format='%.1f')
     clb.ax.set_title('m/s')
 
 def draw_SCS_basemap(the_class, ax, custom, region):

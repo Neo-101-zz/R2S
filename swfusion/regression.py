@@ -22,7 +22,6 @@ from keras.callbacks import ModelCheckpoint
 from keras.callbacks import TensorBoard
 from keras import optimizers
 from keras.layers import Dense, Activation, Flatten
-from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
 import xgboost as xgb
@@ -108,12 +107,12 @@ class TrainValTensorBoard(TensorBoard):
 
 class Regression(object):
 
-    def __init__(self, CONFIG, train_period, test_period, region, basin,
-                 passwd, save_disk, instructions):
+    def __init__(self, CONFIG, train_period, train_test_split_dt, region,
+                 basin, passwd, save_disk, instructions):
         self.logger = logging.getLogger(__name__)
         self.CONFIG = CONFIG
         self.train_period = train_period
-        self.test_period = test_period
+        self.train_test_split_dt = train_test_split_dt
         self.region = region
         self.db_root_passwd = passwd
         self.engine = None
@@ -285,9 +284,10 @@ class Regression(object):
         # one_test['mse'] = mse
 
         # save model to file
-        pickle.dump(model, open((f"""{self.model_dir["xgb"]}"""
-                                 f"""{self.basin}_mse_{mse}.pickle.dat"""),
-                                'wb'))
+        pickle.dump(model, open((
+            f"""{self.model_dir["xgb"]}"""
+            f"""{self.basin}_mse_{mse}.pickle.dat"""),
+            'wb'))
 
         # all_tests.append(one_test)
 
@@ -747,6 +747,8 @@ class Regression(object):
         df.drop(self.CONFIG['regression']['useless_columns']\
                 ['smap_era5'], axis=1, inplace=True)
 
+        split_col_name = 'era5_datetime'
+
         if sample:
             df = shuffle(df)
             rows, cols = df.shape
@@ -761,9 +763,9 @@ class Regression(object):
         #     self.condition = 'all'
 
         # Fiiter outilers by z score
-        z = np.abs(stats.zscore(df))
-        threshold = 3
-        outliers = np.where(z > threshold)
+        # z = np.abs(stats.zscore(df))
+        # threshold = 3
+        # outliers = np.where(z > threshold)
 
         cols = list(df.columns)
         cols_num = len(df.columns)
@@ -776,7 +778,17 @@ class Regression(object):
             try:
                 start = i * group_size
                 end = min(cols_num, (i + 1) * group_size)
-                self.save_features_histogram(df, cols[start:end], fig_dir)
+                cols_to_draw = cols[start:end]
+                if split_col_name not in cols_to_draw:
+                    self.save_features_histogram(df, cols_to_draw,
+                                                 fig_dir)
+                else:
+                    skip_idx = cols.index(split_col_name)
+                    self.save_features_histogram(df, cols[start:skip_idx],
+                                                 fig_dir)
+                    self.save_features_histogram(df,
+                                                 cols[skip_idx+1:end],
+                                                 fig_dir)
             except Exception as msg:
                 breakpoint()
                 exit(msg)
@@ -802,7 +814,14 @@ class Regression(object):
                     breakpoint()
                     exit(msg)
 
+        df.drop(split_col_name, axis=1, inplace=True)
         train, test = train_test_split(df, test_size=0.2)
+
+        # train = df.loc[df[split_col_name] < self.train_test_split_dt]
+        # test = df.loc[df[split_col_name] >= self.train_test_split_dt]
+
+        # train.drop(split_col_name, axis=1, inplace=True)
+        # test.drop(split_col_name, axis=1, inplace=True)
 
         if 'only_hist' in self.instructions:
             return None, None
@@ -810,6 +829,9 @@ class Regression(object):
             return train, test
 
     def save_features_histogram(self, df, columns, fig_dir):
+        if not len(columns):
+            return
+
         try:
             df.hist(column=columns, figsize = (12,10))
         except Exception as msg:

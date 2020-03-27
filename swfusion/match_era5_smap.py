@@ -266,6 +266,8 @@ class matchManager(object):
                 self.db_root_passwd,
                 save_disk=self.save_disk, work=False)
             smap_file_path = satel_manager.download('smap', tc_dt)
+            if smap_file_path is None:
+                return [], None, None
             data, hourtimes, area = self.get_smap_part(
                 SMAPERA5, tc_id, tc_dt, tc_lon, tc_lat, smap_file_path)
         except Exception as msg:

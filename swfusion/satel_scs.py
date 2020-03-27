@@ -860,7 +860,7 @@ class SCSSatelManager(object):
                 data_url, satel_date.year, satel_date.month, file_name)
 
         if not utils.url_exists(file_url):
-            print('Missing date of {satel_name}: {satel_date}')
+            print(f'Missing date of {satel_name}: {satel_date}')
             print(file_url)
             missing_dates.add(satel_date)
             return None

@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 # This import registers the 3D projection, but is otherwise unused.
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+from sklearn.metrics import mean_squared_error
 
 import utils
 
@@ -22,10 +23,14 @@ class ValidationManager(object):
             'windspd_bias_to_sfmr']
         self.find_bias_dir_and_file_path()
         self.bias_df = pd.read_pickle(self.bias_file_path)
+        self.tick_label_fontsize = 15
+
+        breakpoint()
 
         # self.draw_histogram()
         self.draw_2d_scatter()
         # self.draw_3d_scatter()
+        self.cal_mse()
 
     def find_bias_dir_and_file_path(self):
         save_name = (f"""{self.basin}_"""
@@ -116,8 +121,9 @@ class ValidationManager(object):
         axis_label_mapper = self.CONFIG['plot']['axis_label_mapper']
         xlabel = axis_label_mapper[x_col_name]
         ylabel = axis_label_mapper[y_col_name]
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel(ylabel)
+        ax.set_xlabel(xlabel, fontsize=self.tick_label_fontsize)
+        ax.set_ylabel(ylabel, fontsize=self.tick_label_fontsize)
+        ax.tick_params(labelsize=self.tick_label_fontsize)
 
         divider = make_axes_locatable(ax)
         cax = divider.append_axes('right', size='5%', pad=0.05)
@@ -133,8 +139,9 @@ class ValidationManager(object):
         axis_label_mapper = self.CONFIG['plot']['axis_label_mapper']
         xlabel = axis_label_mapper[x_col_name]
         ylabel = axis_label_mapper[y_col_name]
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel(ylabel)
+        ax.set_xlabel(xlabel, fontsize=self.tick_label_fontsize)
+        ax.set_ylabel(ylabel, fontsize=self.tick_label_fontsize)
+        ax.tick_params(labelsize=self.tick_label_fontsize)
 
     def draw_2d_scatter_pair(self, x_col_name, y_col_name):
         fig, axs = plt.subplots(1, 2, figsize=(24, 12))
@@ -142,6 +149,7 @@ class ValidationManager(object):
         self.draw_single_2d_scatter_count_heatmap(fig, axs[1], x_col_name,
                                                   y_col_name)
         fig_name = f'2d_scatter_{x_col_name}_{y_col_name}.png'
+        # plt.tight_layout()
         plt.savefig(f'{self.bias_dir}{fig_name}')
         plt.clf()
 
@@ -170,3 +178,10 @@ class ValidationManager(object):
         ax.set_zlabel('windspd_bias')
 
         plt.show()
+
+    def cal_mse(self):
+        truth = self.bias_df['sfmr_windspd']
+        predicted = self.bias_df['tgt_windspd']
+        mse = mean_squared_error(truth, predicted)
+
+        print(f'MSE: {mse}')

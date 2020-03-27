@@ -125,6 +125,8 @@ def work_flow():
     else:
         period = [datetime.datetime(2015, 4, 1, 0, 0, 0),
                   datetime.datetime.now()]
+    train_test_split_dt = datetime.datetime(2019, 1, 1, 0, 0, 0)
+
     if input_custom_region:
         # Area parts
         custom_region = []
@@ -146,6 +148,10 @@ def work_flow():
         if do_extract:
             extract_ = match_era5_smap.matchManager(
                 CONFIG, period, region, basin, passwd, False)
+        if do_regression:
+            regression_ = regression.Regression(
+                CONFIG, period, train_test_split_dt, region, basin,
+                passwd, False, reg_instructions)
         # sta = statistic.StatisticManager(CONFIG, period, region,
         #                                  passwd, save_disk=False)
         if do_compare:
@@ -181,14 +187,7 @@ def work_flow():
     except Exception as msg:
         logger.exception('Exception occured when downloading and reading')
 
-    test_period = [datetime.datetime(2013, 6, 6, 0, 0, 0),
-                   datetime.datetime(2013, 6, 6, 23, 0, 0)]
-    test_period = period
     try:
-        if do_regression:
-            regression_ = regression.Regression(
-                CONFIG, period, test_period, region, basin, passwd, False,
-                reg_instructions)
         # new_reg = reg_scs.NewReg(CONFIG, period, test_period,
         #                          region, passwd, save_disk=True)
         # ibtracs_ = ibtracs.IBTrACSManager(CONFIG, test_period,
