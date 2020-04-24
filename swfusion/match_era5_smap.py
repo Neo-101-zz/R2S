@@ -539,7 +539,7 @@ class matchManager(object):
                 # Update all rows which matching this hourtime
                 for row_idx in hourtime_row_mapper[hourtime]:
                     count += 1
-                    print((f"""\r{name}: {count}/{total}"""), end='')
+                    # print((f"""\r{name}: {count}/{total}"""), end='')
                     row = satel_part[row_idx]
 
                     row.era5_datetime = datetime.datetime.combine(
@@ -592,7 +592,7 @@ class matchManager(object):
                     setattr(row, name, value)
 
                 utils.delete_last_lines()
-                print(f'{name}: Done')
+                # print(f'{name}: Done')
 
         grbidx.close()
 
@@ -723,7 +723,7 @@ class matchManager(object):
                 # Update all rows which matching this hourtime
                 for row_idx in hourtime_row_mapper[hourtime]:
                     count += 1
-                    print((f"""\r{name}: {count}/{total}"""), end='')
+                    # print((f"""\r{name}: {count}/{total}"""), end='')
 
                     # Skip this turn if pressure level of grb does not
                     # equal to the pressure level of point of
@@ -787,7 +787,7 @@ class matchManager(object):
                     setattr(row, name, value)
 
                 utils.delete_last_lines()
-                print(f'{name}: Done')
+                # print(f'{name}: Done')
 
         grbidx.close()
 

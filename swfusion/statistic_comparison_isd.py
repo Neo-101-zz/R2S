@@ -50,6 +50,10 @@ class StatisticManager(object):
         self.visualization()
 
     def compare_with_isd(self):
+        """Compare wind speed from different data sources with
+        ISD's wind speed.
+
+        """
         # Get ISD windspd
         isd_manager = isd.ISDManager(self.CONFIG, self.period,
                                      self.region, self.db_root_passwd,
@@ -88,8 +92,9 @@ class StatisticManager(object):
             # self.just_download_era5_equivalent_wind(tc)
             success = self.get_concurrent_data(isd_csv_paths, tc)
             if success:
-                print((f"""Comparing {sources_str} with ISD record when"""
-                       f""" TC {tc.name} existed on {tc.date_time}"""))
+                print((f"""Comparing {sources_str} with ISD record """
+                       f"""when TC {tc.name} existed on """
+                       f"""{tc.date_time}"""))
             else:
                 print((f"""Skiping comparsion of {sources_str} with """
                        f"""ISD record when TC {tc.name} existed """

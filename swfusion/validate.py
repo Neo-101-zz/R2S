@@ -1,5 +1,6 @@
 import logging
 import os
+import pickle
 
 import numpy as np
 import pandas as pd
@@ -13,24 +14,56 @@ import utils
 
 class ValidationManager(object):
 
-    def __init__(self, CONFIG, period, basin):
+    def __init__(self, CONFIG, period, basin, validate_instructions):
         self.logger = logging.getLogger(__name__)
         self.CONFIG = CONFIG
         self.period = period
         self.basin = basin
 
-        self.bias_root_dir = self.CONFIG['result']['dirs']['statistic'][
-            'windspd_bias_to_sfmr']
+        self.bias_root_dir = (
+            self.CONFIG['result']['dirs']['statistic'][
+                'windspd_bias_to_sfmr']
+            + f'{validate_instructions}_vs_sfmr/')
+        # self.merge_bias_file()
+
         self.find_bias_dir_and_file_path()
         self.bias_df = pd.read_pickle(self.bias_file_path)
         self.tick_label_fontsize = 15
 
-        breakpoint()
-
-        # self.draw_histogram()
+        self.draw_histogram()
         self.draw_2d_scatter()
         # self.draw_3d_scatter()
         self.cal_mse()
+
+    def merge_bias_file(self):
+        """Merge temporally sequential bias dataframe into one,
+        regardless of period.
+
+        """
+        dirs = os.listdir(self.bias_root_dir)
+        for dir in dirs:
+            if dir.startswith('.') or not dir.startswith(self.basin):
+                dirs.remove(dir)
+        dirs = sorted(dirs)
+
+        bias_df_list = []
+        start_dt = dirs[0].split('_')[1]
+        for idx, dir in enumerate(dirs):
+            with open(f'{self.bias_root_dir}{dir}/{dir}.pkl', 'rb') as f:
+                one_bias_df = pickle.load(f)
+            bias_df_list.append(one_bias_df)
+            end_dt = dir.split('_')[-1]
+
+            if (idx == len(dirs) - 1
+                or dir.split('_')[-1] != dirs[idx + 1].split('_')[1]):
+                break
+
+        all_bias_df = pd.concat(bias_df_list).reset_index(drop=True)
+        all_bias_name = f'{self.basin}_{start_dt}_{end_dt}'
+
+        all_bias_dir = f'{self.bias_root_dir}{all_bias_name}/'
+        os.makedirs(all_bias_dir, exist_ok=False)
+        all_bias_df.to_pickle(f'{all_bias_dir}{all_bias_name}.pkl')
 
     def find_bias_dir_and_file_path(self):
         save_name = (f"""{self.basin}_"""

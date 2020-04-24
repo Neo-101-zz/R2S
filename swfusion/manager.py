@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 
+import checker
 import regression
 import cwind
 import stdmet
@@ -24,16 +25,15 @@ import isd
 import reg_scs
 import ccmp
 import compare_tc
-import statistic
 import match_era5_smap
 import validate
 
-unixOptions = 'p:r:eg:c:siv'
+unixOptions = 'p:r:eg:c:siv:k'
 # gnuOptions = ['extract', 'reg-dnn', 'reg-xgb', 'reg-dt',
 #               'reg-hist', 'reg-normalization', 'compare',
 #               'sfmr', 'ibtracs-wp', 'ibtracs-na']
 gnuOptions = ['period=', 'region=', 'basin=', 'extract', 'reg=',
-              'compare=', 'sfmr', 'ibtracs', 'validate']
+              'compare=', 'sfmr', 'ibtracs', 'validate=', 'check']
 
 def work_flow():
     """The work flow of blending several TC OSW.
@@ -58,7 +58,7 @@ def work_flow():
                                           gnuOptions)
     except getopt.error as err:
         # output error, and return with an error code
-        print (str(err))
+        print(str(err))
         sys.exit(2)
 
     input_custom_period = False
@@ -74,6 +74,7 @@ def work_flow():
     do_ibtracs = False
     ibtracs_instructions = None
     do_validation = False
+    do_check = False
     # evaluate given options
     for current_argument, current_value in arguments:
         if current_argument in ('-p', '--period'):
@@ -92,7 +93,8 @@ def work_flow():
             specify_basin = True
             basin_parts = current_value.split(',')
             if len(basin_parts) != 1:
-                logger.error('Inputted basin is wrong: must 1 parameters')
+                logger.error((f"""Inputted basin is wrong: """
+                              f"""must 1 parameters"""))
             basin = basin_parts[0]
         elif current_argument in ('-e', '--extract'):
             do_extract = True
@@ -108,6 +110,9 @@ def work_flow():
             do_ibtracs = True
         elif current_argument in ('-v', '--validate'):
             do_validation = True
+            validate_instructions = current_value
+        elif current_argument in ('-k', '--check'):
+            do_check = True
 
     if not specify_basin:
         logger.error('Must specify basin')
@@ -143,19 +148,20 @@ def work_flow():
     passwd = '399710'
     # Download and read
     try:
+        if do_check:
+            checker.Checker(CONFIG)
         if do_validation:
-            validate.ValidationManager(CONFIG, period, basin)
+            validate.ValidationManager(CONFIG, period, basin,
+                                       validate_instructions)
         if do_extract:
-            extract_ = match_era5_smap.matchManager(
+            match_era5_smap.matchManager(
                 CONFIG, period, region, basin, passwd, False)
         if do_regression:
-            regression_ = regression.Regression(
+            regression.Regression(
                 CONFIG, period, train_test_split_dt, region, basin,
                 passwd, False, reg_instructions)
-        # sta = statistic.StatisticManager(CONFIG, period, region,
-        #                                  passwd, save_disk=False)
         if do_compare:
-            com_tc = compare_tc.TCComparer(CONFIG, period, region, basin,
+            compare_tc.TCComparer(CONFIG, period, region, basin,
                                            passwd, False,
                                            compare_instructions)
         # ccmp_ = ccmp.CCMPManager(CONFIG, period, region, passwd,

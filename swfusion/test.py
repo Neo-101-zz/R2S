@@ -1,35 +1,34 @@
-# This import registers the 3D projection, but is otherwise unused.
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
+import datetime
+import os
+import pickle
 
-import matplotlib.pyplot as plt
-import numpy as np
+import pandas as pd
 
-# Fixing random state for reproducibility
-np.random.seed(19680801)
+with open('../compare_info_na_sfmr_smap.txt', 'r') as f:
+    infos = list(f)
 
+tc_names = []
+tc_dts = []
+match = []
+for info in infos:
+    tc_name = info.split(' TC ')[1].split(' on ')[0].replace(' ', '')
+    dt_str = info.split(' on ')[1].strip()
+    dt = datetime.datetime.strptime(dt_str, '%Y-%m-%d %H:%M:%S')
 
-def randrange(n, vmin, vmax):
-    '''
-    Helper function to make an array of random numbers having shape (n, )
-    with each number distributed Uniform(vmin, vmax).
-    '''
-    return (vmax - vmin)*np.random.rand(n) + vmin
+    tc_names.append(tc_name)
+    tc_dts.append(dt)
 
-fig = plt.figure()
-ax = fig.add_subplot(111, projection='3d')
+    if info.startswith('Comparing'):
+        match.append(True)
+    elif info.startswith('Skiping'):
+        match.append(False)
 
-n = 100
+hit_dict = {'TC_name': tc_names,
+            'datetime': tc_dts,
+            'match': match,
+           }
+hit_df = pd.DataFrame(hit_dict)
 
-# For each set of style and range settings, plot n random points in the box
-# defined by x in [23, 32], y in [0, 100], z in [zlow, zhigh].
-for m, zlow, zhigh in [('o', -50, -25), ('^', -30, -5)]:
-    xs = randrange(n, 23, 32)
-    ys = randrange(n, 0, 100)
-    zs = randrange(n, zlow, zhigh)
-    ax.scatter(xs, ys, zs, marker=m)
-
-ax.set_xlabel('X Label')
-ax.set_ylabel('Y Label')
-ax.set_zlabel('Z Label')
-
-plt.show()
+dir = '../statistic/match_of_data_sources/sfmr_vs_smap/na/'
+os.makedirs(dir, exist_ok=True)
+hit_df.to_pickle(f'{dir}na_match_sfmr_vs_smap.pkl')

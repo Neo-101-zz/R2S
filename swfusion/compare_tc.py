@@ -89,12 +89,12 @@ class TCComparer(object):
             if part in self.source_candidates:
                 self.sources.append(part)
 
-        if 'smap' in self.sources and 'sfmr' in self.sources:
-            self.logger.error((
-                f"""Not support synchronously compare """
-                f"""SMAP and SFMR with or without other """
-                f"""sources"""))
-            exit()
+        # if 'smap' in self.sources and 'sfmr' in self.sources:
+        #     self.logger.error((
+        #         f"""Not support synchronously compare """
+        #         f"""SMAP and SFMR with or without other """
+        #         f"""sources"""))
+        #     exit()
 
         # Swap 'sfmr' and first source string when necessary
         if 'sfmr' in self.sources and self.sources.index('sfmr') != 0:
@@ -109,9 +109,9 @@ class TCComparer(object):
             exit()
 
         if 'sfmr' in self.sources:
-            if len(self.sources) < 2:
+            if len(self.sources) != 2:
                 self.logger.error((
-                    f"""At least must input 2 sources """
+                    f"""Must input 2 sources """
                     f"""when including SFMR"""))
                 exit()
         else:
@@ -121,14 +121,40 @@ class TCComparer(object):
                     f"""when not including SFMR"""))
                 exit()
 
-        self.sources_titles = {
-            'smap': 'SMAP Wind',
-            'smap_prediction': 'Simulated SMAP Wind',
-        }
+        self.sources_titles = self.CONFIG['plot'][
+            'data_sources_title']
 
         self.sources_str = self.gen_sources_str()
 
+        if 'sfmr' in self.sources:
+            self.load_match_data_sources()
+        # {'TC_name': [], 'date_time': []}
+
         self.compare_sources()
+
+        if 'sfmr' in self.sources:
+            self.update_match_data_sources()
+
+    def load_match_data_sources(self):
+        match_str = f'sfmr_vs_{self.sources[1]}'
+        dir = (self.CONFIG['result']['dirs']['statistic'][
+            'match_of_data_sources']
+               + f'{match_str}/{self.basin}/')
+        file_path = f'{dir}{self.basin}_match_{match_str}.pkl'
+        self.match_data_source_file_path = file_path
+
+        if not os.path.exists(file_path):
+            self.match_data_sources = pd.DataFrame(columns=[
+                'TC_sid', 'datetime', 'match'])
+        else:
+            with open(file_path, 'rb') as f:
+                self.match_data_sources = pickle.load(f)
+
+    def update_match_data_sources(self):
+        if os.path.exists(self.match_data_source_file_path):
+            os.remove(self.match_data_source_file_path)
+        self.match_data_sources.to_pickle(
+            self.match_data_source_file_path)
 
     def gen_sources_str(self):
         sources_str = ''
@@ -250,22 +276,79 @@ class TCComparer(object):
                                 windspd_bias_df_between_two_tcs)
 
         if 'sfmr' in self.sources and len(windspd_bias_frames):
-            all_windspd_bias_to_sfmr = pd.concat(windspd_bias_frames).\
-                    reset_index(drop=True, inplace=True)
+            try:
+                all_windspd_bias_to_sfmr = pd.concat(
+                    windspd_bias_frames).reset_index(drop=True)
 
-            save_root_dir = self.CONFIG['result']['dirs']['statistic'][
-                'windspd_bias_to_sfmr']
-            save_name = (f"""{self.basin}_{self.period[0]}"""
-                         f"""_{self.period[1]}""")
-            save_dir = f'{save_root_dir}{save_name}/'
-            os.makedirs(save_dir, exist_ok=True)
-            all_windspd_bias_to_sfmr.to_pickle(
-                f'{save_dir}{save_name}.pkl')
+                save_root_dir = self.CONFIG['result']['dirs'][
+                    'statistic']['windspd_bias_to_sfmr']
+                compare_dir = f'{self.sources[1]}_vs_sfmr'
+
+                save_name = f'{self.basin}'
+                for dt in self.period:
+                    save_name = (f"""{save_name}_"""
+                                 f"""{dt.strftime('%Y%m%d%H%M%S')}""")
+
+                save_dir = (f"""{save_root_dir}{compare_dir}/"""
+                            f"""{save_name}/""")
+                os.makedirs(save_dir, exist_ok=True)
+
+                all_windspd_bias_to_sfmr.to_pickle(
+                    f'{save_dir}{save_name}.pkl')
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
 
         print('Done')
 
+    def update_no_match_between_tcs(self, hours, tc, next_tc):
+        tc_sid_list = []
+        tc_dt_list = []
+        match_list = []
+
+        for h in range(hours):
+            interp_tc = self.interp_tc(h, tc, next_tc)
+            tc_sid_list.append(interp_tc.sid)
+            tc_dt_list.append(interp_tc.date_time)
+            match_list.append(False)
+
+            additional_match_of_data_sources_df = pd.DataFrame(
+                {'TC_sid': tc_sid_list,
+                 'datetime': tc_dt_list,
+                 'match': match_list,
+                }
+            )
+            self.match_data_sources = self.match_data_sources.\
+                    append(additional_match_of_data_sources_df)
+            self.match_data_sources.sort_values(
+                by=['datetime'], inplace=True, ignore_index=True)
+            self.match_data_sources.drop_duplicates(
+                inplace=True, ignore_index=True)
+
+    def update_one_row_of_match(self, interp_tc, match):
+        one_row_df = pd.DataFrame(
+            {'TC_sid': [interp_tc.sid],
+             'datetime': [interp_tc.date_time],
+             'match': [match],
+            }
+        )
+        self.match_data_sources = self.match_data_sources.\
+                append(one_row_df)
+        self.match_data_sources.sort_values(
+            by=['datetime'], inplace=True, ignore_index=True)
+        self.match_data_sources.drop_duplicates(
+            inplace=True, ignore_index=True)
+
     def compare_with_sfmr(self, tc, next_tc):
         windspd_bias_df_between_two_tcs = None
+        # if (next_tc.date_time < self.match_data_sources['date_time'][-1]
+        #     or tc.date_time > self.match_data_sources['date_time'][0]):
+        #     # Check if match of data sources exist during the life
+        #     # period of TC
+        #     if tc.name not in self.match_data_sources[
+        #         'TC_name'].unique():
+        #         return False, windspd_bias_df_between_two_tcs
+
         # Temporal shift
         delta = next_tc.date_time - tc.date_time
         # Skip interpolating between two TC recors if two neighbouring
@@ -276,10 +359,49 @@ class TCComparer(object):
         # Time interval between two TCs are less than one hour
         if not hours:
             return False, windspd_bias_df_between_two_tcs
+
+        hit_dt = []
+        match_dt = []
+        for h in range(hours):
+            interp_tc = self.interp_tc(h, tc, next_tc)
+            same_dt_df = self.match_data_sources.loc[
+                self.match_data_sources['datetime'] == \
+                interp_tc.date_time]
+            if not len(same_dt_df):
+                continue
+            same_sid_dt_df = same_dt_df.loc[
+                same_dt_df['TC_sid'] == interp_tc.sid]
+            if not len(same_sid_dt_df):
+                continue
+            if len(same_sid_dt_df) == 1:
+                hit_dt.append(interp_tc.date_time)
+                if same_sid_dt_df['match'].iloc[0]:
+                    match_dt.append(interp_tc.date_time)
+            else:
+                print(same_sid_dt_df)
+                self.logger.error((f"""Strange: two or more """
+                                   f"""comparison has same sid """
+                                   f"""and datetime"""))
+                exit()
+
+        hit_count = len(hit_dt)
+        match_count = len(match_dt)
+        if hit_count == hours and not match_count:
+            print((f"""[Skip] All internal hours of TC """
+                   f"""{tc.name} between {tc.date_time} """
+                   f"""and {next_tc.date_time}"""))
+            return False, windspd_bias_df_between_two_tcs
+
         # Check existence of SFMR between two IBTrACS records
         existence, spatial_temporal_info = self.sfmr_exists(
             tc, next_tc)
         if not existence:
+            if hit_count < hours:
+                # update match of data sources
+                self.update_no_match_between_tcs(hours, tc, next_tc)
+
+            print((f"""[Not exist] SFMR of TC {tc.name} between """
+                   f"""{tc.date_time} and {next_tc.date_time}"""))
             return False, windspd_bias_df_between_two_tcs
 
         # Round SMFR record to different hours
@@ -298,41 +420,128 @@ class TCComparer(object):
         hour_info_pt_idx = self.sfmr_rounded_hours(
             tc, next_tc, spatial_temporal_info)
         if not len(hour_info_pt_idx):
+            if hit_count < hours:
+                # update match of data sources
+                self.update_no_match_between_tcs(hours, tc, next_tc)
+
+            print((f"""[Fail rounding to hour] SFMR of TC {tc.name} """
+                   f"""between {tc.date_time} and """
+                   f"""{next_tc.date_time}"""))
             return False, windspd_bias_df_between_two_tcs
 
+        if hit_count == hours:
+            # just compare the datetimes when `match` value is True
+            # and no need to update `match_data_sources`
+            success, windspd_bias_df_between_two_tcs = \
+                    self.compare_with_sfmr_all_records_hit(
+                        tc, next_tc, hours, match_dt,
+                        spatial_temporal_info, hour_info_pt_idx)
+        else:
+            # for each hour, compare SFMR wind speed with regressed wind
+            # speed and have to update `match_data_sources`
+            success, windspd_bias_df_between_two_tcs = \
+                    self.compare_with_sfmr_not_all_records_hit(
+                        tc, next_tc, hours, spatial_temporal_info, 
+                        hour_info_pt_idx)
+
+        return success, windspd_bias_df_between_two_tcs
+
+    def compare_with_sfmr_not_all_records_hit(self, tc, next_tc, hours,
+                                              spatial_temporal_info, 
+                                              hour_info_pt_idx):
         windspd_bias_frames = []
-        # For each hour, compare SFMR wind speed with regressed wind
-        # speed
+        tc_sid_list = []
+        tc_dt_list = []
+        match_list = []
         for h in range(hours):
             interp_tc = self.interp_tc(h, tc, next_tc)
             if interp_tc.date_time not in hour_info_pt_idx.keys():
+                # update corrseponding match
+                self.update_one_row_of_match(interp_tc, False)
+                print((f"""[Not exist] SFMR of TC {tc.name} near """
+                       f"""{interp_tc.date_time}"""))
                 continue
+
             success, hourly_windspd_bias_df = \
                     self.compare_with_sfmr_around_interped_tc(
                         spatial_temporal_info,
                         hour_info_pt_idx[interp_tc.date_time],
                         interp_tc)
-            windspd_bias_frames.append(hourly_windspd_bias_df)
+            tc_sid_list.append(interp_tc.sid)
+            tc_dt_list.append(interp_tc.date_time)
 
             if success:
-                print((f"""Comparing {self.sources_str} """
-                       f"""record of TC {interp_tc.name} on """
-                       f"""{interp_tc.date_time}"""))
+                match_list.append(True)
+                windspd_bias_frames.append(hourly_windspd_bias_df)
+
+                print((f"""[Match] {self.sources_str} """
+                       f"""of TC {interp_tc.name} """
+                       f"""on {interp_tc.date_time}"""))
             else:
-                print((f"""Skiping comparsion of """
-                       f"""{self.sources_str} """
+                match_list.append(False)
+                print((f"""[Not match] {self.sources_str} """
                        f"""of TC {interp_tc.name} """
                        f"""on {interp_tc.date_time}"""))
 
-            if not success:
-                return False, windspd_bias_df_between_two_tcs
+            # if not success:
+            #     return False, windspd_bias_df_between_two_tcs
+
+        additional_match_of_data_sources_df = pd.DataFrame(
+            {'TC_sid': tc_sid_list,
+             'datetime': tc_dt_list,
+             'match': match_list,
+            }
+        )
+        self.match_data_sources = self.match_data_sources.append(
+            additional_match_of_data_sources_df)
+        self.match_data_sources.sort_values(by=['datetime'],
+                                            inplace=True,
+                                            ignore_index=True)
+        self.match_data_sources.drop_duplicates(inplace=True,
+                                                ignore_index=True)
 
         if not len(windspd_bias_frames):
-            return False, windspd_bias_df_between_two_tcs
+            return False, None
 
         windspd_bias_df_between_two_tcs = pd.concat(windspd_bias_frames)
 
         return True, windspd_bias_df_between_two_tcs
+
+    def compare_with_sfmr_all_records_hit(
+        self, tc, next_tc, hours, match_dt, spatial_temporal_info,
+        hour_info_pt_idx):
+        #
+        windspd_bias_frames = []
+        for h in range(hours):
+            interp_tc = self.interp_tc(h, tc, next_tc)
+            if interp_tc.date_time not in match_dt:
+                print((f"""[Skip] {self.sources_str} """
+                       f"""of TC {interp_tc.name} """
+                       f"""on {interp_tc.date_time}"""))
+                continue
+
+            success, hourly_windspd_bias_df = \
+                    self.compare_with_sfmr_around_interped_tc(
+                        spatial_temporal_info,
+                        hour_info_pt_idx[interp_tc.date_time],
+                        interp_tc)
+            print((f"""[Redo] {self.sources_str} """
+                   f"""of TC {interp_tc.name} """
+                   f"""on {interp_tc.date_time}"""))
+            if not success:
+                self.logger.error('Match True but not success')
+                breakpoint()
+                exit()
+
+            windspd_bias_frames.append(hourly_windspd_bias_df)
+
+        if not len(windspd_bias_frames):
+            return False, None
+
+        windspd_bias_df_between_two_tcs = pd.concat(windspd_bias_frames)
+
+        return True, windspd_bias_df_between_two_tcs
+
 
     def compare_with_sfmr_around_interped_tc(
         self, sfmr_brief_info, one_hour_info_pt_idx, interp_tc):
@@ -536,27 +745,40 @@ class TCComparer(object):
             # Traverse all data points of selected SFMR file
             for i in range(length):
                 # Round SFMR data point's datetime to hours
-                pt_datetime = datetime.datetime.combine(
-                    utils.sfmr_nc_converter('DATE', vars['DATE'][i]),
-                    utils.sfmr_nc_converter('TIME', vars['TIME'][i])
-                )
-                rounded_hour = utils.hour_rounder(pt_datetime)
+                try:
+                    pt_date = vars['DATE'][i]
+                    pt_time = vars['TIME'][i]
+                    # It seems that near the end of SFMR data array,
+                    # DATE will be 0
+                    if pt_date == 0:
+                        continue
 
-                # Check whether rounded hours are in hours between two TCs
+                    pt_datetime = datetime.datetime.combine(
+                        utils.sfmr_nc_converter('DATE', pt_date),
+                        utils.sfmr_nc_converter('TIME', pt_time)
+                    )
+                    rounded_hour = utils.hour_rounder(pt_datetime)
+                except Exception as msg:
+                    breakpoint()
+                    exit(msg)
+
+                # Check whether rounded hours are in hours between
+                # two TCs
                 if rounded_hour not in hours_between_two_tcs:
                     continue
 
                 lon = (vars['LON'][i] + 360) % 360
                 lat = vars['LAT'][i]
 
-                # Check whether SFMR data points are in area around TC at rounded
-                # hour
+                # Check whether SFMR data points are in area around
+                # TC at rounded hour
                 if (lon < datetime_area[rounded_hour]['lon1']
                     or lon > datetime_area[rounded_hour]['lon2']
                     or lat < datetime_area[rounded_hour]['lat1']
                     or lat > datetime_area[rounded_hour]['lat2']):
                     continue
-                rounded_hour_idx = hours_between_two_tcs.index(rounded_hour)
+                rounded_hour_idx = hours_between_two_tcs.index(
+                    rounded_hour)
 
                 # Add SFMR data point index into `hour_info_pt_idx`
                 if rounded_hour not in hour_info_pt_idx:
@@ -773,7 +995,7 @@ class TCComparer(object):
             # Get lons, lats, windspd
             success, lons[src], lats[src], windspd[src], mesh[src] = \
                     self.get_sources_xyz_matrix(src, tc, era5_lons,
-                                         era5_lats)
+                                                era5_lats)
             if not success:
                 return False
             # Get max windspd
@@ -828,8 +1050,9 @@ class TCComparer(object):
         return True
 
     def get_sources_xyz_matrix(self, src, tc, era5_lons=None,
-                               era5_lats=None, pt_lons=None, pt_lats=None,
-                               pt_dts=None, sfmr_brief_info=None,
+                               era5_lats=None, pt_lons=None,
+                               pt_lats=None, pt_dts=None,
+                               sfmr_brief_info=None,
                                one_hour_info_pt_idx=None):
         if src == 'ccmp':
             return self.get_ccmp_xyz_matrix(tc)
@@ -1133,10 +1356,12 @@ class TCComparer(object):
             for name in col_names:
                 row[name] = None
 
-                row['lon'], lon_idx = utils.get_nearest_element_and_index(
-                    era5_lons, pt_lons[i])
-                row['lat'], lat_idx = utils.get_nearest_element_and_index(
-                    era5_lats, pt_lats[i])
+                row['lon'], lon_idx = \
+                        utils.get_nearest_element_and_index(era5_lons,
+                                                            pt_lons[i])
+                row['lat'], lat_idx = \
+                        utils.get_nearest_element_and_index(era5_lats,
+                                                            pt_lats[i])
                 row['x'] = lon_idx - self.half_reg_edge_grid_intervals
                 row['y'] = lat_idx - self.half_reg_edge_grid_intervals
                 diff_mins = pt_dts[i] 
@@ -1166,7 +1391,8 @@ class TCComparer(object):
                 return None
             # Not all points of area has this feature
             # Make sure it is interpolated properly
-            diff_mins = utils.interp_satel_era5_diff_mins_matrix(diff_mins)
+            diff_mins = utils.interp_satel_era5_diff_mins_matrix(
+                diff_mins)
         elif 'sfmr' in self.sources:
             diff_mins = np.zeros(shape=(lats_num, lons_num), dtype=float)
 

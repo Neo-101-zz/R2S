@@ -45,6 +45,7 @@ MASKED = np.ma.core.masked
 Base = declarative_base()
 current_file = None
 
+
 class SCSSatelManager(object):
     """Manage features of satellite data that are not related to other data
     sources except TC table from IBTrACS.
@@ -859,18 +860,32 @@ class SCSSatelManager(object):
             file_url = '%sy%04d/m%02d/%s' % (
                 data_url, satel_date.year, satel_date.month, file_name)
 
-        if not utils.url_exists(file_url):
-            print(f'Missing date of {satel_name}: {satel_date}')
-            print(file_url)
+        retry_times = 0
+        connect_success = False
+
+        while(retry_times <= self.CONFIG['network']['retry_times']):
+            if utils.url_exists(file_url):
+                connect_success = True
+                break
+            else:
+                self.logger.info((f"""Retry to download file: """
+                                  f"""{file_url}"""))
+                retry_times += 1
+
+        if not connect_success:
+            self.logger.warning((f"""Missing date of {satel_name}: """
+                                 f"""{satel_date}"""))
+            self.logger.warning((f"""Missing file url: """
+                                 f"""{file_url}"""))
             missing_dates.add(satel_date)
+
+            with open(missing_dates_file, 'wb') as fw:
+                pickle.dump(missing_dates, fw)
+
             return None
 
         file_path = f'{save_dir}{file_name}'
-
         utils.download(file_url, file_path)
-
-        with open(missing_dates_file, 'wb') as fw:
-            pickle.dump(missing_dates, fw)
 
         return file_path
 

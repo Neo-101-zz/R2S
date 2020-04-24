@@ -1,3 +1,5 @@
+network:
+  retry_times: 20
 logging:
   dir: '../log'
 statistic:
@@ -36,6 +38,10 @@ grid:
     x: '../data/grid/x.pkl'
     y: '../data/grid/y.pkl'
 plot:
+  data_sources_title:
+    smap: 'SMAP Wind'
+    smap_prediction: 'Simulated SMAP Wind'
+    era5: 'ERA5 Wind'
   axis_label_mapper:
     dis_minutes: 'T(SSSW)-T(SFMRW) (min)'
     dis_kms: 'D(SSSW, SFMRW) (km)'
@@ -94,6 +100,9 @@ ibtracs:
     wp: 'ibtracs_wp'
     na: 'ibtracs_na'
     global_since_1980: 'ibtracs_global'
+    statistic:
+      moving_speed:
+        na: 'ibtracs_moving_speed'
   urls:
     wp: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.WP.v04r00.nc'
     na: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.NA.v04r00.nc'
@@ -558,6 +567,7 @@ result:
     statistic:
       root: '../statistic/'
       windspd_bias_to_sfmr: '../statistic/windspd_bias_to_sfmr/'
+      match_of_data_sources: '../statistic/match_of_data_sources/'
 database:
   # db_api: 'mysql+mysqlconnector'
   db_api: 'mysql+mysqldb'

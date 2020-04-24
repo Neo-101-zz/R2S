@@ -48,11 +48,13 @@ KM_OF_ONE_NMILE = 1.852
 KM_OF_ONE_DEGREE = KM_OF_ONE_NMILE / DEGREE_OF_ONE_NMILE
 RADII_LEVELS = [34, 50, 64]
 
+
 # Python program to check if rectangles overlap 
 class Point: 
     def __init__(self, x, y): 
         self.x = x 
         self.y = y 
+
 
 # Returns true if two rectangles(l1, r1)
 # and (l2, r2) overlap 
@@ -86,6 +88,7 @@ def doOverlap(l1, r1, l2, r2):
 
     return True
 
+
 def delete_last_lines(n=1):
     CURSOR_UP_ONE = '\x1b[1A'
     CURSOR_LEFT_HEAD = '\x1b[1G'
@@ -94,6 +97,7 @@ def delete_last_lines(n=1):
     for _ in range(n):
         sys.stdout.write(ERASE_LINE)
         sys.stdout.write(CURSOR_LEFT_HEAD)
+
 
 def setup_signal_handler():
     """Arrange handler for several signal.
@@ -113,11 +117,13 @@ def setup_signal_handler():
     signal.signal(signal.SIGHUP, handler)
     signal.signal(signal.SIGTERM, handler)
 
+
 def reset_signal_handler():
     global current_file
     current_file = None
 
     signal.signal(signal.SIGINT, signal.default_int_handler)
+
 
 def handler(signum, frame):
     """Handle forcing quit which may be made by pressing Control + C and
@@ -147,6 +153,7 @@ def handler(signum, frame):
     # Force quit
     sys.exit(1)
 
+
 def set_format_custom_text(len):
     """Customize format text's length.
 
@@ -168,6 +175,7 @@ def set_format_custom_text(len):
             f='',
         ),
     )
+
 
 def sizeof_fmt(num, suffix='B'):
     """Convert size of file from B to unit which let size value
@@ -192,6 +200,7 @@ def sizeof_fmt(num, suffix='B'):
             return "%3.1f %s%s" % (num, unit, suffix)
         num /= 1024.0
     return "%.1f %s%s" % (num, 'Y', suffix)
+
 
 def show_progress(block_num, block_size, total_size):
     """Show progress of downloading data with progress bar.
@@ -233,6 +242,7 @@ def show_progress(block_num, block_size, total_size):
         pbar.finish()
         pbar = None
 
+
 def url_exists(url):
     """Check if url exists.
 
@@ -251,10 +261,13 @@ def url_exists(url):
 
     """
     if url.startswith('http'):
+        key = 'Content-Type'
         req = requests.head(url)
         # Works for '.gz' file and '.nc' file
         try:
-            if req.headers['Content-Type'].startswith('application'):
+            if key not in req.headers:
+                return False
+            if req.headers[key].startswith('application'):
                 return True
             else:
                 return False
@@ -2042,14 +2055,16 @@ def get_xyz_matrix_of_smap_windspd_or_diff_mins(
                         continue
                     pt_time = datetime.time(
                         *divmod(int(minute[y][x][i]), 60), 0)
-                    pt_dt = datetime.datetime.combine(tc_dt.date(), pt_time)
+                    pt_dt = datetime.datetime.combine(tc_dt.date(),
+                                                      pt_time)
                     delta = abs(pt_dt - tc_dt)
                     # Temporal window is one hour
                     if delta.seconds > 1800:
                         continue
 
-                    # SMAP originally has land mask, so it's not necessary
-                    # to check whether each pixel is land or ocean
+                    # SMAP originally has land mask, so it's not
+                    # necessary to check whether each pixel is land
+                    # or ocean
                     windspd[y][x] = float(wind[y][x][i])
                     if pt_dt < tc_dt:
                         diff_mins[y][x] = -int(delta.seconds / 60)
@@ -2059,7 +2074,7 @@ def get_xyz_matrix_of_smap_windspd_or_diff_mins(
                     breakpoint()
                     exit(msg)
 
-    if target == 'windspd' and windspd.max() > 0:
+    if target == 'windspd' and windspd.max() > windspd_masked_value:
         return lons, lats, windspd
     elif (target == 'diff_mins'
           and diff_mins.max() > diff_mins_masked_value):
@@ -3085,7 +3100,6 @@ def validate_with_sfmr(tgt_name, tc_dt, sfmr_dts, sfmr_lons,
     tb_windspd_bias = []
 
     # Traverse SFMR data points
-    logger.info('Starting fucking loop')
     for t in range(num_sfmr_tracks):
         for i in range(len(sfmr_dts[t])):
             base_lon = sfmr_lons[t][i]
