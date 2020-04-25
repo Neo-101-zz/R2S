@@ -25,16 +25,25 @@ from keras.layers import Dense, Activation, Flatten
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
 import xgboost as xgb
+import lightgbm as lgbm
 from mpl_toolkits.basemap import Basemap
 from matplotlib import patches as mpatches
 import matplotlib.pyplot as plt
 from keras.models import model_from_yaml
 import yaml
 from sklearn.tree import DecisionTreeRegressor
-from sklearn.metrics import mean_squared_error
 from sklearn.utils import shuffle
 from scipy import stats
 from sklearn.preprocessing import MinMaxScaler
+from scipy.stats import randint as sp_randint
+from scipy.stats import uniform as sp_uniform
+from sklearn.datasets import load_boston
+from sklearn.model_selection import (cross_val_score, train_test_split, 
+                                     GridSearchCV, RandomizedSearchCV)
+from sklearn.metrics import r2_score
+from sklearn.metrics import mean_squared_error
+from functools import partial
+from hyperopt import fmin, hp, tpe, Trials, space_eval
 
 import utils
 import era5
@@ -137,6 +146,8 @@ class Regression(object):
         self.model_dir = dict()
         self.model_dir['xgb'] = self.CONFIG['regression']['dirs']['tc']\
                 ['xgboost']['model']
+        self.model_dir['lgbm'] = self.CONFIG['regression']['dirs']['tc']\
+                ['lightgbm']['model']
 
         self.validation_split = 0.2
 
@@ -148,7 +159,7 @@ class Regression(object):
 
         utils.setup_database(self, Base)
 
-        self.target_name = self.CONFIG['regression']['target']\
+        self.y_name = self.CONFIG['regression']['target']\
                 ['smap_era5']
 
         self.read_smap_era5(False, '', 15, 'large')
@@ -158,6 +169,8 @@ class Regression(object):
             # self.evaluation_df_visualition()
             self.xgb_regressor()
             # self.xgb_importance()
+        if 'lgbm' in self.instructions:
+            self.lgbm_regressor()
         if 'dnn' in self.instructions:
             self.deep_neural_network()
 
@@ -205,7 +218,7 @@ class Regression(object):
         fig_dir = self.CONFIG['regression']['dirs']['tc']['xgboost']\
                 ['importance']
         os.makedirs(fig_dir, exist_ok=True)
-        selected_features_num = int(self.train.shape[1] / 3)
+        selected_features_num = int(self.X_train.shape[1] / 3)
 
         for max_feat_num in [None, selected_features_num]:
             if max_feat_num is None:
@@ -274,11 +287,11 @@ class Regression(object):
                                  learning_rate=best_learning_rate,
                                  n_estimators=best_estimators_num,
                                  objective='reg:squarederror')
-        model.fit(self.train, self.target)
+        model.fit(self.X_train, self.y_train)
 
         self.logger.info((f"""Evaluating on test set"""))
-        predicted = model.predict(data=self.test)
-        truth = self.test_target.to_numpy()
+        predicted = model.predict(self.X_test)
+        truth = self.y_test.to_numpy()
         mse = mean_squared_error(truth, predicted)
         print(f'MSE: {mse}')
         # one_test['mse'] = mse
@@ -300,6 +313,118 @@ class Regression(object):
         # os.makedirs(evaluation_dir, exist_ok=True)
         # df.to_pickle(f'{evaluation_dir}test_set.pkl')
         # print(df)
+    def evaluate(self, est, params, X, y):
+        # Choices
+        if 'choices' in params.keys():
+            params['learning_rate'] = params['choices']['learning_rate']
+            params['n_estimators'] = params['choices']['n_estimators']
+            params.pop('choices')
+
+        # Set params
+        est.set_params(**params)
+
+        # Calc CV score
+        scores = cross_val_score(estimator=est, X=X, y=y,
+                                 scoring='neg_mean_squared_error',
+                                 cv=4)
+        score = np.mean(scores)
+
+        return score
+
+    def lgbm_regressor(self):
+        self.logger.info((f"""Regressing with lightgbm regressor"""))
+
+        column_names = ['estimators_num', 'mse']
+        all_tests = []
+
+        # Define searched space
+        # hp.uniform('subsample', 0.6, 0.4) ?
+        # num_leaves < 2^(max_depth), ratio may be 0.618 ?
+        hyper_space_tree = {
+            'choices': hp.choice('choices', [
+                {'learning_rate': 0.01,
+                 'n_estimators': hp.randint(
+                     'n_estimators_small_lr', 1500)},
+                {'learning_rate': 0.1,
+                 'n_estimators': 1000 + hp.randint(
+                     'n_estimators_medium_lr', 1500)}
+                ]),
+            'max_depth':  hp.choice('max_depth', [4, 5, 8, -1]),
+            'num_leaves': hp.choice('num_leaves', [15, 31, 63, 127]),
+            'subsample': hp.uniform('subsample', 0.6, 1.0),
+            'colsample_bytree': hp.uniform('colsample_bytree', 0.6, 1.0)
+        }
+
+        # Initilize instance of estimator
+        est = lgbm.LGBMRegressor(boosting_type='gbdt', n_jobs=-1,
+                                 random_state=2018)
+
+        # Objective minizmied
+        hyperopt_objective = lambda params: self.evaluate(
+            est, params, self.X_train, self.y_train)
+
+        # Trail
+        trials = Trials()
+
+        # Set algoritm parameters
+        algo = partial(tpe.suggest,
+                       n_startup_jobs=20, gamma=0.25, n_EI_candidates=24)
+
+        # Fit Tree Parzen Estimator
+        best_vals = fmin(hyperopt_objective, space=hyper_space_tree,
+                         algo=algo, max_evals=60, trials=trials,
+                         rstate=np.random.RandomState(seed=2020))
+
+        # Print best parameters
+        best_params = space_eval(hyper_space_tree, best_vals)
+        print("BEST PARAMETERS: " + str(best_params))
+
+        # Print best CV score
+        scores = [trial['result']['loss'] for trial in trials.trials]
+        best_score = np.min(scores)
+        print(f'BEST CV MSE: {best_score}')
+        print(f'BEST CV RMSE: {math.sqrt(best_score)}')
+
+        # Print execution time
+        tdiff = (trials.trials[-1]['book_time']
+                 - trials.trials[0]['book_time'])
+        print("ELAPSED TIME (MINUTE): " + str(tdiff.total_seconds() / 60))
+
+        # Set params
+        est.set_params(**best_params)
+
+        # Fit
+        est.fit(self.X_train, self.y_train)
+        y_pred = est.predict(self.X_test)
+
+        # Predict
+        y_test = self.y_test.to_numpy()
+        mse = mean_squared_error(y_test, y_pred)
+        print("MSE SCORE ON TEST DATA: {}".format(mse))
+        print("RMSE SCORE ON TEST DATA: {}".format(math.sqrt(mse)))
+
+        # os.makedirs(self.model_dir['lgbm'], exist_ok=True)
+
+        # model = lgbm.LGBMRegressor()
+        # model.fit(self.train, self.y_train)
+
+        # self.logger.info((f"""Evaluating on test set"""))
+        # predicted = model.predict(self.X_test)
+        # truth = self.y_test.to_numpy()
+        # mse = mean_squared_error(truth, predicted)
+        # print(f'MSE: {mse}')
+        # # one_test['mse'] = mse
+
+        # # save model to file
+        # pickle.dump(model, open((
+        #     f"""{self.model_dir["lgbm"]}"""
+        #     f"""{self.basin}_mse_{mse}.pickle.dat"""),
+        #     'wb'))
+
+        # # all_tests.append(one_test)
+
+        # utils.delete_last_lines()
+        # print('Done')
 
     def decision_tree(self):
         self.logger.info((f"""Regressing with decision tree"""))
@@ -307,10 +432,10 @@ class Regression(object):
 
         for depth in range(3, 20):
             tree = DecisionTreeRegressor(criterion='mse', max_depth=depth)
-            tree.fit(self.train, self.target)
+            tree.fit(self.X_train, self.y_train)
 
-            predicted = tree.predict(self.test)
-            truth = self.test_target.to_numpy()
+            predicted = tree.predict(self.X_test)
+            truth = self.y_test.to_numpy()
             mse = mean_squared_error(truth, predicted)
 
             print(f"""Max depth {depth}: MSE {mse:.2f}""")
@@ -358,7 +483,7 @@ class Regression(object):
         # Numbers of hidden layer
         hidden_layers_num_range = [3 * i for i in range(1, 4)]
         # hidden_neurons_num_range = [
-        #     int(self.train.shape[1] * x / 3) for x in range(1, 4)
+        #     int(self.X_train.shape[1] * x / 3) for x in range(1, 4)
         # ]
         hidden_neurons_num_range = [32, 64, 128, 256]
         # Learning rate
@@ -384,8 +509,8 @@ class Regression(object):
 
                 self.logger.info((f"""Evaluating on test set"""))
                 # Predict SMAP windspd
-                score = self.NN_model.evaluate(self.test,
-                                               self.test_target,
+                score = self.NN_model.evaluate(self.X_test,
+                                               self.y_test,
                                                verbose=0)
                 metrics_names = self.NN_model.metrics_names
                 one_test = dict()
@@ -433,7 +558,7 @@ class Regression(object):
     def predict_old(self):
         the_mode = 'surface_all_vars'
         # Read ERA5 dataframe
-        era5_ = era5.ERA5Manager(self.CONFIG, self.test_period,
+        era5_ = era5.ERA5Manager(self.CONFIG, self.period_test,
                                  self.region, self.db_root_passwd,
                                  work=False, save_disk=self.save_disk)
         era5_table_names = era5_.get_era5_table_names(
@@ -457,13 +582,13 @@ class Regression(object):
                           index=False)
 
     def compare_with_ibtracs(self):
-        # Traverse all ibtracs record within test_period
+        # Traverse all ibtracs record within period_test
         tc_table_name = self.CONFIG['ibtracs']['table_name']
         TCTable = utils.get_class_by_tablename(self.engine,
                                                tc_table_name)
         for row in self.session.query(TCTable).filter(
-            TCTable.date_time >= self.test_period[0],
-            TCTable.date_time <= self.test_period[1]).yield_per(
+            TCTable.date_time >= self.period_test[0],
+            TCTable.date_time <= self.period_test[1]).yield_per(
             self.CONFIG['database']['batch_size']['query']):
             # Read corresponding predicted SMAP windspd dataframe
             dt_str = dt.strftime('%Y_%m%d_%H%M')
@@ -562,7 +687,7 @@ class Regression(object):
         self.logger.info((f"""Training DNN"""))
         if not skip_fit:
             history = self.NN_model.fit(
-                self.train, self.target, epochs=self.epochs,
+                self.X_train, self.y_train, epochs=self.epochs,
                 batch_size=self.batch_size,
                 validation_split=self.validation_split,
                 callbacks=self.callbacks_list, verbose=0)
@@ -615,7 +740,7 @@ class Regression(object):
         # Input layer
         self.NN_model.add(Dense(input_confs.units,
                                 kernel_initializer='normal',
-                                input_dim=self.train.shape[1],
+                                input_dim=self.X_train.shape[1],
                                 activation='relu'))
         # Hidden layers
         for hidden in hidden_confs:
@@ -692,13 +817,13 @@ class Regression(object):
         # print ('Number of numerical columns with no nan values :',
         #        len(num_cols))
 
-        self.train, self.test = self.split_combined(combined,
-                                                    train_length)
-        self.target = target
-        self.test_target = test_target
+        self.X_train, self.X_test = self.split_combined(combined,
+                                                        train_length)
+        self.y_train = target
+        self.y_test = test_target
 
         # train_data, test_data = self._get_train_test()
-        # train_data = self.train
+        # train_data = self.X_train
         # train_data['Target'] = target
         # self._show_correlation_heatmap(train_data)
         # breakpoint()
@@ -717,10 +842,10 @@ class Regression(object):
 
         train_length = len(train)
 
-        target = getattr(train, self.target_name)
-        test_target = getattr(test, self.target_name)
-        train.drop([self.target_name], axis=1, inplace=True)
-        test.drop([self.target_name], axis=1, inplace=True)
+        target = getattr(train, self.y_name)
+        test_target = getattr(test, self.y_name)
+        train.drop([self.y_name], axis=1, inplace=True)
+        test.drop([self.y_name], axis=1, inplace=True)
 
         combined = train.append(test)
         combined.reset_index(inplace=True)
@@ -795,7 +920,7 @@ class Regression(object):
 
         if 'normalization' in self.instructions:
             # Normalization
-            normalized_columns = df.columns.drop(self.target_name)
+            normalized_columns = df.columns.drop(self.y_name)
             scaler = MinMaxScaler()
             df[normalized_columns] = scaler.fit_transform(
                 df[normalized_columns])

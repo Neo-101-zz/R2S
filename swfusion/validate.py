@@ -25,6 +25,7 @@ class ValidationManager(object):
                 'windspd_bias_to_sfmr']
             + f'{validate_instructions}_vs_sfmr/')
         # self.merge_bias_file()
+        # breakpoint()
 
         self.find_bias_dir_and_file_path()
         self.bias_df = pd.read_pickle(self.bias_file_path)

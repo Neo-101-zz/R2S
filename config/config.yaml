@@ -643,6 +643,10 @@ regression:
         evaluation: '../regression/tc/xgboost/evaluation/'
         model: '../regression/tc/xgboost/model/'
         importance: '../regression/tc/xgboost/importance/'
+      lightgbm:
+        evaluation: '../regression/tc/lightgbm/evaluation/'
+        model: '../regression/tc/lightgbm/model/'
+        importance: '../regression/tc/lightgbm/importance/'
       decision_tree:
         evaluation: '../regression/tc/decision_tree/evaluation/'
   target:

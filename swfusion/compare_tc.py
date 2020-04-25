@@ -153,6 +153,8 @@ class TCComparer(object):
     def update_match_data_sources(self):
         if os.path.exists(self.match_data_source_file_path):
             os.remove(self.match_data_source_file_path)
+        os.makedirs(os.path.dirname(self.match_data_source_file_path),
+                    exist_ok=True)
         self.match_data_sources.to_pickle(
             self.match_data_source_file_path)
 
@@ -542,7 +544,6 @@ class TCComparer(object):
 
         return True, windspd_bias_df_between_two_tcs
 
-
     def compare_with_sfmr_around_interped_tc(
         self, sfmr_brief_info, one_hour_info_pt_idx, interp_tc):
         # Reference function `compare_with_one_tc_record`
@@ -590,6 +591,7 @@ class TCComparer(object):
         windspd = dict()
         radii_area = dict()
         mesh = dict()
+        diff_mins = dict()
 
         max_windspd = -1
         for src in self.sources:
@@ -608,11 +610,19 @@ class TCComparer(object):
                 try:
                     # Get lons, lats, windspd
                     success, lons[src], lats[src], windspd[src], \
-                            mesh[src] = self.get_sources_xyz_matrix(
+                            mesh[src], diff_mins[src] = \
+                            self.get_sources_xyz_matrix(
                                 src, interp_tc, era5_lons, era5_lats,
                                 sfmr_brief_info, one_hour_info_pt_idx)
                     if not success:
                         return False, None
+                    if src == 'smap':
+                        # Not all points of area has this feature
+                        # Make sure it is interpolated properly
+                        diff_mins[src] = \
+                                utils.interp_satel_era5_diff_mins_matrix(
+                                    diff_mins[src])
+
                     # Get max windspd
                     if windspd[src].max() > max_windspd:
                         max_windspd = windspd[src].max()
@@ -629,7 +639,7 @@ class TCComparer(object):
             tmp_df = utils.validate_with_sfmr(
                 src, interp_tc.date_time, sfmr_dts, sfmr_lons,
                 sfmr_lats, sfmr_windspd, lons[src], lats[src],
-                windspd[src], mesh[src])
+                windspd[src], mesh[src], diff_mins[src])
             windspd_bias_df_list.append(tmp_df)
 
         if not len(windspd_bias_df_list):
@@ -987,15 +997,16 @@ class TCComparer(object):
         windspd = dict()
         radii_area = dict()
         mesh = dict()
+        diff_mins = dict()
 
         max_windspd = -1
         for idx, src in enumerate(self.sources):
             ax = axs_list[idx]
 
             # Get lons, lats, windspd
-            success, lons[src], lats[src], windspd[src], mesh[src] = \
-                    self.get_sources_xyz_matrix(src, tc, era5_lons,
-                                                era5_lats)
+            success, lons[src], lats[src], windspd[src], mesh[src], \
+                    diff_mins[src] = self.get_sources_xyz_matrix(
+                        src, tc, era5_lons, era5_lats)
             if not success:
                 return False
             # Get max windspd
@@ -1168,7 +1179,7 @@ class TCComparer(object):
             # Test if era5 data can be extracted
             rounded_dt = utils.hour_rounder(tc.date_time)
             if rounded_dt.day != tc.date_time.day:
-                return False, None, None, None, None
+                return False, None, None, None, None, None
 
             # Create a new dataframe to store all points in region
             # Each point consists of ERA5 vars and SMAP windspd to predict
@@ -1262,7 +1273,7 @@ class TCComparer(object):
 
         # Return data
         return (True, era5_lons, era5_lats, smap_windspd,
-                utils.if_mesh(era5_lons))
+                utils.if_mesh(era5_lons), None)
 
     def get_smap_prediction_xyz_matrix(self, tc, era5_lons, era5_lats,
                                        col_names, smap_file_path, area):
@@ -1282,7 +1293,7 @@ class TCComparer(object):
                 tc, col_names, era5_lons, era5_lats)
 
         if env_data is None:
-            return False, None, None, None, None
+            return False, None, None, None, None, None
 
         # Get single levels vars of ERA5 around TC
         env_data, pres_lvls = self.add_era5_single_levels_data(
@@ -1321,7 +1332,7 @@ class TCComparer(object):
 
         # Return data
         return (True, era5_lons, era5_lats, smap_windspd,
-                utils.if_mesh(era5_lons))
+                utils.if_mesh(era5_lons), None)
 
     def padding_tc_windspd_prediction(self, smap_windspd_xyz_matrix_df,
                                       era5_lons, era5_lats):
@@ -1626,6 +1637,8 @@ class TCComparer(object):
             self.CONFIG, self.period, self.region, self.db_root_passwd,
             save_disk=self.save_disk, work=False)
         smap_file_path = satel_manager.download('smap', tc.date_time)
+        if smap_file_path is None:
+            return False, None, None, None, None
 
         draw_region = [min(era5_lats), max(era5_lats),
                        min(era5_lons), max(era5_lons)]
@@ -1633,12 +1646,18 @@ class TCComparer(object):
                 utils.get_xyz_matrix_of_smap_windspd_or_diff_mins(
                     'windspd', smap_file_path, tc.date_time, draw_region)
 
+        smap_lons, smap_lats, diff_mins = \
+                utils.get_xyz_matrix_of_smap_windspd_or_diff_mins(
+                    'diff_mins', smap_file_path, tc.date_time,
+                    draw_region)
+
         if (windspd is None
             or not utils.satel_data_cover_tc_center(
                 lons, lats, windspd, tc)):
-            return False, None, None, None, None
+            return False, None, None, None, None, None
         else:
-            return True, lons, lats, windspd, utils.if_mesh(lons)
+            return True, lons, lats, windspd, utils.if_mesh(lons), \
+                    diff_mins
 
     def get_ccmp_xyz_matrix(self, tc):
         ccmp_manager = ccmp.CCMPManager(self.CONFIG, self.period,
@@ -1667,7 +1686,7 @@ class TCComparer(object):
                                         vars_mode='')
         rounded_dt = utils.hour_rounder(tc.date_time)
         if rounded_dt.day != tc.date_time.day:
-            return False, None, None, None, None
+            return False, None, None, None, None, None
 
         # North, West, South, East,
         area = [max(era5_lats), min(era5_lons),
@@ -1678,11 +1697,12 @@ class TCComparer(object):
         match_satel = None
         for src in self.sources:
             for satel_name in self.CONFIG['satel_names']:
-                if src.startswith(src):
+                if src.startswith(satel_name):
                     match_satel = src
                     break
         if match_satel is None:
-            return False, None, None, None, None
+            match_satel = 'era5'
+            # return False, None, None, None, None
 
         era5_file_path = era5_manager.download_single_levels_vars(
             'surface_wind', tc.date_time, '', [rounded_dt.hour], area,
@@ -1691,4 +1711,4 @@ class TCComparer(object):
         lons, lats, windspd = utils.get_xyz_matrix_of_era5_windspd(
             era5_file_path, 'single_levels', tc.date_time, draw_region)
 
-        return True, lons, lats, windspd, utils.if_mesh(lons)
+        return True, lons, lats, windspd, utils.if_mesh(lons), None

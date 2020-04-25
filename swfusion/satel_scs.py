@@ -824,7 +824,8 @@ class SCSSatelManager(object):
         """Download ASCAT/QucikSCAT/Windsat data on specified date.
 
         """
-        self.logger.debug(f'Downloading {satel_name} data on {satel_date}')
+        self.logger.debug((f"""Downloading {satel_name} data on """
+                           f"""{satel_date}"""))
 
         data_url = config['urls']
         file_prefix = config['data_prefix']

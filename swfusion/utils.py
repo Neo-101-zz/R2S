@@ -2299,7 +2299,8 @@ def get_pixel_of_era5_windspd(era5_file_path, product_type, dt,
 
     return windspd
 
-def get_xyz_matrix_of_era5_windspd(era5_file_path, product_type, dt, region):
+def get_xyz_matrix_of_era5_windspd(era5_file_path, product_type,
+                                   dt, region):
     grbidx = pygrib.index(era5_file_path, 'dataTime')
     hourtime = dt.hour * 100
     selected_grbs = grbidx.select(dataTime=hourtime)
@@ -2322,6 +2323,7 @@ def get_xyz_matrix_of_era5_windspd(era5_file_path, product_type, dt, region):
         data = np.flip(data, 0)
         lats = np.flip(lats, 0)
         lons = np.flip(lons, 0)
+
 
         if name == u_wind_var_name:
             u_wind = data
@@ -3074,7 +3076,7 @@ def interp_satel_era5_diff_mins_matrix(diff_mins):
 
 def validate_with_sfmr(tgt_name, tc_dt, sfmr_dts, sfmr_lons,
                        sfmr_lats, sfmr_windspd, tgt_lons, tgt_lats,
-                       tgt_windspd, tgt_mesh):
+                       tgt_windspd, tgt_mesh, tgt_diff_mins):
     """'tgt' is the abbreviation for word 'target'.
 
     """
@@ -3152,19 +3154,27 @@ def validate_with_sfmr(tgt_name, tc_dt, sfmr_dts, sfmr_lons,
                 min_dis_lon = tgt_lons[min_dis_lon_idx]
             min_dis_windspd = tgt_windspd[min_dis_lat_idx][
                 min_dis_lon_idx]
+            if tgt_name != 'smap':
+                min_dis_dt = tc_dt
+            else:
+                min_dis_dt = tc_dt + datetime.timedelta(
+                    seconds=60*int(tgt_diff_mins[min_dis_lat_idx][
+                        min_dis_lon_idx])
+                )
+
 
             tb_tgt_names.append(tgt_name)
             tb_sfmr_dts.append(sfmr_dts[t][i])
             tb_sfmr_lons.append(base_lon)
             tb_sfmr_lats.append(base_lat)
             tb_sfmr_windspd.append(sfmr_windspd[t][i])
-            tb_tgt_dts.append(tc_dt)
+            tb_tgt_dts.append(min_dis_dt)
             tb_tgt_lons.append(min_dis_lon)
             tb_tgt_lats.append(min_dis_lat)
             tb_tgt_windspd.append(min_dis_windspd)
 
             # Temporal distance in minutes
-            temporal_dis = tc_dt - sfmr_dts[t][i]
+            temporal_dis = min_dis_dt - sfmr_dts[t][i]
             tb_dis_minutes.append(temporal_dis.days * 24 * 60
                                   + temporal_dis.seconds / 60)
             # Spatial distance in kilo meters

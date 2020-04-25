@@ -27,13 +27,16 @@ import ccmp
 import compare_tc
 import match_era5_smap
 import validate
+import statistic_ibtracs as sta_ibtracs
+import statistic_era5_smap_sfmr as sta_era5_smap
 
 unixOptions = 'p:r:eg:c:siv:k'
 # gnuOptions = ['extract', 'reg-dnn', 'reg-xgb', 'reg-dt',
 #               'reg-hist', 'reg-normalization', 'compare',
 #               'sfmr', 'ibtracs-wp', 'ibtracs-na']
 gnuOptions = ['period=', 'region=', 'basin=', 'extract', 'reg=',
-              'compare=', 'sfmr', 'ibtracs', 'validate=', 'check']
+              'compare=', 'sfmr', 'ibtracs', 'validate=', 'check',
+              'sta_ibtracs', 'sta_era5_smap']
 
 def work_flow():
     """The work flow of blending several TC OSW.
@@ -54,7 +57,7 @@ def work_flow():
     argument_list = full_cmd_arguments[1:]
 
     try:
-        arguments, values = getopt.getopt(argument_list, unixOptions,
+        arguments, values = getopt.getopt(argument_list, '',
                                           gnuOptions)
     except getopt.error as err:
         # output error, and return with an error code
@@ -75,6 +78,8 @@ def work_flow():
     ibtracs_instructions = None
     do_validation = False
     do_check = False
+    do_sta_ibtracs = False
+    do_sta_era5_smap = False
     # evaluate given options
     for current_argument, current_value in arguments:
         if current_argument in ('-p', '--period'):
@@ -113,6 +118,10 @@ def work_flow():
             validate_instructions = current_value
         elif current_argument in ('-k', '--check'):
             do_check = True
+        elif current_argument in ('--sta_ibtracs'):
+            do_sta_ibtracs = True
+        elif current_argument in ('--sta_era5_smap'):
+            do_sta_era5_smap = True
 
     if not specify_basin:
         logger.error('Must specify basin')
@@ -148,6 +157,10 @@ def work_flow():
     passwd = '399710'
     # Download and read
     try:
+        if do_sta_era5_smap:
+            sta_era5_smap.Statisticer(CONFIG, period, basin)
+        if do_sta_ibtracs:
+            sta_ibtracs.Statisticer(CONFIG, period, basin, passwd)
         if do_check:
             checker.Checker(CONFIG)
         if do_validation:

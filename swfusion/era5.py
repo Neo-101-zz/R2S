@@ -249,7 +249,7 @@ class ERA5Manager(object):
         elif vars_mode == 'surface_wind':
             file_dir = (
                 f"""{era5_dirs["10_metre_equivalent_neutral_wind"]}"""
-                f"""/{match_satel}/"""
+                f"""{match_satel}/"""
                 f"""Y{target_datetime.year}/"""
                 f"""M{str(target_datetime.month).zfill(2)}/"""
             )

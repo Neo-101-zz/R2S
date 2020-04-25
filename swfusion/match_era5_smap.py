@@ -582,8 +582,10 @@ class matchManager(object):
                     square_lons = lons[lat1_idx:lat2_idx+1,
                                        lon1_idx:lon2_idx+1]
 
+                    # ERA5 atmospheric variable
                     if grb_spa_resolu == 0.25:
                         value = float(square_data.mean())
+                    # ERA5 oceanic variable
                     else:
                         value = self.value_of_rss_pt_in_era5_square(
                             square_data, square_lats, square_lons,
