@@ -356,11 +356,11 @@ class Regression(object):
         }
 
         # Initilize instance of estimator
-        est = lgbm.LGBMRegressor(boosting_type='gbdt', n_jobs=-1,
+        est = lgbm.LGBMRegressor(boosting_type='dart', n_jobs=-1,
                                  random_state=2018)
 
         # Objective minizmied
-        hyperopt_objective = lambda params: self.evaluate(
+        hyperopt_objective = lambda params: (-1.0) * self.evaluate(
             est, params, self.X_train, self.y_train)
 
         # Trail
@@ -389,6 +389,11 @@ class Regression(object):
         tdiff = (trials.trials[-1]['book_time']
                  - trials.trials[0]['book_time'])
         print("ELAPSED TIME (MINUTE): " + str(tdiff.total_seconds() / 60))
+
+        choices = best_params['choices']
+        best_params['learning_rate'] = choices['learning_rate']
+        best_params['n_estimators'] = choices['n_estimators']
+        del best_params['choices']
 
         # Set params
         est.set_params(**best_params)
