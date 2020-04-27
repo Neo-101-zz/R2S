@@ -29,6 +29,7 @@ import match_era5_smap
 import validate
 import statistic_ibtracs as sta_ibtracs
 import statistic_era5_smap_sfmr as sta_era5_smap
+import smart_compare
 
 unixOptions = 'p:r:eg:c:siv:k'
 # gnuOptions = ['extract', 'reg-dnn', 'reg-xgb', 'reg-dt',
@@ -36,7 +37,7 @@ unixOptions = 'p:r:eg:c:siv:k'
 #               'sfmr', 'ibtracs-wp', 'ibtracs-na']
 gnuOptions = ['period=', 'region=', 'basin=', 'extract', 'reg=',
               'compare=', 'sfmr', 'ibtracs', 'validate=', 'check',
-              'sta_ibtracs', 'sta_era5_smap']
+              'sta_ibtracs', 'sta_era5_smap', 'smart_compare']
 
 def work_flow():
     """The work flow of blending several TC OSW.
@@ -80,6 +81,7 @@ def work_flow():
     do_check = False
     do_sta_ibtracs = False
     do_sta_era5_smap = False
+    do_smart_compare = False
     # evaluate given options
     for current_argument, current_value in arguments:
         if current_argument in ('-p', '--period'):
@@ -122,6 +124,8 @@ def work_flow():
             do_sta_ibtracs = True
         elif current_argument in ('--sta_era5_smap'):
             do_sta_era5_smap = True
+        elif current_argument in ('--smart_compare'):
+            do_smart_compare = True
 
     if not specify_basin:
         logger.error('Must specify basin')
@@ -157,6 +161,8 @@ def work_flow():
     passwd = '399710'
     # Download and read
     try:
+        if do_smart_compare:
+            smart_compare.SmartComparer(CONFIG, period, basin)
         if do_sta_era5_smap:
             sta_era5_smap.Statisticer(CONFIG, period, basin)
         if do_sta_ibtracs:
