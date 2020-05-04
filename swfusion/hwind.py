@@ -146,9 +146,9 @@ class HWindManager(object):
         url_prefix = self.CONFIG['hwind']['data_url_prefix']
         for a in anchors:
             href = a.get("href")
-            file_name = href.split('/')[-1]
+            filename = href.split('/')[-1]
             file_url = f'{url_prefix}{href}'
-            file_path = f'{tc_dir}{file_name}'
+            file_path = f'{tc_dir}{filename}'
 
             if not utils.check_period(self._get_dt_of_hwind_file(href),
                                       self.period):
@@ -268,14 +268,14 @@ class HWindManager(object):
             exit(msg + ': ' + data_path)
 
         data_name = data_path.split('/')[-1]
-        temp_file_name = data_name[0:-3]
-        with open(temp_file_name, 'wb') as txt:
+        temp_filename = data_name[0:-3]
+        with open(temp_filename, 'wb') as txt:
             txt.write(hwind_text)
 
         # Example: 'STORM CENTER LOCALE IS -95.3800 EAST LONGITUDE '
         # 'and  28.7490 NORTH LATITUDE ... STORM CENTER IS AT (X,Y)=(0,0)\n'
-        line = linecache.getline(temp_file_name, 3)
-        os.remove(temp_file_name)
+        line = linecache.getline(temp_filename, 3)
+        os.remove(temp_filename)
 
         if 'EAST LONGITUDE' not in line or 'NORTH LATITUDE' not in line:
             self.logger.error((f'Find HWind gridded file whose center '
@@ -290,8 +290,8 @@ class HWindManager(object):
         return lon, lat, x, y
 
     def _get_dt_of_hwind_file(self, gridded_file):
-        file_name = gridded_file.split('/')[-1]
-        datetime_str = file_name[4:18]
+        filename = gridded_file.split('/')[-1]
+        datetime_str = filename[4:18]
         try:
             dt = datetime.datetime.strptime(datetime_str, '%Y_%m%d_%H%M')
         except Exception as msg:
@@ -312,13 +312,13 @@ class HWindManager(object):
             exit(msg + ': ' + data_path)
 
         data_name = data_path.split('/')[-1]
-        temp_file_name = data_name[0:-3]
-        with open(temp_file_name, 'wb') as txt:
+        temp_filename = data_name[0:-3]
+        with open(temp_filename, 'wb') as txt:
             txt.write(hwind_text)
 
-        with open(temp_file_name, 'r') as file:
+        with open(temp_filename, 'r') as file:
             line_list = file.readlines()
-        os.remove(temp_file_name)
+        os.remove(temp_filename)
 
         # Sometimes there are scientific number in the lines
         num_pattern = re.compile('-?\ *[0-9]+\.?[0-9]*(?:[Ee]\ *-?\ *[0-9]+)?')

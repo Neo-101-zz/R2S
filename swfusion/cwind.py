@@ -254,11 +254,11 @@ class CwindManager(object):
         all_stations = []
         total = len(station_files)
         count = 0
-        for file_name in station_files:
+        for filename in station_files:
             count += 1
-            station_info_path = station_info_dir + file_name
+            station_info_path = station_info_dir + filename
 
-            info = f'Extracting station information from {file_name}'
+            info = f'Extracting station information from {filename}'
             print((f'\r{info} ({count}/{total})'), end='')
 
             start = time.process_time()
@@ -292,8 +292,8 @@ class CwindManager(object):
         except EOFError as msg:
             exit(msg + ': ' + data_path)
 
-        temp_file_name = data_name[0:-3]
-        with open(temp_file_name, 'wb') as txt:
+        temp_filename = data_name[0:-3]
+        with open(temp_filename, 'wb') as txt:
             txt.write(cwind_text)
         # Specify data type of columns of unzipped gzip file
         data_type = {'names': ('year', 'month', 'day', 'hour',
@@ -301,9 +301,9 @@ class CwindManager(object):
                                'gdr', 'gst', 'gtime'),
                      'formats': ('i4', 'i2', 'i2', 'i2', 'i2',
                                  'f4', 'f4', 'f4', 'f4', 'i4')}
-        data = np.genfromtxt(temp_file_name, skip_header=1,
+        data = np.genfromtxt(temp_filename, skip_header=1,
                              invalid_raise=False, dtype=data_type)
-        os.remove(temp_file_name)
+        os.remove(temp_filename)
 
         # Store Continuous Wind Data in an entire year into a list
         cwind_1_year = []
@@ -652,8 +652,8 @@ class CwindManager(object):
         """
         url = self.CWIND_CONFIG['urls']['stations']
         save_dir = self.CWIND_CONFIG['dirs']['stations']
-        file_name = station + '.txt'
-        file_path = save_dir + file_name
+        filename = station + '.txt'
+        file_path = save_dir + filename
 
         if os.path.exists(file_path):
             return True
@@ -686,8 +686,8 @@ class CwindManager(object):
         save_dir = self.CWIND_CONFIG['dirs']['data']
         data_url = self.CWIND_CONFIG['urls']['data']
         os.makedirs(save_dir, exist_ok=True)
-        file_name = '{0}c{1}.txt.gz'.format(station, year)
-        file_path = '{0}{1}'.format(save_dir, file_name)
-        file_url = '{0}{1}'.format(data_url, file_name)
+        filename = '{0}c{1}.txt.gz'.format(station, year)
+        file_path = '{0}{1}'.format(save_dir, filename)
+        file_url = '{0}{1}'.format(data_url, filename)
 
         utils.download(file_url, file_path)

@@ -6,6 +6,14 @@ statistic:
   table_name: 'isd_based_comparsion'
 product:
   temporal_resolution: 600
+satel_data_sources:
+  rss:
+    - 'ascat'
+    - 'wsat'
+    - 'amsr2'
+    - 'smap'
+  other:
+    - 'sentinel_1'
 satel_names:
   - 'ascat'
   - 'wsat'
@@ -102,7 +110,9 @@ ibtracs:
     global_since_1980: 'ibtracs_global'
     statistic:
       moving_speed:
-        na: 'ibtracs_moving_speed'
+        na: 'ibtracs_moving_speed_na'
+      intensity_change:
+        na: 'ibtracs_intensity_change_na'
   urls:
     wp: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.WP.v04r00.nc'
     na: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.NA.v04r00.nc'
@@ -110,14 +120,23 @@ ibtracs:
   dirs: '../data/ibtracs/'
   data_name_length: 22
 rss:
-  subset_edge_in_degree: 12
   spatial_resolution: 0.25
   passes_number: 2
   lat_grid_points_number: 720
   lon_grid_points_number: 1440
   missing_value: -999.0
+merra2:
+  spatial_resolution:
+    lon: 0.625
+    lat: 0.5
+  urls:
+    head: 'https://goldsmr4.gesdisc.eosdis.nasa.gov/daac-bin/OTF/HTTP_services.cgi?FILENAME=%2Fdata%2FMERRA2%2FM2T1NXFLX.5.12.4'
+    surface_wind_tail: '&SHORTNAME=M2T1NXFLX&SERVICE=SUBSET_MERRA2&VERSION=1.02&DATASET_VERSION=5.12.4&VARIABLES=SPEED%2CSPEEDMAX%2CULML%2CVLML'
+  filenames:
+    prefix: 'MERRA2_400.tavg1_2d_flx_Nx.'
+  dirs:
+    surface_wind: '../data/merra2/surface_wind/'
 era5:
-  subset_edge_in_degree: 12
   spatial_resolution: 0.25
   ocean_spatial_resolution: 0.5
   lat_grid_points_number: 721
@@ -405,6 +424,22 @@ cwind:
       fail_download_cwind_station: |-
         Fail downloading infromation of cwind station: 
 sfmr:
+  error_files:
+    - 'NOAA_SFMR20140805I1.nc'
+  files_with_wrong_name:
+    'ftp://ftp.aoml.noaa.gov/pub/hrd/data/sfmr/2006/Ernesto/20060831H1.nc': 'NOAA_SFMR20060831H1.nc'
+  possible_names:
+    - 'SFMR'
+    - 'SFRM'
+    - 'SMFR'
+    - 'SMRF'
+    - 'SRMF'
+    - 'SRFM'
+    - 'SFM'
+    - 'SMR'
+    - 'SMR'
+    - 'SRF'
+    - 'SRM'
   masked_value:
     custom: -999
   urls:
@@ -418,7 +453,6 @@ sfmr:
   dirs:
     vars: '../data/sfmr/variable/'
     hurr: '../data/sfmr/hurr_data/'
-    brief_info: '../data/sfmr/brief_info/'
   table_names:
     prefix: 'sfmr_'
     brief_info: 'hurr_sfmr_brief_info'
@@ -671,7 +705,7 @@ regression:
       - 'key'
       - 'sid'
       - 'satel_datetime'
-      # - 'era5_datetime'
+      - 'era5_datetime'
       - 'satel_datetime_lon_lat'
       - 'smap_u_wind'
       - 'smap_v_wind'

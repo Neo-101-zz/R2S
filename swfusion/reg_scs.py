@@ -51,7 +51,7 @@ class NewReg(object):
 
         self.useless_columns = self.CONFIG['regression']\
                 ['useless_columns']
-        self.edge = self.CONFIG['era5']['subset_edge_in_degree']
+        self.edge = self.CONFIG['regression']['edge_in_degree']
         self.spa_resolu = self.CONFIG['era5']['spatial_resolution']
         self.lat_grid_points = [y * self.spa_resolu - 90 for y in range(
             self.CONFIG['era5']['lat_grid_points_number'])]
@@ -269,18 +269,18 @@ class NewReg(object):
             print(f'{metrics_names[i]}: {score[i]}')
 
     def find_best_weights_file(self, col_name):
-        file_names = [f for f in os.listdir(self.checkpoint_dir[col_name])
+        filenames = [f for f in os.listdir(self.checkpoint_dir[col_name])
                       if f.endswith('.hdf5')]
         max_epoch = -1
-        best_weights_file_name = None
+        best_weights_filename = None
 
-        for file in file_names:
+        for file in filenames:
             epoch = int(file.split('-')[1])
             if epoch > max_epoch:
                 max_epoch = epoch
-                best_weights_file_name = file
+                best_weights_filename = file
 
-        return f'{self.checkpoint_dir[col_name]}{best_weights_file_name}'
+        return f'{self.checkpoint_dir[col_name]}{best_weights_filename}'
 
     def make_satel_DNNs(self, satel_name):
         self.NN_model = dict()

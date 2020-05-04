@@ -30,14 +30,17 @@ import validate
 import statistic_ibtracs as sta_ibtracs
 import statistic_era5_smap_sfmr as sta_era5_smap
 import smart_compare
+import merra2
+import match_era5_sfmr
 
 unixOptions = 'p:r:eg:c:siv:k'
-# gnuOptions = ['extract', 'reg-dnn', 'reg-xgb', 'reg-dt',
+# gnuOptions = ['match_smap', 'reg-dnn', 'reg-xgb', 'reg-dt',
 #               'reg-hist', 'reg-normalization', 'compare',
 #               'sfmr', 'ibtracs-wp', 'ibtracs-na']
-gnuOptions = ['period=', 'region=', 'basin=', 'extract', 'reg=',
+gnuOptions = ['period=', 'region=', 'basin=', 'match_smap', 'reg=',
               'compare=', 'sfmr', 'ibtracs', 'validate=', 'check',
-              'sta_ibtracs', 'sta_era5_smap', 'smart_compare']
+              'sta_ibtracs', 'sta_era5_smap=', 'smart_compare',
+              'merra2', 'match_sfmr']
 
 def work_flow():
     """The work flow of blending several TC OSW.
@@ -69,7 +72,7 @@ def work_flow():
     input_custom_region = False
     specify_basin = False
     basin = None
-    do_extract = False
+    do_match_smap = False
     do_regression = False
     reg_instructions = None
     do_compare = False
@@ -82,6 +85,8 @@ def work_flow():
     do_sta_ibtracs = False
     do_sta_era5_smap = False
     do_smart_compare = False
+    do_merra2 = False
+    do_match_sfmr = False
     # evaluate given options
     for current_argument, current_value in arguments:
         if current_argument in ('-p', '--period'):
@@ -103,8 +108,8 @@ def work_flow():
                 logger.error((f"""Inputted basin is wrong: """
                               f"""must 1 parameters"""))
             basin = basin_parts[0]
-        elif current_argument in ('-e', '--extract'):
-            do_extract = True
+        elif current_argument in ('-e', '--match_smap'):
+            do_match_smap = True
         elif current_argument in ('-g', '--reg'):
             do_regression = True
             reg_instructions = current_value.split(',')
@@ -124,8 +129,13 @@ def work_flow():
             do_sta_ibtracs = True
         elif current_argument in ('--sta_era5_smap'):
             do_sta_era5_smap = True
+            sources = current_value.split(',')
         elif current_argument in ('--smart_compare'):
             do_smart_compare = True
+        elif current_argument in ('--merra2'):
+            do_merra2 = True
+        elif current_argument in ('--match_sfmr'):
+            do_match_sfmr = True
 
     if not specify_basin:
         logger.error('Must specify basin')
@@ -161,10 +171,15 @@ def work_flow():
     passwd = '399710'
     # Download and read
     try:
+        if do_match_sfmr:
+            match_era5_sfmr.matchManager(CONFIG, period, region, basin,
+                                         passwd, False)
+        if do_merra2:
+            merra2.MERRA2Manager(CONFIG, period, False)
         if do_smart_compare:
-            smart_compare.SmartComparer(CONFIG, period, basin)
+            smart_compare.SmartComparer(CONFIG, period, basin, passwd)
         if do_sta_era5_smap:
-            sta_era5_smap.Statisticer(CONFIG, period, basin)
+            sta_era5_smap.Statisticer(CONFIG, period, basin, sources)
         if do_sta_ibtracs:
             sta_ibtracs.Statisticer(CONFIG, period, basin, passwd)
         if do_check:
@@ -172,7 +187,7 @@ def work_flow():
         if do_validation:
             validate.ValidationManager(CONFIG, period, basin,
                                        validate_instructions)
-        if do_extract:
+        if do_match_smap:
             match_era5_smap.matchManager(
                 CONFIG, period, region, basin, passwd, False)
         if do_regression:

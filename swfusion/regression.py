@@ -136,7 +136,7 @@ class Regression(object):
         self.era5_useless_columns = [
             'key', 'x_y'
         ]
-        self.edge = self.CONFIG['era5']['subset_edge_in_degree']
+        self.edge = self.CONFIG['regression']['edge_in_degree']
         self.spa_resolu = self.CONFIG['era5']['spatial_resolution']
         self.lat_grid_points = [y * self.spa_resolu - 90 for y in range(
             self.CONFIG['era5']['lat_grid_points_number'])]
@@ -170,6 +170,7 @@ class Regression(object):
             self.xgb_regressor()
             # self.xgb_importance()
         if 'lgbm' in self.instructions:
+            # self.lgbm_hyperoptimization()
             self.lgbm_regressor()
         if 'dnn' in self.instructions:
             self.deep_neural_network()
@@ -332,7 +333,42 @@ class Regression(object):
         return score
 
     def lgbm_regressor(self):
-        self.logger.info((f"""Regressing with lightgbm regressor"""))
+        self.logger.info((f"""Regress by lightgbm regressor"""))
+
+        # Hyper parameters verified after hyperoptimization
+        best_params = {
+            'boosting_type': 'gbdt',
+            'num_leaves': 255,
+            'max_depth': -1,
+            'learning_rate': 0.1,
+            'n_estimators': 2524,
+            'subsample': 0.874140028391694,
+            'colsample_bytree': 0.8732644854988912,
+            'n_jobs': -1,
+        }
+
+        est = lgbm.LGBMRegressor()
+        # Set params
+        est.set_params(**best_params)
+
+        # Fit
+        est.fit(self.X_train, self.y_train)
+        y_pred = est.predict(self.X_test)
+
+        # Predict
+        y_test = self.y_test.to_numpy()
+        mse = mean_squared_error(y_test, y_pred)
+        print("MSE SCORE ON TEST DATA: {}".format(mse))
+        print("RMSE SCORE ON TEST DATA: {}".format(math.sqrt(mse)))
+
+        # save model to file
+        pickle.dump(est, open((
+            f"""{self.model_dir["lgbm"]}"""
+            f"""{self.basin}_mse_{mse}.pickle.dat"""),
+            'wb'))
+
+    def lgbm_hyperoptimization(self):
+        self.logger.info((f"""Hyperoptimize lightgbm regressor"""))
 
         column_names = ['estimators_num', 'mse']
         all_tests = []
@@ -344,19 +380,19 @@ class Regression(object):
             'choices': hp.choice('choices', [
                 {'learning_rate': 0.01,
                  'n_estimators': hp.randint(
-                     'n_estimators_small_lr', 1500)},
+                     'n_estimators_small_lr', 2000)},
                 {'learning_rate': 0.1,
                  'n_estimators': 1000 + hp.randint(
-                     'n_estimators_medium_lr', 1500)}
+                     'n_estimators_medium_lr', 2000)}
                 ]),
-            'max_depth':  hp.choice('max_depth', [4, 5, 8, -1]),
-            'num_leaves': hp.choice('num_leaves', [15, 31, 63, 127]),
+            'max_depth':  hp.choice('max_depth', [7, 8, 9, -1]),
+            'num_leaves': hp.choice('num_leaves', [127, 255, 511]),
             'subsample': hp.uniform('subsample', 0.6, 1.0),
             'colsample_bytree': hp.uniform('colsample_bytree', 0.6, 1.0)
         }
 
         # Initilize instance of estimator
-        est = lgbm.LGBMRegressor(boosting_type='dart', n_jobs=-1,
+        est = lgbm.LGBMRegressor(boosting_type='gbdt', n_jobs=-1,
                                  random_state=2018)
 
         # Objective minizmied

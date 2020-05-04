@@ -50,7 +50,7 @@ class SFMRDetail(Base):
 
     key = Column(Integer, primary_key=True)
     hurr_name = Column(String(length=20), nullable=False)
-    file_name = Column(String(30), nullable=False, unique=True)
+    filename = Column(String(30), nullable=False, unique=True)
     file_url = Column(String(255), nullable=False)
     start_datetime = Column(DateTime, nullable=False)
     end_datetime = Column(DateTime, nullable=False)
@@ -75,7 +75,8 @@ class SfmrManager(object):
 
         self.years = [x for x in range(self.period[0].year,
                                        self.period[1].year+1)]
-        self.get_all_hurricanes_brief_info()
+        brief_info = self.get_all_hurricanes_brief_info()
+        self.download_and_update_by_brief_info(brief_info)
 
         return
 
@@ -122,16 +123,16 @@ class SfmrManager(object):
                 spec_data_dir = '{0}{1}/{2}/'.format(
                     data_root_dir, year, hurr)
                 try:
-                    file_names = [f for f in os.listdir(spec_data_dir)
+                    filenames = [f for f in os.listdir(spec_data_dir)
                                   if f.endswith('.nc')]
                 except FileNotFoundError:
                     continue
-                if not len(file_names):
+                if not len(filenames):
                     continue
 
                 start_date = datetime.date(9999, 12, 31)
                 end_date = datetime.date(1, 1, 1)
-                for file in file_names:
+                for file in filenames:
                     date_ = datetime.datetime.strptime(
                         file.split('SFMR')[1][:8]+'000000',
                         '%Y%m%d%H%M%S').date()
@@ -178,16 +179,16 @@ class SfmrManager(object):
                 spec_data_dir = '{0}{1}/{2}/'.format(
                     data_root_dir, year, hurr)
                 try:
-                    file_names = [f for f in os.listdir(spec_data_dir)
+                    filenames = [f for f in os.listdir(spec_data_dir)
                                   if f.endswith('.nc')]
                 except FileNotFoundError:
                     pass
-                if not len(file_names):
+                if not len(filenames):
                     continue
 
                 self.year_hurr_file_path[year][hurr] = []
 
-                for file in file_names:
+                for file in filenames:
                     date_ = datetime.datetime.strptime(
                         file.split('SFMR')[1][:8]+'000000',
                         '%Y%m%d%H%M%S').date()
@@ -383,8 +384,8 @@ class SfmrManager(object):
                     # Find href of netcdf file
                     if href.endswith(suffix):
                         # Extract file name
-                        file_name = href.split('/')[-1]
-                        tail_half = file_name.split('SFMR')[1]
+                        filename = href.split('/')[-1]
+                        tail_half = filename.split('SFMR')[1]
                         try:
                             # There may be NetCDF name format
                             # like 'USAF_SFMR0809221638.nc'
@@ -411,15 +412,15 @@ class SfmrManager(object):
                                     int(f'20{date_str[:2]}'),
                                     int(date_str[2:4]),
                                     int(date_str[4:]))
-                                file_name = (
-                                    f'{file_name.split("SFMR")[0]}SFMR20'
-                                    + f'{file_name.split("SFMR")[1]}')
+                                filename = (
+                                    f'{filename.split("SFMR")[0]}SFMR20'
+                                    + f'{filename.split("SFMR")[1]}')
                         except Exception as msg:
                             breakpoint()
                             exit(msg)
                         if not utils.check_period(date_, self.period):
                             continue
-                        file_path = dir_path + file_name
+                        file_path = dir_path + filename
 
                         utils.download(href, file_path)
 
@@ -428,24 +429,29 @@ class SfmrManager(object):
 
     def get_all_hurricanes_brief_info(self):
         # Get dates of SFMR data of hurricanes during period
-        # brief_info = self.gen_sfmr_brief_info()
+        brief_info = self.gen_sfmr_brief_info()
+        return brief_info
         # if brief_info is None:
         #     return False
 
-        pickle_dir = self.SFMR_CONFIG['dirs']['brief_info']
-        os.makedirs(pickle_dir, exist_ok=True)
-        pickle_path = f'{pickle_dir}brief_info.pkl'
+        # pickle_dir = self.SFMR_CONFIG['dirs']['brief_info']
+        # os.makedirs(pickle_dir, exist_ok=True)
+        # pickle_path = f'{pickle_dir}brief_info.pkl'
         # with open(pickle_path, 'wb') as f:
         #     pickle.dump(brief_info, f)
 
-        with open(pickle_path, 'rb') as f:
-            brief_info = pickle.load(f)
+    def download_and_update_by_brief_info(self, brief_info):
+        # pickle_dir = self.SFMR_CONFIG['dirs']['brief_info']
+        # pickle_path = f'{pickle_dir}brief_info.pkl'
+
+        # with open(pickle_path, 'rb') as f:
+        #     brief_info = pickle.load(f)
 
         # Download all SFMR files during period
-        # utils.setup_signal_handler()
-        # utils.set_format_custom_text(
-        #     self.SFMR_CONFIG['data_name_length'])
-        # self.download_with_brief_info(brief_info)
+        utils.setup_signal_handler()
+        utils.set_format_custom_text(
+            self.SFMR_CONFIG['data_name_length'])
+        self.download_with_brief_info(brief_info)
 
         # Read all of them to update brief information
         utils.reset_signal_handler()
@@ -462,7 +468,7 @@ class SfmrManager(object):
         utils.bulk_insert_avoid_duplicate_unique(
             brief_info_list,
             self.CONFIG['database']['batch_size']['insert'],
-            SFMRDetail, ['file_name'], self.session, check_self=True)
+            SFMRDetail, ['filename'], self.session, check_self=True)
 
         self.brief_info = brief_info
 
@@ -481,7 +487,8 @@ class SfmrManager(object):
                 print(f'\r{count}/{files_num_in_the_year} in {year}',
                       end='')
                 file_dir = f'{root_dir}{year}/{info.hurr_name}/'
-                file_path = f'{file_dir}{info.file_name}'
+                file_path = f'{file_dir}{info.filename}'
+
                 updated_info = self.update_single_info_with_nc_file(
                     info, file_path)
                 brief_info[year][idx] = updated_info
@@ -543,7 +550,8 @@ class SfmrManager(object):
 
                 most_masked_var_index = lengths.index(min(lengths))
                 most_masked_var_name = vars_name[most_masked_var_index]
-                most_masked_indices = masked_indices[most_masked_var_name]
+                most_masked_indices = masked_indices[
+                    most_masked_var_name]
                 most_masked_include_others = True
 
                 breakpoint()
@@ -551,8 +559,8 @@ class SfmrManager(object):
                 for idx, name in enumerate(vars_name):
                     if idx == most_masked_var_index:
                         continue
-                    # Check if most_masked_indices include other variables'
-                    # indices of masked elements
+                    # Check if most_masked_indices include otheri
+                    # variables' indices of masked elements
                     flag = set(masked_indices[name]).issubset(
                         set(most_masked_indices))
                     if not flag:
@@ -562,9 +570,10 @@ class SfmrManager(object):
                 breakpoint()
 
                 if not most_masked_include_others:
-                    self.logger.error((f"""Selected variables are not as """
-                                       f"""many as each other after """
-                                       f"""filtering: {file_path}"""))
+                    self.logger.error((
+                        f"""Selected variables are not as """
+                        f"""many as each other after """
+                        f"""filtering: {file_path}"""))
                     breakpoint()
                     exit()
                 else:
@@ -610,6 +619,8 @@ class SfmrManager(object):
         root_dir = self.SFMR_CONFIG['dirs']['hurr']
 
         for year in brief_info:
+            if year < self.period[0].year or year > self.period[1].year:
+                continue
             files_num_in_the_year = len(brief_info[year])
             count = 0
 
@@ -619,7 +630,7 @@ class SfmrManager(object):
                       end='')
                 file_dir = f'{root_dir}{year}/{info.hurr_name}/'
                 os.makedirs(file_dir, exist_ok=True)
-                file_path = f'{file_dir}{info.file_name}'
+                file_path = f'{file_dir}{info.filename}'
                 file_url = info.file_url
 
                 utils.download(file_url, file_path, True)
@@ -713,8 +724,10 @@ class SfmrManager(object):
                             href = link.get('href')
 
                             one_hurricane_brief_info = \
-                                    self.get_one_hurricane_brief_info(href)
-                            one_year_brief_info += one_hurricane_brief_info
+                                    self.get_one_hurricane_brief_info(
+                                        href)
+                            one_year_brief_info += \
+                                    one_hurricane_brief_info
 
         return one_year_brief_info
 
@@ -731,14 +744,33 @@ class SfmrManager(object):
             breakpoint()
             exit(msg)
 
+        possible_names = self.SFMR_CONFIG['possible_names']
+        error_files = self.SFMR_CONFIG['error_files']
+        wrong_name_correction = self.SFMR_CONFIG['files_with_wrong_name']
+
         for link in anchors:
             href = link.get('href')
             # Find href of netcdf file
             if href.endswith(filename_suffix):
-                # Extract file name
-                file_name = href.split('/')[-1]
-                tail_half = file_name.split('SFMR')[1]
                 try:
+                    split_name = None
+                    # Extract file name
+                    filename = href.split('/')[-1]
+                    if filename in error_files:
+                        self.logger.warning(
+                            f'[Skip] Error file {href}')
+                        continue
+                    if href in wrong_name_correction.keys():
+                        filename = wrong_name_correction[href]
+                        self.logger.warning(
+                            f"""[Correct] wrong name from """
+                            f"""{href.split('/')[-1]} to {filename}""")
+
+                    for name in possible_names:
+                        if name in filename:
+                            tail_half = filename.split(name)[1]
+                            split_name = name
+                            break
                     # There may be NetCDF name format
                     # like 'USAF_SFMR0809221638.nc'
                     # from 'https://www.aoml.noaa.gov/hrd'
@@ -764,9 +796,10 @@ class SfmrManager(object):
                             int(f'20{date_str[:2]}'),
                             int(date_str[2:4]),
                             int(date_str[4:]))
-                        file_name = (
-                            f'{file_name.split("SFMR")[0]}SFMR20'
-                            + f'{file_name.split("SFMR")[1]}')
+                        filename = (
+                            f"""{filename.split(split_name)[0]}"""
+                            f"""{split_name}20"""
+                            f"""{filename.split(split_name)[1]}""")
                 except Exception as msg:
                     breakpoint()
                     exit(msg)
@@ -776,7 +809,7 @@ class SfmrManager(object):
                 info = SFMRDetail()
 
                 info.hurr_name = hurricane_sfmr_url.split('/')[-2][:-4]
-                info.file_name = file_name
+                info.filename = filename.replace(split_name, 'SFMR')
                 info.file_url = href
 
                 brief_info.append(info)

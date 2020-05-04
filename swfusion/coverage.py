@@ -30,7 +30,7 @@ class CoverageManager(object):
         self.engine = None
         self.session = None
 
-        self.edge = self.CONFIG['rss']['subset_edge_in_degree']
+        self.edge = self.CONFIG['regression']['edge_in_degree']
         self.spa_resolu = self.CONFIG['rss']['spatial_resolution']
 
         self.grid_pts = dict()

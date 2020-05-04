@@ -4,6 +4,8 @@ import logging
 from sqlalchemy.ext.declarative import declarative_base
 from netCDF4 import Dataset
 
+import utils
+
 Base = declarative_base()
 
 class CenterOfTC(object):
@@ -23,15 +25,18 @@ class WindSpeedCell(object):
 
 class SmartComparer(object):
 
-    def __init__(self, CONFIG, period, basin):
+    def __init__(self, CONFIG, period, basin, passwd):
         self.CONFIG = CONFIG
         self.period = period
         self.basin = basin
+        self.db_root_passwd = passwd
         self.engine = None
         self.session = None
 
         self.logger = logging.getLogger(__name__)
         utils.setup_database(self, Base)
+
+        self.matchup_smap_sfmr()
 
     def matchup_smap_sfmr(self):
         """Match SMAP and SFMR data around TC.
@@ -52,14 +57,17 @@ class SmartComparer(object):
         # Traverse SFMR files
         for sfmr_info in sfmr_info_query:
             tc_name = sfmr_info.hurr_name
-            sfmr_path = (f"""self.CONFIG['sfmr']['dir']['hurr']"""
+            sfmr_path = (f"""{self.CONFIG['sfmr']['dirs']['hurr']}"""
                          f"""{sfmr_info.start_datetime.year}"""
-                         f"""/{tc_name}/{sfmr_info.file_path}""")
+                         f"""/{tc_name}/{sfmr_info.filename}""")
 
             # SFMR track was closest to TC center
             # when SFMR SWS reached its peak
             center_datetime['sfmr'] = self.time_of_sfmr_peak_wind(
                 sfmr_path)
+
+            if center_datetime['sfmr'] is None:
+                continue
 
             # Find where was TC center when SFMR SWS reached its peak
             center_lonlat['sfmr'] = self.lonlat_of_tc_center(
@@ -126,7 +134,27 @@ class SmartComparer(object):
         """Get the datetime when SFMR wind reached its peak value.
 
         """
+        if not sfmr_path.endswith('09H1.nc'):
+            return None
+
         dataset = Dataset(sfmr_path)
         vars = dataset.variables
 
+        if 'time' not in dataset.dimensions.keys():
+            exit('[Error] NetCDF dataset does not have "time" dimension')
+        length = dataset.dimensions['time'].size
+
+        windspd = []
+        valid_indices = []
+        for i in range(length):
+            if vars['FLAG'][i]:
+                continue
+            windspd.append(float(vars['SWS'][i]))
+            valid_indices.append(i)
         breakpoint()
+
+        # Find the SFMR point which closest to TC center by calculating
+        # the spatial distance between SFMR point and the TC center when
+        # SFMR point was observed.  To accelerate the comparison, we can
+        # choose 1 SFMR point from every sequential 10 SFMR points.
+

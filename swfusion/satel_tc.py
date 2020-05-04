@@ -53,7 +53,7 @@ class SatelManager(object):
         self.years = [x for x in range(self.period[0].year,
                                        self.period[1].year+1)]
 
-        self.edge = self.CONFIG['rss']['subset_edge_in_degree']
+        self.edge =  self.CONFIG['regression']['edge_in_degree']
         self.spa_resolu = self.CONFIG['rss']['spatial_resolution']
         self.lat_grid_points = [
             y * self.spa_resolu - 89.875 for y in range(
@@ -351,7 +351,7 @@ class SatelManager(object):
         temporal_match_tc_windows = dict()
         temporal_matched_tcs = dict()
 
-        half_edge_indices = (self.CONFIG['rss']['subset_edge_in_degree']
+        half_edge_indices = (self.edge
                              / 2 / step)
 
         for y in range(self.CONFIG['rss']['lat_grid_points_number']):
@@ -538,7 +538,7 @@ class SatelManager(object):
 
         """
         step = self.CONFIG['rss']['spatial_resolution']
-        half_edge_indices = (self.CONFIG['rss']['subset_edge_in_degree']
+        half_edge_indices = (self.edge
                              / 2 / step)
         success = False
         match_idx = None
@@ -1661,16 +1661,16 @@ class SatelManager(object):
         if satel_date in missing_dates:
             return None
         if satel_name == 'smap':
-            file_name = '%s%04d_%02d_%02d%s' % (
+            filename = '%s%04d_%02d_%02d%s' % (
                 file_prefix, satel_date.year, satel_date.month,
                 satel_date.day, file_suffix)
-            file_url = f'{data_url}{satel_date.year}/{file_name}'
+            file_url = f'{data_url}{satel_date.year}/{filename}'
         else:
-            file_name = '%s_%04d%02d%02d%s' % (
+            filename = '%s_%04d%02d%02d%s' % (
                 file_prefix, satel_date.year, satel_date.month,
                 satel_date.day, file_suffix)
             file_url = '%sy%04d/m%02d/%s' % (
-                data_url, satel_date.year, satel_date.month, file_name)
+                data_url, satel_date.year, satel_date.month, filename)
 
         if not utils.url_exists(file_url):
             print('Missing date of {satel_name}: {satel_date}')
@@ -1678,7 +1678,7 @@ class SatelManager(object):
             missing_dates.add(satel_date)
             return None
 
-        file_path = f'{save_dir}{file_name}'
+        file_path = f'{save_dir}{filename}'
 
         utils.download(file_url, file_path)
 

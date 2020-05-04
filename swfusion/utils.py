@@ -36,6 +36,7 @@ from amsr2_daily import AMSR2daily
 from ascat_daily import ASCATDaily
 from quikscat_daily_v4 import QuikScatDaily
 from windsat_daily_v7 import WindSatDaily
+import era5
 
 # Global variables
 logger = logging.getLogger(__name__)
@@ -320,9 +321,9 @@ def download(url, path, progress=False):
     current_file = path
 
     global format_custom_text
-    file_name = path.split('/')[-1]
+    filename = path.split('/')[-1]
     if format_custom_text is not None:
-        format_custom_text.update_mapping(f=file_name)
+        format_custom_text.update_mapping(f=filename)
     try:
         if progress:
             request.urlretrieve(url, path, show_progress)
@@ -1553,7 +1554,7 @@ def write_area_compare(the_class, tc_row, ibtracs_area,
             setattr(row, f'{type}_r{r}_area', float(area[type][idx]))
     row.sid_date_time = f'{tc_row.sid}_{tc_row.date_time}'
 
-    utils.bulk_insert_avoid_duplicate_unique(
+    bulk_insert_avoid_duplicate_unique(
         [row], the_class.CONFIG['database']\
         ['batch_size']['insert'],
         CompareTable, ['sid_date_time'], the_class.session,
@@ -1571,8 +1572,8 @@ def draw_compare_area_bar(ax, ibtracs_area, area_to_compare, data_name,
 
     set_bar_title_and_so_on(ax, tc_row, labels, x, data_name)
 
-    utils.autolabel(ax, rects1)
-    utils.autolabel(ax, rects2)
+    autolabel(ax, rects1)
+    autolabel(ax, rects2)
 
 def set_bar_title_and_so_on(ax, tc_row, labels, x, data_name):
     title_prefix = (f'Area within wind radii of IBTrACS '
@@ -1613,6 +1614,24 @@ def get_basic_satel_era5_columns(tc_info=False):
     cols.append(Column('lon', Float, nullable=False))
     cols.append(Column('lat', Float, nullable=False))
     cols.append(Column('satel_datetime_lon_lat', String(50),
+                       nullable=False, unique=True))
+
+    return cols
+
+def get_basic_sfmr_era5_columns(tc_info=False):
+    cols = []
+    cols.append(Column('key', Integer, primary_key=True))
+    if tc_info:
+        cols.append(Column('sid', String(13), nullable=False))
+    cols.append(Column('sfmr_datetime', DateTime, nullable=False))
+    cols.append(Column('era5_datetime', DateTime, nullable=False))
+    cols.append(Column('east_shift_from_center', Integer,
+                       nullable=False))
+    cols.append(Column('north_shift_from_center', Integer,
+                       nullable=False))
+    cols.append(Column('lon', Float, nullable=False))
+    cols.append(Column('lat', Float, nullable=False))
+    cols.append(Column('sfmr_datetime_lon_lat', String(70),
                        nullable=False, unique=True))
 
     return cols
@@ -1663,6 +1682,13 @@ def get_data_indices_around_grid_pts(workload):
 
 def gen_satel_era5_tablename(satel_name, dt):
     return f'{satel_name}_{dt.year}_{str(dt.month).zfill(2)}'
+
+def gen_tc_sfmr_era5_tablename(dt, basin):
+    if isinstance(dt, datetime.datetime):
+        return f'tc_sfmr_era5_{dt.year}_{basin}'
+    # `dt` is year
+    elif isinstance(dt, int):
+        return f'tc_sfmr_era5_{dt}_{basin}'
 
 def gen_tc_satel_era5_tablename(satel_name, dt, basin):
     if isinstance(dt, datetime.datetime):
@@ -1912,9 +1938,9 @@ def get_latlon_and_index_in_grid(value, range, grid_lat_or_lon_list):
     Parameters
     ----------
     value: float
-        The value of latitude or longtitude of region corner.
+        The value of latitude or longitude of region corner.
     range: tuple
-        The range of latitude or longtitude of region.  The first
+        The range of latitude or longitude of region.  The first
         element is smaller than the second element.
     grid_lat_or_lon_list: list
         The latitude or longitutde of RSS grid.  Ascending sorted.
@@ -1922,9 +1948,9 @@ def get_latlon_and_index_in_grid(value, range, grid_lat_or_lon_list):
     Return
     ------
     grid_pt_value: float
-        The value of latitude or longtitude of matching RSS grid point.
+        The value of latitude or longitude of matching RSS grid point.
     grid_pt_index: int
-        The index of latitude or longtitude of matching RSS grid point.
+        The index of latitude or longitude of matching RSS grid point.
 
     """
     tmp_value, tmp_index = get_nearest_element_and_index(
@@ -2335,7 +2361,7 @@ def get_xyz_matrix_of_era5_windspd(era5_file_path, product_type,
     for y in range(lats_num):
         for x in range(lons_num):
             try:
-                lon_180_mode = longtitude_converter(lons[y][x], '360',
+                lon_180_mode = longitude_converter(lons[y][x], '360',
                                                     '-180')
                 if not bool(globe.is_land(lats[y][x], lon_180_mode)):
                     windspd[y][x] = math.sqrt(u_wind[y][x] ** 2
@@ -2386,8 +2412,8 @@ def get_era5_corners_of_rss_cell(lat, lon, era5_lats_grid,
             lon1_idx = era5_lons.index(lon1)
             lon2_idx = era5_lons.index(lon2)
         elif grb_spa_resolu == 0.5:
-            nearest_lat, nearest_lat_idx = get_nearest_element_and_index(
-                era5_lats, lat)
+            nearest_lat, nearest_lat_idx = \
+                    get_nearest_element_and_index(era5_lats, lat)
             if nearest_lat < lat:
                 lat1 = nearest_lat
                 lat1_idx = nearest_lat_idx
@@ -2399,8 +2425,8 @@ def get_era5_corners_of_rss_cell(lat, lon, era5_lats_grid,
                 lat1_idx = lat2_idx - 1
                 lat1 = era5_lats[lat1_idx]
 
-            nearest_lon, nearest_lon_idx = get_nearest_element_and_index(
-                era5_lons, lon)
+            nearest_lon, nearest_lon_idx = \
+                    get_nearest_element_and_index(era5_lons, lon)
             if nearest_lon < lon:
                 lon1 = nearest_lon
                 lon1_idx = nearest_lon_idx
@@ -2418,6 +2444,43 @@ def get_era5_corners_of_rss_cell(lat, lon, era5_lats_grid,
     return [lat1, lat2, lon1, lon2], [lat1_idx, lat2_idx, lon1_idx,
                                       lon2_idx]
 
+def get_era5_corners_of_cell(lat, lon, era5_lats_grid, era5_lons_grid):
+    era5_lats = list(era5_lats_grid[:, 0])
+    era5_lons = list(era5_lons_grid[0, :])
+
+    try:
+        nearest_lat, nearest_lat_idx = \
+                get_nearest_element_and_index(era5_lats, lat)
+        if nearest_lat < lat:
+            lat1 = nearest_lat
+            lat1_idx = nearest_lat_idx
+            lat2_idx = lat1_idx + 1
+            lat2 = era5_lats[lat2_idx]
+        else:
+            lat2 = nearest_lat
+            lat2_idx = nearest_lat_idx
+            lat1_idx = lat2_idx - 1
+            lat1 = era5_lats[lat1_idx]
+
+        nearest_lon, nearest_lon_idx = \
+                get_nearest_element_and_index(era5_lons, lon)
+        if nearest_lon < lon:
+            lon1 = nearest_lon
+            lon1_idx = nearest_lon_idx
+            lon2_idx = lon1_idx + 1
+            lon2 = era5_lons[lon2_idx]
+        else:
+            lon2 = nearest_lon
+            lon2_idx = nearest_lon_idx
+            lon1_idx = lon2_idx - 1
+            lon1 = era5_lons[lon1_idx]
+    except Exception as msg:
+        breakpoint()
+        # exit(msg)
+
+    return [lat1, lat2, lon1, lon2], [lat1_idx, lat2_idx, lon1_idx,
+                                      lon2_idx]
+
 def find_neighbours_of_pt_in_half_degree_grid(pt):
     nearest = round(pt * 2) / 2
     direction = ((pt - nearest) / abs(pt - nearest))
@@ -2428,8 +2491,8 @@ def find_neighbours_of_pt_in_half_degree_grid(pt):
 def get_center_shift_of_two_tcs(next_tc, tc):
     next_tc_center = get_tc_center(next_tc)
     tc_center = get_tc_center(tc)
-    # Set the value to check whether the line between two TC center across
-    # the prime meridian
+    # Set the value to check whether the line between two TC center
+    # across the prime meridian
     threshold = 20
     if abs(tc_center[0] - next_tc_center[0]) > threshold:
         if tc_center[0] < next_tc_center[0]:
@@ -2437,7 +2500,8 @@ def get_center_shift_of_two_tcs(next_tc, tc):
             tc_center = (tc_center[0] + 360, tc_center[1])
         elif tc_center[0] > next_tc_center[0]:
             # E.g. `tc` lon: 359.5, `next_tc` lon: 0.5
-            next_tc_center = (next_tc_center[0] + 360, next_tc_center[1])
+            next_tc_center = (next_tc_center[0] + 360,
+                              next_tc_center[1])
 
     lons_shift = next_tc_center[0] - tc_center[0]
     lats_shift = next_tc_center[1] - tc_center[1]
@@ -2454,7 +2518,7 @@ def process_grib_message_name(name):
     return name.replace(" ", "_").replace("-", "_").replace('(', '')\
             .replace(')', '').lower()
 
-def longtitude_converter(lon, input_mode, output_mode):
+def longitude_converter(lon, input_mode, output_mode):
     if input_mode == '360' and output_mode == '-180':
         if lon > 180:
             lon -= 360
@@ -2465,17 +2529,17 @@ def longtitude_converter(lon, input_mode, output_mode):
     return lon
 
 def find_best_NN_weights_file(dir):
-    file_names = [f for f in os.listdir(dir) if f.endswith('.hdf5')]
+    filenames = [f for f in os.listdir(dir) if f.endswith('.hdf5')]
     max_epoch = -1
-    best_weights_file_name = None
+    best_weights_filename = None
 
-    for file in file_names:
+    for file in filenames:
         epoch = int(file.split('-')[1])
         if epoch > max_epoch:
             max_epoch = epoch
-            best_weights_file_name = file
+            best_weights_filename = file
 
-    return f'{dir}{best_weights_file_name}'
+    return f'{dir}{best_weights_filename}'
 
 def filter_dataframe_by_column_value_divide(df, col_name, divide,
                                             large_or_small):
@@ -2655,7 +2719,7 @@ def fill_era5_masked_and_not_masked_ocean_data(
 
     return new_data
 
-def load_best_xgb_model(model_dir, basin):
+def load_best_model(model_dir, basin):
     model_files = [f for f in os.listdir(model_dir)
                    if (f.startswith(f'{basin}')
                        and f.endswith('.pickle.dat'))]
@@ -2808,7 +2872,7 @@ def get_terminal_indices_of_nc_var(var, masked_value):
 """
 
 def get_sfmr_track_and_windspd(nc_file_path, data_indices):
-    """Get data points along SFMR track, averaged points' longtitude,
+    """Get data points along SFMR track, averaged points' longitude,
     averaged points' latitude and averaged points' wind speed.
 
     Parameters
@@ -3179,9 +3243,9 @@ def validate_with_sfmr(tgt_name, tc_dt, sfmr_dts, sfmr_lons,
                                   + temporal_dis.seconds / 60)
             # Spatial distance in kilo meters
             sfmr_pt = (base_lat,
-                       longtitude_converter(base_lon, '360', '-180'))
+                       longitude_converter(base_lon, '360', '-180'))
             tgt_pt = (min_dis_lat,
-                      longtitude_converter(min_dis_lon, '360', '-180'))
+                      longitude_converter(min_dis_lon, '360', '-180'))
             tb_dis_kms.append(distance.distance(tgt_pt, sfmr_pt).km)
             # Bias of wind speed
             tb_windspd_bias.append(min_dis_windspd - sfmr_windspd[t][i])
@@ -3226,3 +3290,910 @@ def closest_multiple_int(direction, value, interval):
             nearest += interval
 
     return int(nearest)
+
+def const_line(x_min, x_max, ratio, bias, color, linewidth, linestyle):
+    """Plot a const line.
+
+    """
+    x = np.arange(x_min, x_max, .5)
+    y = ratio * x + bias
+    plt.plot(y, x, C=color, linewidth=linewidth, linestyle=linestyle)
+
+def sfmr_exists(the_class, tc, next_tc):
+    """Check the existence of SFMR data between two
+    temporally neighbouring IBTrACS records of a same TC
+    and get the brief info of these SFMR data.
+
+    Parameters
+    ----------
+    tc : object describing a row of IBTrACS table
+        An IBTrACS TC record eariler.
+    next_tc : object describing a row of IBTrACS table
+        Another IBTrACS record of the same TC later.
+
+    Returns
+    -------
+    bool
+        True if SFMR data exists, False otherwise.
+    spatial_temporal_sfmr_info: object describing rows of the \
+            brief info table of all SFMR data
+        Brief info of SFMR data which spatially and temporally \
+                between two IBTrACS records.
+
+    """
+
+    # Rough temporally check
+    temporal_existence, temporal_sfmr_info = sfmr_temporally_exists(
+        the_class, tc, next_tc)
+    if not temporal_existence:
+        return False, None
+
+    # Rough spaitally check
+    spatial_existence, spatial_temporal_sfmr_info = \
+            sfmr_spatially_exists(the_class, tc, next_tc,
+                                  temporal_sfmr_info)
+    if not spatial_existence:
+        return False, None
+
+    # Detailed check
+    # ???
+
+    return True, spatial_temporal_sfmr_info
+
+def sfmr_temporally_exists(the_class, tc, next_tc):
+    existence = False
+    temporal_info = []
+
+    table_name = the_class.CONFIG['sfmr']['table_names']['brief_info']
+    BriefInfo = get_class_by_tablename(the_class.engine,
+                                             table_name)
+
+    direct_query = the_class.session.query(BriefInfo).filter(
+        BriefInfo.end_datetime > tc.date_time,
+        BriefInfo.start_datetime < next_tc.date_time)
+    count_sum = direct_query.count()
+
+    if count_sum:
+        existence = True
+        for row in direct_query:
+            temporal_info.append(row)
+
+    return existence, temporal_info
+
+def sfmr_spatially_exists(the_class, tc, next_tc, temporal_info):
+    # It seems that need to compare rectangle of SFMR range with
+    # regression range of area around TC in a specified hour, not
+    # the period between two neighbouring TCs
+    existence = False
+    spatial_temporal_info = []
+
+    delta = next_tc.date_time - tc.date_time
+
+    # Calculate the circumscribed rectangle of all area of regression
+    # on every hour between two neighbouring TCs
+    hours = int(delta.seconds / 3600)
+    # Spatial shift
+    try:
+        lon_shift, lat_shift = get_center_shift_of_two_tcs(
+            next_tc, tc)
+        hourly_lon_shift = lon_shift / hours
+        hourly_lat_shift = lat_shift / hours
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+    half_reg_edge = the_class.CONFIG['regression']['edge_in_degree'] / 2
+    corners = {'left': [], 'top': [], 'right': [], 'bottom': []}
+    # Extract from the interval between two TC records
+    for h in range(hours):
+        interped_tc_lon = (h * hourly_lon_shift + tc.lon)
+        interped_tc_lat = (h * hourly_lat_shift + tc.lat)
+        corners['left'].append(interped_tc_lon - half_reg_edge)
+        corners['top'].append(interped_tc_lat + half_reg_edge)
+        corners['right'].append(interped_tc_lon + half_reg_edge)
+        corners['bottom'].append(interped_tc_lat - half_reg_edge)
+    # Describe rectangle of regression area between two TCs
+    left_top_tc = Point(min(corners['left']),
+                              max(corners['top']))
+    right_bottom_tc = Point(max(corners['right']),
+                                  min(corners['bottom']))
+
+    for info in temporal_info:
+        left_top_sfmr = Point(info.min_lon, info.max_lat)
+        right_bottom_sfmr = Point(info.max_lon, info.min_lat)
+        if doOverlap(left_top_tc, right_bottom_tc,
+                           left_top_sfmr, right_bottom_sfmr):
+            existence = True
+            spatial_temporal_info.append(info)
+
+    return existence, spatial_temporal_info
+
+def load_match_data_sources(the_class):
+    match_str = f'sfmr_vs_era5'
+    dir = (the_class.CONFIG['result']['dirs']['statistic'][
+        'match_of_data_sources']
+           + f'{match_str}/{the_class.basin}/')
+    file_path = f'{dir}{the_class.basin}_match_{match_str}.pkl'
+    the_class.match_data_source_file_path = file_path
+
+    if not os.path.exists(file_path):
+        the_class.match_data_sources = pd.DataFrame(columns=[
+            'TC_sid', 'datetime', 'match'])
+    else:
+        with open(file_path, 'rb') as f:
+            the_class.match_data_sources = pickle.load(f)
+
+def update_match_data_sources(the_class):
+    if os.path.exists(the_class.match_data_source_file_path):
+        os.remove(the_class.match_data_source_file_path)
+    os.makedirs(os.path.dirname(the_class.match_data_source_file_path),
+                exist_ok=True)
+    the_class.match_data_sources.to_pickle(
+        the_class.match_data_source_file_path)
+
+def update_no_match_between_tcs(the_class, Match, hours, tc, next_tc):
+    """Reocrd the nonexistence of matchup of data sources.
+
+    """
+    match_list = []
+
+    for h in range(hours):
+        interped_tc = interp_tc(the_class, h, tc, next_tc)
+        row = Match()
+        row.tc_sid = interped_tc.sid
+        row.date_time = interped_tc.date_time
+        row.match = False
+        row.tc_sid_datetime = f'{row.tc_sid}_{row.date_time}'
+
+        match_list.append(row)
+
+    bulk_insert_avoid_duplicate_unique(
+        match_list,
+        the_class.CONFIG['database']['batch_size']['insert'],
+        Match, ['tc_sid_datetime'], the_class.session,
+        check_self=True)
+
+def update_one_row_of_match(the_class, Match, interped_tc, match):
+    row = Match()
+    row.tc_sid = interped_tc.sid
+    row.date_time = interped_tc.date_time
+    row.match = match
+    row.tc_sid_datetime = f'{row.tc_sid}_{row.date_time}'
+
+    bulk_insert_avoid_duplicate_unique(
+        [row], the_class.CONFIG['database']['batch_size']['insert'],
+        Match, ['tc_sid_datetime'], the_class.session,
+        check_self=True)
+
+def interp_tc(the_class, h, tc, next_tc):
+    """Get sid, interpolated datetime, longitude and latitude of
+    two neighbouring TC records.
+
+    """
+    try:
+        # Temporal shift
+        delta = next_tc.date_time - tc.date_time
+        hours = int(delta.seconds / 3600)
+        # Spatial shift
+        lon_shift, lat_shift = get_center_shift_of_two_tcs(
+            next_tc, tc)
+        hourly_lon_shift = lon_shift / hours
+        hourly_lat_shift = lat_shift / hours
+
+        # Get IBTrACS table
+        table_name = the_class.CONFIG['ibtracs']['table_name'][
+            the_class.basin]
+        IBTrACS = get_class_by_tablename(the_class.engine,
+                                               table_name)
+        # ATTENTIONL: DO NOT direct use `interped_tc = tc`
+        # Because it makes a link between two variables
+        # any modification will simultaneously change two variables
+        interped_tc = IBTrACS()
+        interped_tc.sid = tc.sid
+        interped_tc.name = tc.name
+        # interped_tc.basin = tc.basin
+        # interped_tc.pres = tc.pres
+        # interped_tc.wind = tc.wind
+        # interped_tc.r34_ne = tc.r34_ne
+        # interped_tc.r34_se = tc.r34_se
+        # interped_tc.r34_sw = tc.r34_sw
+        # interped_tc.r34_nw = tc.r34_nw
+        # interped_tc.r50_ne = tc.r50_ne
+        # interped_tc.r50_ne = tc.r50_ne
+        # interped_tc.r50_se = tc.r50_se
+        # interped_tc.r50_sw = tc.r50_sw
+        # interped_tc.r64_nw = tc.r64_nw
+        # interped_tc.r64_se = tc.r64_se
+        # interped_tc.r64_sw = tc.r64_sw
+        # interped_tc.r64_nw = tc.r64_nw
+        # Only interpolate `date_time`, `lon`, `lat` variables
+        # Other variables stays same with `tc`
+        interped_tc.date_time = tc.date_time + datetime.timedelta(
+            seconds = h * 3600)
+        interped_tc.lon = (h * hourly_lon_shift + tc.lon)
+        interped_tc.lat = (h * hourly_lat_shift + tc.lat)
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+    return interped_tc
+
+def sfmr_rounded_hours(the_class, tc, next_tc, spatial_temporal_info):
+    # Include start hour, but not end hour
+    # To let all intervals same
+    hours_between_two_tcs = []
+    datetime_area = dict()
+    hour_info_pt_idx = dict()
+
+    delta = next_tc.date_time - tc.date_time
+    hours = int(delta.seconds / 3600)
+
+    # if (next_tc.date_time == datetime.datetime(2018, 7, 10, 18, 0)
+    #     or tc.date_time == datetime.datetime(2018, 7, 10, 18, 0)):
+    #     breakpoint()
+
+    for h in range(hours):
+        interp_dt = tc.date_time + datetime.timedelta(
+            seconds = h * 3600)
+        hours_between_two_tcs.append(interp_dt)
+
+        datetime_area[interp_dt] = dict()
+
+        tc_pre = tc
+        interped_tc = interp_tc(the_class, h, tc, next_tc)
+        tc_aft = tc
+        if tc.date_time == next_tc.date_time:
+        # if tc_pre.date_time != tc_aft.date_time:
+            breakpoint()
+
+        half_reg_edge = \
+                the_class.CONFIG['regression']['edge_in_degree'] / 2
+        datetime_area[interp_dt]['lon1'] = (interped_tc.lon
+                                            - half_reg_edge)
+        datetime_area[interp_dt]['lon2'] = (interped_tc.lon
+                                            + half_reg_edge)
+        datetime_area[interp_dt]['lat1'] = (interped_tc.lat
+                                            - half_reg_edge)
+        datetime_area[interp_dt]['lat2'] = (interped_tc.lat
+                                            + half_reg_edge)
+
+    # traverse all brief info of SFMR file
+    for info_idx, info in enumerate(spatial_temporal_info):
+        year = info.start_datetime.year
+        file_path = (
+            f"""{the_class.CONFIG['sfmr']['dirs']['hurr']}"""
+            f"""{year}/{info.hurr_name}/{info.filename}"""
+        )
+        dataset = netCDF4.Dataset(file_path)
+
+        # VERY VERY IMPORTANT: netCDF4 auto mask may cause problems,
+        # so must disable auto mask
+        dataset.set_auto_mask(False)
+        vars = dataset.variables
+        length = len(vars['TIME'])
+
+        # Traverse all data points of selected SFMR file
+        for i in range(length):
+            # Round SFMR data point's datetime to hours
+            try:
+                pt_date = vars['DATE'][i]
+                pt_time = vars['TIME'][i]
+                # It seems that near the end of SFMR data array,
+                # DATE will be 0
+                if pt_date == 0:
+                    continue
+
+                pt_datetime = datetime.datetime.combine(
+                    sfmr_nc_converter('DATE', pt_date),
+                    sfmr_nc_converter('TIME', pt_time)
+                )
+                rounded_hour = hour_rounder(pt_datetime)
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
+
+            # Check whether rounded hours are in hours between
+            # two TCs
+            if rounded_hour not in hours_between_two_tcs:
+                continue
+
+            lon = (vars['LON'][i] + 360) % 360
+            lat = vars['LAT'][i]
+
+            # Check whether SFMR data points are in area around
+            # TC at rounded hour
+            if (lon < datetime_area[rounded_hour]['lon1']
+                or lon > datetime_area[rounded_hour]['lon2']
+                or lat < datetime_area[rounded_hour]['lat1']
+                or lat > datetime_area[rounded_hour]['lat2']):
+                continue
+            rounded_hour_idx = hours_between_two_tcs.index(
+                rounded_hour)
+
+            # Add SFMR data point index into `hour_info_pt_idx`
+            if rounded_hour not in hour_info_pt_idx:
+                hour_info_pt_idx[rounded_hour] = dict()
+            if info_idx not in hour_info_pt_idx[rounded_hour]:
+                hour_info_pt_idx[rounded_hour][info_idx] = []
+
+            hour_info_pt_idx[rounded_hour][info_idx].append(i)
+
+    return hour_info_pt_idx
+
+def get_sfmr_windspd_along_track(the_class, tc, sfmr_brief_info,
+                                 one_hour_info_pt_idx, 
+                                 use_slow_wind=False):
+    all_tracks = []
+    all_dts = []
+    all_lons = []
+    all_lats = []
+    all_windspd = []
+
+    # Logger information
+    # the_class.logger.info(f'Getting xyz_matrix of SFMR around TC')
+
+    root_dir = the_class.CONFIG['sfmr']['dirs']['hurr']
+
+    # Get SFMR windspd
+    for info_idx in one_hour_info_pt_idx.keys():
+        data_indices = one_hour_info_pt_idx[info_idx]
+        brief_info = sfmr_brief_info[info_idx]
+        file_dir = (
+            f"""{root_dir}{brief_info.start_datetime.year}/"""
+            f"""{brief_info.hurr_name}/""")
+        file_path = f'{file_dir}{brief_info.filename}'
+        # Firstly try first-come-first-count method
+        # Secondly try square-average method
+        try:
+            result = get_sfmr_track_and_windspd(file_path, data_indices)
+            if result[0] is None:
+                return False, None, None, None, None, None
+            all_tracks.append(result[0])
+            all_dts.append(result[1])
+            all_lons.append(result[2])
+            all_lats.append(result[3])
+            all_windspd.append(result[4])
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
+
+    # For our verification, we do not use SFMR observations whose
+    # wind speed is below 15 m/s, as the singal-to-noise ration in
+    # the SFMR measurement becomes unfavorable at lower wind speeds.
+
+    # Meissner, Thomas, Lucrezia Ricciardulli, and Frank J. Wentz.
+    # “Capability of the SMAP Mission to Measure Ocean Surface Winds
+    # in Storms.” Bulletin of the American Meteorological Society 98,
+    # no. 8 (March 7, 2017): 1660–77.
+    # https://doi.org/10.1175/BAMS-D-16-0052.1.
+
+    # J. Carswell 2015, personal communication
+    final_tracks = []
+    final_dts = []
+    final_lons = []
+    final_lats = []
+    final_windspd = []
+    try:
+        for track_idx, single_track_windspd in enumerate(
+            all_windspd):
+            #
+            tmp_tracks = []
+            tmp_dts = []
+            tmp_lons = []
+            tmp_lats = []
+            tmp_windspd = []
+            for pt_idx, pt_windspd in enumerate(
+                single_track_windspd):
+                #
+                if (pt_windspd == 0
+                    or (not use_slow_wind and pt_windspd < 15)):
+                    continue
+                tmp_tracks.append(all_tracks[track_idx][pt_idx])
+                tmp_dts.append(all_dts[track_idx][pt_idx])
+                tmp_lons.append(all_lons[track_idx][pt_idx])
+                tmp_lats.append(all_lats[track_idx][pt_idx])
+                tmp_windspd.append(all_windspd[track_idx][pt_idx])
+
+            if len(tmp_windspd):
+                final_tracks.append(tmp_tracks)
+                final_dts.append(tmp_dts)
+                final_lons.append(tmp_lons)
+                final_lats.append(tmp_lats)
+                final_windspd.append(tmp_windspd)
+
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+    # if (tc.name == 'ARTHUR' 
+    #     and tc.date_time == datetime.datetime(2014, 7, 2, 6, 0)):
+    #     breakpoint()
+
+    if not len(final_windspd):
+        return False, None, None, None, None, None
+    else:
+        return (True, final_tracks, final_dts, final_lons, final_lats,
+                final_windspd)
+
+def east_or_north_shift(direction, base_pt, tgt_pt):
+    if direction == 'east':
+        dis = distance.distance((base_pt[0], tgt_pt[1]), base_pt).km
+
+        base_pt = (base_pt[0],
+                   longitude_converter(base_pt[1], '-180', '360'))
+        tgt_pt = (tgt_pt[0],
+                  longitude_converter(tgt_pt[1], '-180', '360'))
+        # Set the value to check whether the line between two TC center
+        # across the prime meridian
+        threshold = 20
+        if abs(tgt_pt[1] - base_pt[1]) > threshold:
+            if tgt_pt[1] < base_pt[1]:
+                # E.g. `tgt_pt` lon: 0.5, `base_pt` lon: 359.5
+                ratio = 1
+            else:
+                # E.g. `tgt_dt` lon: 359.5, `base_pt` lon: 0.5
+                ratio = -1
+        else:
+            if tgt_pt[1] < base_pt[1]:
+                # E.g. `tgt_pt` lon: 288.5, `base_pt` lon: 290.5
+                ratio = -1
+            else:
+                # E.g. `tgt_dt` lon: 292.5, `base_pt` lon: 290.5
+                ratio = 1
+
+    elif direction == 'north':
+        dis = distance.distance((tgt_pt[0], base_pt[1]), base_pt).km
+
+        if tgt_pt[0] < base_pt[0]:
+            ratio = -1
+        else:
+            ratio = 1
+
+    return ratio * dis
+
+def add_era5(the_class, tgt_name, tc, tgt_part, hourtimes, area):
+    try:
+        era5_step_1, pres_lvls = extract_era5_single_levels(
+            the_class, tgt_name, tc, tgt_part,
+            hourtimes, area)
+        if era5_step_1 is None:
+            return None
+        if not len(era5_step_1):
+            return []
+
+        era5_step_2 = extract_era5_pressure_levels(
+            the_class, tgt_name, tc, era5_step_1,
+            hourtimes, area, pres_lvls)
+    except Exception as msg:
+        exit(msg)
+
+    if era5_step_2 is None:
+        return None
+
+    return era5_step_2
+
+def extract_era5_single_levels(the_class, tgt_name, tc, tgt_part,
+                               hourtimes, area):
+    era5_manager = era5.ERA5Manager(the_class.CONFIG, the_class.period,
+                                    the_class.region,
+                                    the_class.db_root_passwd,
+                                    work=False,
+                                    save_disk=the_class.save_disk,
+                                    work_mode='',
+                                    vars_mode='')
+    try:
+        era5_file_path = \
+                era5_manager.download_single_levels_vars(
+                    'tc', tc.date_time, '', hourtimes, area, tgt_name,
+                    tc.sid)
+    except Exception as msg:
+        the_class.logger.error((
+            f"""Fail downloading ERA5 single levels: {tgt_name} """
+            f"""around TC {tc.name} on {tc.date_time}"""))
+        return None, None
+
+    try:
+        era5_step_1, pres_lvls = add_era5_single_levels(
+            the_class, era5_file_path, tc.date_time, tgt_name,
+            tgt_part, area)
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+    return era5_step_1, pres_lvls
+
+def extract_era5_pressure_levels(the_class, tgt_name, tc,
+                                 era5_step_1, hourtimes, area,
+                                 pres_lvls):
+    era5_manager = era5.ERA5Manager(the_class.CONFIG, the_class.period,
+                                    the_class.region,
+                                    the_class.db_root_passwd,
+                                    work=False,
+                                    save_disk=the_class.save_disk,
+                                    work_mode='',
+                                    vars_mode='')
+    try:
+        era5_file_path = \
+                era5_manager.download_pressure_levels_vars(
+                    'tc', tc.date_time, '', hourtimes, area,
+                    sorted(list(set(pres_lvls))), tgt_name, tc.sid)
+    except Exception as msg:
+        the_class.logger.error((
+            f"""Fail downloading ERA5 pressure levels: {tgt_name} """
+            f"""around TC {tc.name} on {tc.date_time}"""))
+        return None
+
+    try:
+        era5_step_2 = add_era5_pressure_levels(
+            the_class, era5_file_path, tc.date_time, tgt_name,
+            era5_step_1,
+            area, pres_lvls)
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+    return era5_step_2
+
+def add_era5_single_levels(the_class, era5_file_path, tc_dt, tgt_name,
+                           tgt_part, area):
+    hourtime_row_mapper = get_hourtime_row_mapper(tgt_part, tgt_name)
+    north, west, south, east = area
+
+    grbs = pygrib.open(era5_file_path)
+    messages_num = grbs.messages
+    grbs.close()
+    data_num = len(tgt_part)
+    total = data_num * messages_num
+    count = 0
+
+    grbidx = pygrib.index(era5_file_path, 'dataTime')
+    indices_of_rows_to_delete = set()
+
+    # For every hour, update corresponding rows with grbs
+    for hourtime in range(0, 2400, 100):
+        if not len(hourtime_row_mapper[hourtime]):
+            continue
+        grb_time = datetime.time(int(hourtime/100), 0, 0)
+
+        selected_grbs = grbidx.select(dataTime=hourtime)
+
+        for grb in selected_grbs:
+            # Generate name which is the same with table column
+            name = process_grib_message_name(grb.name)
+            grb_spa_resolu = grb.jDirectionIncrementInDegrees
+            # data() method of pygrib is time-consuming
+            # So apply it to global area then update all
+            # smap part with grb of specific hourtime,
+            # which using data() method as less as possible
+            data, lats, lons = grb.data(south, north, west, east)
+            data = np.flip(data, 0)
+            lats = np.flip(lats, 0)
+            lons = np.flip(lons, 0)
+
+            masked_data = False
+            # MUST check masked array like this, because if an array
+            # is numpy.ma.core.MaskedArray, it is numpy.ndarray too.
+            # So only directly check whether an array is instance
+            # of numpy.ma.core.MaskedArray is safe.
+            if isinstance(data, np.ma.core.MaskedArray):
+                masked_data = True
+
+            # Update all rows which matching this hourtime
+            for row_idx in hourtime_row_mapper[hourtime]:
+                count += 1
+                # print((f"""\r{name}: {count}/{total}"""), end='')
+                row = tgt_part[row_idx]
+
+                row.era5_datetime = datetime.datetime.combine(
+                    tc_dt.date(), grb_time)
+
+                tgt_datetime = getattr(row, f'{tgt_name}_datetime')
+                tgt_minute = (tgt_datetime.hour * 60
+                              + tgt_datetime.minute)
+                grb_minute = int(hourtime/100) * 60
+                setattr(row, f'{tgt_name}_era5_diff_mins',
+                        tgt_minute - grb_minute)
+
+                tgt_from_rss = False
+                if tgt_name in the_class.CONFIG[
+                    'satel_data_sources']['rss']:
+                    tgt_from_rss = True
+
+                try:
+                    if tgt_from_rss:
+                        latlons, latlon_indices = \
+                                get_era5_corners_of_rss_cell(
+                                    row.lat, row.lon, lats, lons,
+                                    grb_spa_resolu)
+                    else:
+                        latlons, latlon_indices = \
+                                get_era5_corners_of_cell(
+                                    row.lat, row.lon, lats, lons)
+                except Exception as msg:
+                    breakpoint()
+                    exit(msg)
+                lat1, lat2, lon1, lon2 = latlons
+                lat1_idx, lat2_idx, lon1_idx, lon2_idx = \
+                        latlon_indices
+
+                # Check out whether there is masked cell in square
+                if masked_data:
+                    skip_row = False
+                    for tmp_lat_idx in [lat1_idx, lat2_idx]:
+                        for tmp_lon_idx in [lon1_idx, lon2_idx]:
+                            if data.mask[tmp_lat_idx][tmp_lon_idx]:
+                                skip_row = True
+                                indices_of_rows_to_delete.add(
+                                    row_idx)
+                    if skip_row:
+                        continue
+
+                square_data = data[lat1_idx:lat2_idx+1,
+                                   lon1_idx:lon2_idx+1]
+                square_lats = lats[lat1_idx:lat2_idx+1,
+                                   lon1_idx:lon2_idx+1]
+                square_lons = lons[lat1_idx:lat2_idx+1,
+                                   lon1_idx:lon2_idx+1]
+
+                # ERA5 atmospheric variable
+                if tgt_from_rss and grb_spa_resolu == 0.25:
+                    value = float(square_data.mean())
+                # ERA5 oceanic variable
+                else:
+                    value = value_of_pt_in_era5_square(
+                        square_data, square_lats, square_lons,
+                        row.lat, row.lon)
+                    if value is None:
+                        # the_class.logger.warning((
+                        #     f"""[{name}] Not a square consists of """
+                        #     f"""four ERA5 grid points"""))
+                        breakpoint()
+                        continue
+
+                setattr(row, name, value)
+
+            delete_last_lines()
+            # print(f'{name}: Done')
+
+    grbidx.close()
+
+    # Move rows of tgt_part which should not deleted to a new
+    # list to accomplish filtering rows with masked data
+    new_tgt_part = []
+    for idx, row in enumerate(tgt_part):
+        if idx not in indices_of_rows_to_delete:
+            new_tgt_part.append(row)
+
+    pres_lvls = []
+    pres_lvls_candidates = the_class.CONFIG['era5']['pres_lvls']
+
+    for row in new_tgt_part:
+        nearest_pres_lvl, nearest_pres_lvl_idx = \
+                get_nearest_element_and_index(
+                    pres_lvls_candidates,
+                    row.mean_sea_level_pressure / 100)
+
+        windspd, winddir = compose_wind(
+            row.neutral_wind_at_10_m_u_component,
+            row.neutral_wind_at_10_m_v_component,
+            'o')
+        row.era5_10m_neutral_equivalent_windspd = windspd
+        row.era5_10m_neutral_equivalent_winddir = winddir
+
+        # row.smap_u_wind, row.smap_v_wind = decompose_wind(
+        #     row.smap_windspd, winddir, 'o')
+
+        pres_lvls.append(nearest_pres_lvl)
+
+    return new_tgt_part, pres_lvls
+
+def add_era5_pressure_levels(the_class, era5_file_path, tc_dt, tgt_name,
+                             era5_step_1, area, pres_lvls):
+    hourtime_row_mapper = get_hourtime_row_mapper(era5_step_1, tgt_name)
+    north, west, south, east = area
+
+    grbs = pygrib.open(era5_file_path)
+    messages_num = grbs.messages
+    grbs.close()
+    data_num = len(era5_step_1)
+    total = data_num * messages_num
+    count = 0
+
+    grbidx = pygrib.index(era5_file_path, 'dataTime')
+    indices_of_rows_to_delete = set()
+
+    # For every hour, update corresponding rows with grbs
+    for hourtime in range(0, 2400, 100):
+        if not len(hourtime_row_mapper[hourtime]):
+            continue
+        grb_time = datetime.time(int(hourtime/100), 0, 0)
+
+        selected_grbs = grbidx.select(dataTime=hourtime)
+
+        for grb in selected_grbs:
+            # Generate name which is the same with table column
+            name = process_grib_message_name(grb.name)
+            grb_spa_resolu = grb.jDirectionIncrementInDegrees
+            # data() method of pygrib is time-consuming
+            # So apply it to global area then update all
+            # smap part with grb of specific hourtime,
+            # which using data() method as less as possible
+            data, lats, lons = grb.data(south, north, west, east)
+            data = np.flip(data, 0)
+            lats = np.flip(lats, 0)
+            lons = np.flip(lons, 0)
+
+            masked_data = False
+            # MUST check masked array like this, because if an array
+            # is numpy.ma.core.MaskedArray, it is numpy.ndarray too.
+            # So only directly check whether an array is instance
+            # of numpy.ma.core.MaskedArray is safe.
+            if isinstance(data, np.ma.core.MaskedArray):
+                masked_data = True
+
+            # Update all rows which matching this hourtime
+            for row_idx in hourtime_row_mapper[hourtime]:
+                count += 1
+                # print((f"""\r{name}: {count}/{total}"""), end='')
+
+                # Skip this turn if pressure level of grb does not
+                # equal to the pressure level of point of
+                # era5_step_1
+                if pres_lvls[row_idx] != grb.level:
+                    continue
+
+                row = era5_step_1[row_idx]
+
+                era5_datetime = datetime.datetime.combine(
+                    tc_dt.date(), grb_time)
+                if row.era5_datetime != era5_datetime:
+                    the_class.logger.error((f"""datetime not same """
+                                       f"""in two steps of """
+                                       f"""extracting ERA5"""))
+
+                tgt_datetime = getattr(row, f'{tgt_name}_datetime')
+                tgt_minute = (tgt_datetime.hour * 60
+                              + tgt_datetime.minute)
+                grb_minute = int(hourtime/100) * 60
+                tgt_era5_diff_mins = tgt_minute - grb_minute
+                if (getattr(row, f'{tgt_name}_era5_diff_mins')
+                    != tgt_era5_diff_mins):
+                    #
+                    the_class.logger.error((f"""diff_mins not same """
+                                       f"""in two steps of """
+                                       f"""extracting ERA5"""))
+
+                tgt_from_rss = False
+                if tgt_name in the_class.CONFIG[
+                    'satel_data_sources']['rss']:
+                    tgt_from_rss = True
+
+                try:
+                    if tgt_from_rss:
+                        latlons, latlon_indices = \
+                                get_era5_corners_of_rss_cell(
+                                    row.lat, row.lon, lats, lons,
+                                    grb_spa_resolu)
+                    else:
+                        latlons, latlon_indices = \
+                                get_era5_corners_of_cell(
+                                    row.lat, row.lon, lats, lons)
+                except Exception as msg:
+                    breakpoint()
+                    exit(msg)
+                lat1, lat2, lon1, lon2 = latlons
+                lat1_idx, lat2_idx, lon1_idx, lon2_idx = \
+                        latlon_indices
+
+                # Check out whether there is masked cell in square
+                if masked_data:
+                    skip_row = False
+                    for tmp_lat_idx in [lat1_idx, lat2_idx]:
+                        for tmp_lon_idx in [lon1_idx, lon2_idx]:
+                            if data.mask[tmp_lat_idx][tmp_lon_idx]:
+                                skip_row = True
+                                indices_of_rows_to_delete.add(
+                                    row_idx)
+                    if skip_row:
+                        continue
+
+                square_data = data[lat1_idx:lat2_idx+1,
+                                   lon1_idx:lon2_idx+1]
+                square_lats = lats[lat1_idx:lat2_idx+1,
+                                   lon1_idx:lon2_idx+1]
+                square_lons = lons[lat1_idx:lat2_idx+1,
+                                   lon1_idx:lon2_idx+1]
+
+                if tgt_from_rss and grb_spa_resolu == 0.25:
+                    value = float(data.mean())
+                else:
+                    value = value_of_pt_in_era5_square(
+                        square_data, square_lats, square_lons,
+                        row.lat, row.lon)
+                    if value is None:
+                        # the_class.logger.warning((
+                        #     f"""[{name}] Not a square consists of """
+                        #     f"""four ERA5 grid points"""))
+                        breakpoint()
+                        continue
+
+                setattr(row, name, value)
+
+            delete_last_lines()
+            # print(f'{name}: Done')
+
+    grbidx.close()
+
+    # Move rows of era5_step_1 which should not deleted to a new
+    # list to accomplish filtering rows with masked data
+    result = []
+    for idx, row in enumerate(era5_step_1):
+        if idx not in indices_of_rows_to_delete:
+            result.append(row)
+
+    return result
+
+def get_hourtime_row_mapper(tgt_part, tgt_name):
+    tgt_datetime_name = f'{tgt_name}_datetime'
+    tgt_day = getattr(tgt_part[0], tgt_datetime_name).day
+    hourtime_row_mapper = dict()
+
+    for hourtime in range(0, 2400, 100):
+        hourtime_row_mapper[hourtime] = []
+
+    for idx, row in enumerate(tgt_part):
+        hour_roundered_dt = hour_rounder(
+            getattr(row, tgt_datetime_name))
+        # Skip situation that rounded hour is on next day
+        if hour_roundered_dt.day == tgt_day:
+            closest_time = 100 * hour_roundered_dt.hour
+            hourtime_row_mapper[closest_time].append(idx)
+
+    return hourtime_row_mapper
+
+def value_of_pt_in_era5_square(data, lats, lons, pt_lat, pt_lon):
+    if lats.shape != (2, 2) or lons.shape != (2, 2):
+        return None
+
+    f = interpolate.interp2d(lons, lats, data)
+    value = f(pt_lon, pt_lat)
+
+    return float(value)
+
+def create_match_table(the_class, src_1, src_2):
+    if 'era5' in [src_1, src_2]:
+        if src_2 != 'era5':
+            src_1 = src_2
+            src_2 = 'era5'
+    else:
+        the_class.logger.error(
+            'Sources of match have not been considered')
+        exit()
+
+    table_name = f'match_of_{src_1}_and_{src_2}'
+
+    class Match(object):
+        pass
+
+    if the_class.engine.dialect.has_table(the_class.engine, table_name):
+        metadata = MetaData(bind=the_class.engine, reflect=True)
+        t = metadata.tables[table_name]
+        mapper(Match, t)
+
+        return Match
+
+    cols = []
+    cols.append(Column('key', Integer, primary_key=True))
+    cols.append(Column('tc_sid', String(13), nullable=False))
+    cols.append(Column('date_time', DateTime, nullable=False))
+    cols.append(Column('match', Boolean, nullable=False))
+    cols.append(Column('tc_sid_datetime', String(70),
+                       nullable=False, unique=True))
+
+    metadata = MetaData(bind=the_class.engine)
+    t = Table(table_name, metadata, *cols)
+    metadata.create_all()
+    mapper(Match, t)
+
+    the_class.session.commit()
+
+    return Match

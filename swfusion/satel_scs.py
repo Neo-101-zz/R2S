@@ -71,12 +71,13 @@ class SCSSatelManager(object):
         self.years = [x for x in range(self.period[0].year,
                                        self.period[1].year+1)]
 
-        self.edge = self.CONFIG['rss']['subset_edge_in_degree']
 
+        self.edge = self.CONFIG['regression']['edge_in_degree']
         self.spa_resolu = dict()
-        self.spa_resolu['rss'] = self.CONFIG['rss']['spatial_resolution']
-        self.spa_resolu['grid'] = self.CONFIG['grid']\
-                ['spatial_resolution']
+        self.spa_resolu['rss'] = self.CONFIG['rss'][
+            'spatial_resolution']
+        self.spa_resolu['grid'] = self.CONFIG['grid'][
+            'spatial_resolution']
 
         self.grid_pts = dict()
 
@@ -703,10 +704,10 @@ class SCSSatelManager(object):
         else:
             return None
 
-    def _generate_wget_str(self, satel_config, query_result_file_name,
+    def _generate_wget_str(self, satel_config, query_result_filename,
                            start, rows):
         query_res_file = (f"""{satel_config['dirs']['query_results']}"""
-                          f"""{query_result_file_name}""")
+                          f"""{query_result_filename}""")
 
         # Generate query url
         query_parameters = (f"""(platformname:Sentinel-1 """
@@ -850,16 +851,16 @@ class SCSSatelManager(object):
         if satel_date in missing_dates:
             return None
         if satel_name == 'smap':
-            file_name = '%s%04d_%02d_%02d%s' % (
+            filename = '%s%04d_%02d_%02d%s' % (
                 file_prefix, satel_date.year, satel_date.month,
                 satel_date.day, file_suffix)
-            file_url = f'{data_url}{satel_date.year}/{file_name}'
+            file_url = f'{data_url}{satel_date.year}/{filename}'
         else:
-            file_name = '%s_%04d%02d%02d%s' % (
+            filename = '%s_%04d%02d%02d%s' % (
                 file_prefix, satel_date.year, satel_date.month,
                 satel_date.day, file_suffix)
             file_url = '%sy%04d/m%02d/%s' % (
-                data_url, satel_date.year, satel_date.month, file_name)
+                data_url, satel_date.year, satel_date.month, filename)
 
         retry_times = 0
         connect_success = False
@@ -885,7 +886,7 @@ class SCSSatelManager(object):
 
             return None
 
-        file_path = f'{save_dir}{file_name}'
+        file_path = f'{save_dir}{filename}'
         utils.download(file_url, file_path)
 
         return file_path
@@ -1508,10 +1509,10 @@ class SCSSatelManager(object):
 
             nc_files_dir = (f"""{zip_file.replace('zip', 'SAFE')}/"""
                             f"""measurement/""")
-            nc_file_names = [f for f in os.listdir(nc_files_dir)
+            nc_filenames = [f for f in os.listdir(nc_files_dir)
                              if f.endswith('.nc')]
 
-            for nc_name in nc_file_names:
+            for nc_name in nc_filenames:
                 nc_path = f'{nc_files_dir}{nc_name}'
 
                 data = self.read_single_sentinel_1_nc(nc_path, SatelERA5)

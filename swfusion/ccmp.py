@@ -65,14 +65,14 @@ class CCMPManager(object):
         self._get_region_corners_indices()
 
         self.root_url = self.CONFIG['ccmp']['url']
-        self.file_name_prefix = self.CONFIG['ccmp']['file_name']\
+        self.filename_prefix = self.CONFIG['ccmp']['filename']\
                 ['prefix']
-        self.file_name_suffix = self.CONFIG['ccmp']['file_name']\
+        self.filename_suffix = self.CONFIG['ccmp']['filename']\
                 ['suffix']
         self.root_dir = self.CONFIG['ccmp']['dir']
 
         utils.set_format_custom_text(
-            self.CONFIG['ccmp']['file_name_length'])
+            self.CONFIG['ccmp']['filename_length'])
 
         if work_mode == 'fetch':
             self.download('tc')
@@ -123,20 +123,20 @@ class CCMPManager(object):
 
     def download_ccmp_on_one_day(self, dt_cursor):
         utils.setup_signal_handler()
-        file_name = (f"""{self.file_name_prefix}"""
+        filename = (f"""{self.filename_prefix}"""
                      f"""{dt_cursor.strftime('%Y%m%d')}"""
-                     f"""{self.file_name_suffix}""")
+                     f"""{self.filename_suffix}""")
         url_prefix = (f"""{self.root_url}/Y{dt_cursor.year}/"""
                       f"""M{str(dt_cursor.month).zfill(2)}/""")
         file_dir = (f"""{self.root_dir}Y{dt_cursor.year}/"""
                     f"""M{str(dt_cursor.month).zfill(2)}/""")
-        file_path = f'{file_dir}{file_name}'
-        file_url = f'{url_prefix}{file_name}'
+        file_path = f'{file_dir}{filename}'
+        file_url = f'{url_prefix}{filename}'
 
         if os.path.exists(file_path):
             return file_path
 
-        self.logger.info((f"""Downloading {file_name}"""))
+        self.logger.info((f"""Downloading {filename}"""))
 
         os.makedirs(file_dir, exist_ok=True)
         utils.download(file_url, file_path, progress=True)

@@ -52,7 +52,7 @@ class ERA5Manager(object):
         self.years = [x for x in range(self.period[0].year,
                                        self.period[1].year+1)]
         self.main_hours = self.CONFIG['era5']['main_hours']
-        self.edge = self.CONFIG['era5']['subset_edge_in_degree']
+        self.edge = self.CONFIG['regression']['edge_in_degree']
 
         self.cdsapi_client = cdsapi.Client()
         self.vars = self.CONFIG['era5']['vars']
@@ -105,12 +105,17 @@ class ERA5Manager(object):
             self.download_and_read(work_mode, vars_mode)
             # self.download_and_read('tc', 'surface_all_vars')
 
-    def get_era5_columns(self, satel_era5_time_diff=True):
+    # def get_era5_columns(self, satel_era5_time_diff=True):
+    def get_era5_columns(self, satel_era5_time_diff=True, tgt_name=None):
         cols = []
 
         if satel_era5_time_diff:
-            cols.append(Column('satel_era5_diff_mins', Integer,
-                               nullable=False))
+            if tgt_name is None:
+                cols.append(Column('satel_era5_diff_mins', Integer,
+                                   nullable=False))
+            else:
+                cols.append(Column(f'{tgt_name}_era5_diff_mins', Integer,
+                                   nullable=False))
 
         for var in self.vars['grib']['reanalysis_single_levels']\
                    ['tc']:
@@ -225,8 +230,8 @@ class ERA5Manager(object):
 
     def download_single_levels_vars(self, vars_mode, target_datetime,
                                     time_mode, times, area,
-                                    match_satel, file_name_suffix,
-                                    show_info=True):
+                                    match_satel, filename_suffix,
+                                    show_info=False):
         era5_dirs = self.CONFIG['era5']['dirs']\
                 ['reanalysis_single_levels']
 
@@ -236,13 +241,13 @@ class ERA5Manager(object):
                 f"""Y{target_datetime.year}/"""
                 f"""M{str(target_datetime.month).zfill(2)}/"""
             )
-            file_name = target_datetime.strftime('%Y_%m%d')
+            filename = target_datetime.strftime('%Y_%m%d')
             for t in times:
-                file_name = f'{file_name}_{str(t).zfill(2)}'
+                filename = f'{filename}_{str(t).zfill(2)}'
             for a in area:
-                file_name = f'{file_name}_{a}'
-            file_name = f'{file_name}_{file_name_suffix}.grib'
-            file_path = f'{file_dir}{file_name}'
+                filename = f'{filename}_{a}'
+            filename = f'{filename}_{filename_suffix}.grib'
+            file_path = f'{file_dir}{filename}'
             variables = self.vars['request']\
                     ['reanalysis_single_levels']['tc']
             vars_name = 'TC-relevant single levels variables'
@@ -253,13 +258,13 @@ class ERA5Manager(object):
                 f"""Y{target_datetime.year}/"""
                 f"""M{str(target_datetime.month).zfill(2)}/"""
             )
-            file_name = target_datetime.strftime('%Y_%m%d')
+            filename = target_datetime.strftime('%Y_%m%d')
             for t in times:
-                file_name = f'{file_name}_{str(t).zfill(2)}'
+                filename = f'{filename}_{str(t).zfill(2)}'
             for a in area:
-                file_name = f'{file_name}_{a}'
-            file_name = f'{file_name}_{file_name_suffix}.grib'
-            file_path = f'{file_dir}{file_name}'
+                filename = f'{filename}_{a}'
+            filename = f'{filename}_{filename_suffix}.grib'
+            file_path = f'{file_dir}{filename}'
             variables = self.vars['request']\
                     ['reanalysis_single_levels']\
                     ['10_metre_equivalent_neutral_wind']
@@ -306,8 +311,8 @@ class ERA5Manager(object):
     def download_pressure_levels_vars(self, vars_mode,
                                       target_datetime, time_mode,
                                       times, area, pressure_levels,
-                                      match_satel, file_name_suffix,
-                                      show_info=True):
+                                      match_satel, filename_suffix,
+                                      show_info=False):
         era5_dirs = self.CONFIG['era5']['dirs']\
                 ['reanalysis_pressure_levels']
 
@@ -317,13 +322,13 @@ class ERA5Manager(object):
                 f"""Y{target_datetime.year}/"""
                 f"""M{str(target_datetime.month).zfill(2)}/"""
             )
-            file_name = target_datetime.strftime('%Y_%m%d')
+            filename = target_datetime.strftime('%Y_%m%d')
             for t in times:
-                file_name = f'{file_name}_{str(t).zfill(2)}'
+                filename = f'{filename}_{str(t).zfill(2)}'
             for a in area:
-                file_name = f'{file_name}_{a}'
-            file_name = f'{file_name}_{file_name_suffix}.grib'
-            file_path = f'{file_dir}{file_name}'
+                filename = f'{filename}_{a}'
+            filename = f'{filename}_{filename_suffix}.grib'
+            file_path = f'{file_dir}{filename}'
             variables = self.vars['request']\
                     ['reanalysis_pressure_levels']['all_vars']
             vars_name = 'all pressure levels variables'

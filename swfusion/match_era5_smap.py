@@ -90,7 +90,7 @@ class matchManager(object):
         # Traverse WP TCs
         for idx, tc in enumerate(tc_query):
             try:
-                converted_lon = utils.longtitude_converter(
+                converted_lon = utils.longitude_converter(
                     tc.lon, '360', '-180')
                 if bool(globe.is_land(tc.lat, converted_lon)):
                     continue
@@ -627,13 +627,13 @@ class matchManager(object):
         return new_satel_part, pres_lvls
 
     def value_of_rss_pt_in_era5_square(self, data, lats, lons,
-                                       rss_lat, rss_lon):
+                                       pt_lat, pt_lon):
         if lats.shape != (2, 2) or lons.shape != (2, 2):
             self.logger.error((f"""Not a square consists of four """
                                f"""ERA5 grid points"""))
 
         f = interpolate.interp2d(lons, lats, data)
-        value = f(rss_lon, rss_lat)
+        value = f(pt_lon, pt_lat)
 
         return float(value)
 
