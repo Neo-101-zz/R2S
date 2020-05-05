@@ -53,9 +53,21 @@ RADII_LEVELS = [34, 50, 64]
 # Python program to check if rectangles overlap 
 class Point: 
     def __init__(self, x, y): 
-        self.x = x 
-        self.y = y 
+        self.x = x
+        self.y = y
 
+class SFMRPoint:
+    def __init__(self, date_time=None, lon=None, lat=None,
+                 air_temp=None, salinity=None, sst=None,
+                 rain_rate=None, windspd=None):
+        self.date_time = date_time
+        self.lon = lon
+        self.lat = lat
+        self.air_temp = air_temp
+        self.salinity = salinity
+        self.sst = sst
+        self.rain_rate = rain_rate
+        self.windspd = windspd
 
 # Returns true if two rectangles(l1, r1)
 # and (l2, r2) overlap 
@@ -2872,6 +2884,177 @@ def get_terminal_indices_of_nc_var(var, masked_value):
 """
 
 def get_sfmr_track_and_windspd(nc_file_path, data_indices):
+    dataset = netCDF4.Dataset(nc_file_path)
+    # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which
+    # faster than 1 m/s, so must disable auto mask
+    dataset.set_auto_mask(False)
+    vars = dataset.variables
+
+    track_lonlats = []
+    track_pts = []
+    avg_pts = []
+
+    # Get track
+    for idx in data_indices:
+        pt = SFMRPoint(datetime.datetime.combine(
+            sfmr_nc_converter('DATE', vars['DATE'][idx]),
+            sfmr_nc_converter('TIME', vars['TIME'][idx])),
+            (vars['LON'][idx] + 360) % 360, vars['LAT'][idx],
+            vars['ATEMP'][idx], vars['SALN'][idx], vars['SST'][idx],
+            vars['SRR'][idx], vars['SWS'][idx])
+        track_pts.append(pt)
+        track_lonlats.append((pt.lon, pt.lat))
+
+    earliest_dt_of_track = track_pts[0].date_time
+
+    square_edge = 0.25
+    half_square_edge = square_edge / 2
+    # Split track with `square_edge` * `square_edge` degree squares
+    # around SFMR points
+    # For each point along track, there are two possibilities:
+    # 1. center of square
+    # 2. not center of square
+
+    # First find all centers of square:
+    # [index of center 0, index of center 1, ...]
+    # each element is the index of center points in `track_pts`
+    square_center_indices = []
+    for idx, pt in enumerate(track_pts):
+        # Set start terminal along track as first square center
+        if not idx:
+            one_avg_pt = SFMRPoint()
+            one_avg_pt.lon = pt.lon
+            one_avg_pt.lat = pt.lat
+            avg_pts.append(one_avg_pt)
+            square_center_indices.append(idx)
+        # Then search for next square center
+        # If the difference between longitude or latitude is not smaller
+        # than square edge, we encounter the center point of next square
+        if (abs(pt.lon - avg_pts[-1].lon) >= square_edge
+            or abs(pt.lat - avg_pts[-1].lat) >= square_edge):
+            # Record the new square center
+            one_avg_pt = SFMRPoint()
+            one_avg_pt.lon = pt.lon
+            one_avg_pt.lat = pt.lat
+            avg_pts.append(one_avg_pt)
+            square_center_indices.append(idx)
+
+    # There may be some points left near the end terminal of track.
+    # from which cannot select the square center using method above.
+    # But they are out of the range of last square.
+    # So we need to set the end terminal of track to be the last square
+    # center.
+    end_is_center = False
+    for idx, pt in enumerate(track_pts):
+        if idx <= square_center_indices[-1]:
+            continue
+        if (abs(pt.lon - avg_pts[-1].lon) >= half_square_edge
+            or abs(pt.lat - avg_pts[-1].lat) >= half_square_edge):
+            # Make sure of the necessity of setting the end terminal as
+            # the last square center
+            end_is_center = True
+            break
+
+    if end_is_center:
+        one_avg_pt = SFMRPoint()
+        one_avg_pt.lon = track_pts[-1].lon
+        one_avg_pt.lat = track_pts[-1].lat
+        avg_pts.append(one_avg_pt)
+        square_center_indices.append(len(track_pts) - 1)
+
+    # Save result of spliting into a list of list:
+    # [[square_0_pt_0, square_0_pt_1, ...], [square_1_pt_0,
+    # square_1_pt_1, ...], ...]
+    square_groups = []
+    for center in square_center_indices:
+        square_groups.append([])
+
+    for idx, pt in enumerate(track_pts):
+        try:
+            min_dis = 999
+            idx_of_nearest_center_idx = None
+
+            for index_of_center_indices in range(
+                len(square_center_indices)):
+                #
+                center_index = square_center_indices[
+                    index_of_center_indices]
+                tmp_center = track_pts[center_index]
+                lon_diff = abs(pt.lon - tmp_center.lon)
+                lat_diff = abs(pt.lat - tmp_center.lat)
+
+                if (lon_diff <= half_square_edge
+                    and lat_diff <= half_square_edge):
+                    # This point along track is in the square
+                    dis = math.sqrt(math.pow(lon_diff, 2)
+                                    + math.pow(lat_diff, 2))
+                    if dis < min_dis:
+                        min_dis = dis
+                        idx_of_nearest_center_idx = \
+                                index_of_center_indices
+
+            if idx_of_nearest_center_idx is not None:
+                square_groups[idx_of_nearest_center_idx].append(idx)
+            else:
+                continue
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
+
+    if len(square_groups) != len(square_center_indices):
+        logger.error(f"""Number of groups does not equal to """
+                     f"""number of centers""")
+        breakpoint()
+
+    to_delete_empty_groups_indices = []
+    # Average wind speed in square to the center point
+    for index_of_center_indices in range(len(square_center_indices)):
+        try:
+            group_size = len(square_groups[index_of_center_indices])
+            if not group_size:
+                to_delete_empty_groups_indices.append(
+                    index_of_center_indices)
+                continue
+
+            # Calculated the average datetime of each group
+            seconds_shift_sum = 0
+            for pt_index in square_groups[index_of_center_indices]:
+                temporal_shift = (track_pts[pt_index].date_time
+                                  - earliest_dt_of_track)
+                seconds_shift_sum += (temporal_shift.days * 24 * 3600
+                                      + temporal_shift.seconds)
+            avg_seconds_shift = seconds_shift_sum / group_size
+            avg_pts[index_of_center_indices].date_time = \
+                    earliest_dt_of_track + datetime.timedelta(
+                        seconds=avg_seconds_shift)
+
+            # Calculated the average of other variables of each group
+            for attr in ['air_temp', 'salinity', 'sst', 'rain_rate',
+                         'windspd']:
+                sum = 0
+                for pt_index in square_groups[index_of_center_indices]:
+                    # Masked wind is smaller than 0
+                    value = getattr(track_pts[pt_index], attr)
+                    if value > 0:
+                        sum += value
+                setattr(avg_pts[index_of_center_indices], attr,
+                        sum / group_size)
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
+
+    if len(to_delete_empty_groups_indices):
+        new_avg_pts = []
+        for i in range(len(avg_pts)):
+            if i not in to_delete_empty_groups_indices:
+                new_avg_pts.append(avg_pts[i])
+
+        del avg_pts
+        avg_pts = new_avg_pts
+
+    return track_lonlats, avg_pts
+
+def old_get_sfmr_track_and_windspd(nc_file_path, data_indices):
     """Get data points along SFMR track, averaged points' longitude,
     averaged points' latitude and averaged points' wind speed.
 
@@ -2907,12 +3090,15 @@ def get_sfmr_track_and_windspd(nc_file_path, data_indices):
     # faster than 1 m/s, so must disable auto mask
     dataset.set_auto_mask(False)
     vars = dataset.variables
-    lons = vars['LON']
-    lats = vars['LAT']
-    wind = vars['SWS']
+
     track = []
+    track_air_temp = []
+    track_salinity = []
+    track_rain_rate = []
+    track_sst = []
     track_wind = []
     track_dt = []
+
     avg_dts = []
     avg_lons = []
     avg_lats = []
@@ -2920,10 +3106,10 @@ def get_sfmr_track_and_windspd(nc_file_path, data_indices):
 
     # Get track
     for idx in data_indices:
-        lon = (lons[idx] + 360) % 360
-        lat = lats[idx]
+        lon = (vars['LON'][idx] + 360) % 360
+        lat = vars['LAT'][idx]
         track.append((lon, lat))
-        track_wind.append(wind[idx])
+        track_wind.append(vars['SWS'][idx])
         track_dt.append(datetime.datetime.combine(
             sfmr_nc_converter('DATE', vars['DATE'][idx]),
             sfmr_nc_converter('TIME', vars['TIME'][idx])
@@ -3076,8 +3262,7 @@ def get_sfmr_track_and_windspd(nc_file_path, data_indices):
     return track, avg_dts, avg_lons, avg_lats, avg_windspd
 
 def draw_sfmr_windspd_and_track(the_class, fig, ax, tc_datetime,
-                                sfmr_tracks, sfmr_lons, sfmr_lats,
-                                sfmr_windspd, max_windspd):
+                                sfmr_tracks, sfmr_pts, max_windspd):
     track_lons = []
     track_lats = []
     for single_track in sfmr_tracks:
@@ -3088,12 +3273,24 @@ def draw_sfmr_windspd_and_track(the_class, fig, ax, tc_datetime,
                 zorder=the_class.zorders['sfmr_track'])
 
     try:
-        tracks_num = len(sfmr_windspd)
-        for i in range(tracks_num):
-            # for j in range(len(sfmr_windspd[i])):
-            ax.scatter(sfmr_lons[i], sfmr_lats[i], s=60,
-                       c=sfmr_windspd[i], cmap=plt.cm.rainbow,
-                       vmin=0, vmax=max_windspd,
+        all_lons = []
+        all_lats = []
+        all_windspd = []
+        for i in range(len(sfmr_pts)):
+            tmp_lons = []
+            tmp_lats = []
+            tmp_windspd = []
+            for j in range(len(sfmr_pts[i])):
+                tmp_lons.append(sfmr_pts[i][j].lon)
+                tmp_lats.append(sfmr_pts[i][j].lat)
+                tmp_windspd.append(sfmr_pts[i][j].windspd)
+            all_lons.append(tmp_lons)
+            all_lats.append(tmp_lats)
+            all_windspd.append(tmp_windspd)
+
+        for i in range(len(sfmr_pts)):
+            ax.scatter(all_lons[i], all_lats[i], s=60, c=all_windspd[i],
+                       cmap=plt.cm.rainbow, vmin=0, vmax=max_windspd,
                        zorder=the_class.zorders['sfmr_point'],
                        edgecolors='black')
     except Exception as msg:
@@ -3138,38 +3335,26 @@ def interp_satel_era5_diff_mins_matrix(diff_mins):
 
     return diff_mins
 
-def validate_with_sfmr(tgt_name, tc_dt, sfmr_dts, sfmr_lons,
-                       sfmr_lats, sfmr_windspd, tgt_lons, tgt_lats,
-                       tgt_windspd, tgt_mesh, tgt_diff_mins):
+
+def validate_with_sfmr(the_class, tgt_name, tc, sfmr_pts, tgt_lons,
+                       tgt_lats, tgt_windspd, tgt_mesh, tgt_diff_mins):
     """'tgt' is the abbreviation for word 'target'.
 
     """
-    num_sfmr_tracks = len(sfmr_dts)
+    Validation = create_sfmr_validation_table(the_class, tgt_name)
+    num_sfmr_tracks = len(sfmr_pts)
     num_tgt_lats, num_tgt_lons = tgt_windspd.shape
 
     grid_edge = 0.25
     half_grid_edge = grid_edge / 2
     max_min_dis = math.sqrt(half_grid_edge ** 2 + half_grid_edge ** 2)
 
-    # 'tb' is the abbreviation for word 'table'
-    tb_tgt_names = []
-    tb_sfmr_dts = []
-    tb_sfmr_lons = []
-    tb_sfmr_lats = []
-    tb_sfmr_windspd = []
-    tb_tgt_dts = []
-    tb_tgt_lons = []
-    tb_tgt_lats = []
-    tb_tgt_windspd = []
-    tb_dis_minutes = []
-    tb_dis_kms = []
-    tb_windspd_bias = []
-
+    validation_list = []
     # Traverse SFMR data points
     for t in range(num_sfmr_tracks):
-        for i in range(len(sfmr_dts[t])):
-            base_lon = sfmr_lons[t][i]
-            base_lat = sfmr_lats[t][i]
+        for i in range(len(sfmr_pts[t])):
+            base_lon = sfmr_pts[t][i].lon
+            base_lat = sfmr_pts[t][i].lat
             # Traverse tgt data points which have valid wind speed to
             # find the one closest to the SFMR data point
             min_dis = 999999.9
@@ -3218,57 +3403,55 @@ def validate_with_sfmr(tgt_name, tc_dt, sfmr_dts, sfmr_lons,
                 min_dis_lon = tgt_lons[min_dis_lon_idx]
             min_dis_windspd = tgt_windspd[min_dis_lat_idx][
                 min_dis_lon_idx]
+
             if tgt_name != 'smap':
-                min_dis_dt = tc_dt
+                min_dis_dt = tc.date_time
             else:
-                min_dis_dt = tc_dt + datetime.timedelta(
+                min_dis_dt = tc.date_time + datetime.timedelta(
                     seconds=60*int(tgt_diff_mins[min_dis_lat_idx][
                         min_dis_lon_idx])
                 )
 
+            row = Validation()
+            row.tc_sid = tc.sid
 
-            tb_tgt_names.append(tgt_name)
-            tb_sfmr_dts.append(sfmr_dts[t][i])
-            tb_sfmr_lons.append(base_lon)
-            tb_sfmr_lats.append(base_lat)
-            tb_sfmr_windspd.append(sfmr_windspd[t][i])
-            tb_tgt_dts.append(min_dis_dt)
-            tb_tgt_lons.append(min_dis_lon)
-            tb_tgt_lats.append(min_dis_lat)
-            tb_tgt_windspd.append(min_dis_windspd)
+            row.sfmr_datetime = sfmr_pts[t][i].date_time
+            row.sfmr_lon = base_lon
+            row.sfmr_lat = base_lat
+
+            for attr in ['air_temp', 'salinity', 'sst', 'rain_rate',
+                         'windspd']:
+                value = getattr(sfmr_pts[t][i], attr)
+                setattr(row, f'sfmr_{attr}', value)
+
+            setattr(row, f'{tgt_name}_datetime', min_dis_dt)
+            setattr(row, f'{tgt_name}_lon', min_dis_lon)
+            setattr(row, f'{tgt_name}_lat', min_dis_lat)
+            setattr(row, f'{tgt_name}_windspd', min_dis_windspd)
 
             # Temporal distance in minutes
-            temporal_dis = min_dis_dt - sfmr_dts[t][i]
-            tb_dis_minutes.append(temporal_dis.days * 24 * 60
-                                  + temporal_dis.seconds / 60)
+            temporal_dis = min_dis_dt - sfmr_pts[t][i].date_time
+            row.dis_minutes = (temporal_dis.days * 24 * 60
+                               + temporal_dis.seconds / 60)
             # Spatial distance in kilo meters
-            sfmr_pt = (base_lat,
-                       longitude_converter(base_lon, '360', '-180'))
-            tgt_pt = (min_dis_lat,
-                      longitude_converter(min_dis_lon, '360', '-180'))
-            tb_dis_kms.append(distance.distance(tgt_pt, sfmr_pt).km)
+            one_sfmr_pt = (base_lat, longitude_converter(
+                base_lon, '360', '-180'))
+            one_tgt_pt = (min_dis_lat, longitude_converter(
+                min_dis_lon, '360', '-180'))
+            row.dis_kms = distance.distance(one_tgt_pt, one_sfmr_pt).km
             # Bias of wind speed
-            tb_windspd_bias.append(min_dis_windspd - sfmr_windspd[t][i])
+            row.windspd_bias = min_dis_windspd - row.sfmr_windspd
 
-    # Combine lists for table to pandas DataFrame
-    res_dict = {
-        'tgt_name': tb_tgt_names,
-        'sfmr_dt': tb_sfmr_dts,
-        'sfmr_lon': tb_sfmr_lons,
-        'sfmr_lat': tb_sfmr_lats,
-        'sfmr_windspd': tb_sfmr_windspd,
-        'tgt_dt': tb_tgt_dts,
-        'tgt_lon': tb_tgt_lons,
-        'tgt_lat': tb_tgt_lats,
-        'tgt_windspd': tb_tgt_windspd,
-        'dis_minutes': tb_dis_minutes,
-        'dis_kms': tb_dis_kms,
-        'windspd_bias': tb_windspd_bias,
-    }
-    # Will datetime columns remain their type?
-    res_df = pd.DataFrame(res_dict)
+            row.tc_sid_sfmr_datetime = (f"""{row.tc_sid}_"""
+                                        f"""{row.sfmr_datetime}""")
 
-    return res_df
+            validation_list.append(row)
+
+    bulk_insert_avoid_duplicate_unique(
+        validation_list,
+        the_class.CONFIG['database']['batch_size']['insert'],
+        Validation, ['tc_sid_sfmr_datetime'], the_class.session,
+        check_self=True)
 
 def get_bound_of_multiple_int(lims, interval):
     """lims[0] < lims[1]
@@ -3619,14 +3802,11 @@ def sfmr_rounded_hours(the_class, tc, next_tc, spatial_temporal_info):
 
     return hour_info_pt_idx
 
-def get_sfmr_windspd_along_track(the_class, tc, sfmr_brief_info,
-                                 one_hour_info_pt_idx, 
-                                 use_slow_wind=False):
+def average_sfmr_along_track(the_class, tc, sfmr_brief_info,
+                             one_hour_info_pt_idx,
+                             use_slow_wind=False):
     all_tracks = []
-    all_dts = []
-    all_lons = []
-    all_lats = []
-    all_windspd = []
+    all_pts = []
 
     # Logger information
     # the_class.logger.info(f'Getting xyz_matrix of SFMR around TC')
@@ -3648,10 +3828,7 @@ def get_sfmr_windspd_along_track(the_class, tc, sfmr_brief_info,
             if result[0] is None:
                 return False, None, None, None, None, None
             all_tracks.append(result[0])
-            all_dts.append(result[1])
-            all_lons.append(result[2])
-            all_lats.append(result[3])
-            all_windspd.append(result[4])
+            all_pts.append(result[1])
         except Exception as msg:
             breakpoint()
             exit(msg)
@@ -3668,38 +3845,23 @@ def get_sfmr_windspd_along_track(the_class, tc, sfmr_brief_info,
 
     # J. Carswell 2015, personal communication
     final_tracks = []
-    final_dts = []
-    final_lons = []
-    final_lats = []
-    final_windspd = []
+    final_pts = []
     try:
-        for track_idx, single_track_windspd in enumerate(
-            all_windspd):
+        for track_idx, single_track_pts in enumerate(
+            all_pts):
             #
-            tmp_tracks = []
-            tmp_dts = []
-            tmp_lons = []
-            tmp_lats = []
-            tmp_windspd = []
-            for pt_idx, pt_windspd in enumerate(
-                single_track_windspd):
+            tmp_pts = []
+            for pt_idx, pt in enumerate(
+                single_track_pts):
                 #
-                if (pt_windspd == 0
-                    or (not use_slow_wind and pt_windspd < 15)):
+                if (pt.windspd == 0
+                    or (not use_slow_wind and pt.windspd < 15)):
                     continue
-                tmp_tracks.append(all_tracks[track_idx][pt_idx])
-                tmp_dts.append(all_dts[track_idx][pt_idx])
-                tmp_lons.append(all_lons[track_idx][pt_idx])
-                tmp_lats.append(all_lats[track_idx][pt_idx])
-                tmp_windspd.append(all_windspd[track_idx][pt_idx])
+                tmp_pts.append(all_pts[track_idx][pt_idx])
 
-            if len(tmp_windspd):
-                final_tracks.append(tmp_tracks)
-                final_dts.append(tmp_dts)
-                final_lons.append(tmp_lons)
-                final_lats.append(tmp_lats)
-                final_windspd.append(tmp_windspd)
-
+            if len(tmp_pts):
+                final_tracks.append(all_tracks[track_idx])
+                final_pts.append(tmp_pts)
     except Exception as msg:
         breakpoint()
         exit(msg)
@@ -3708,11 +3870,10 @@ def get_sfmr_windspd_along_track(the_class, tc, sfmr_brief_info,
     #     and tc.date_time == datetime.datetime(2014, 7, 2, 6, 0)):
     #     breakpoint()
 
-    if not len(final_windspd):
-        return False, None, None, None, None, None
+    if not len(final_pts):
+        return False, None, None
     else:
-        return (True, final_tracks, final_dts, final_lons, final_lats,
-                final_windspd)
+        return True, final_tracks, final_pts
 
 def east_or_north_shift(direction, base_pt, tgt_pt):
     if direction == 'east':
@@ -4197,3 +4358,86 @@ def create_match_table(the_class, src_1, src_2):
     the_class.session.commit()
 
     return Match
+
+def create_sfmr_validation_table(the_class, tgt_name):
+    table_name = f'{tgt_name}_validation_by_sfmr'
+
+    class Validation(object):
+        pass
+
+    if the_class.engine.dialect.has_table(the_class.engine, table_name):
+        metadata = MetaData(bind=the_class.engine, reflect=True)
+        t = metadata.tables[table_name]
+        mapper(Validation, t)
+
+        return Validation
+
+    cols = []
+    cols.append(Column('key', Integer, primary_key=True))
+    cols.append(Column('tc_sid', String(13), nullable=False))
+
+    cols.append(Column('sfmr_datetime', DateTime, nullable=False))
+    cols.append(Column('sfmr_lon', Float, nullable=False))
+    cols.append(Column('sfmr_lat', Float, nullable=False))
+    cols.append(Column('sfmr_air_temp', Float, nullable=False))
+    cols.append(Column('sfmr_salinity', Float, nullable=False))
+    cols.append(Column('sfmr_sst', Float, nullable=False))
+    cols.append(Column('sfmr_rain_rate', Float, nullable=False))
+    cols.append(Column('sfmr_windspd', Float, nullable=False))
+
+    cols.append(Column(f'{tgt_name}_datetime', DateTime, nullable=False))
+    cols.append(Column(f'{tgt_name}_lon', Float, nullable=False))
+    cols.append(Column(f'{tgt_name}_lat', Float, nullable=False))
+    cols.append(Column(f'{tgt_name}_windspd', Float, nullable=False))
+
+    cols.append(Column('dis_minutes', Float, nullable=False))
+    cols.append(Column('dis_kms', Float, nullable=False))
+    cols.append(Column('windspd_bias', Float, nullable=False))
+
+    cols.append(Column('tc_sid_sfmr_datetime', String(70),
+                       nullable=False, unique=True))
+
+    metadata = MetaData(bind=the_class.engine)
+    t = Table(table_name, metadata, *cols)
+    metadata.create_all()
+    mapper(Validation, t)
+
+    the_class.session.commit()
+
+    return Validation
+
+def create_ibtracs_validation_table(the_class, tgt_name):
+    table_name = f'{tgt_name}_validation_by_ibtracs'
+
+    class Validation(object):
+        pass
+
+    if the_class.engine.dialect.has_table(the_class.engine, table_name):
+        metadata = MetaData(bind=the_class.engine, reflect=True)
+        t = metadata.tables[table_name]
+        mapper(Validation, t)
+
+        return Validation
+
+    cols = []
+    cols.append(Column('key', Integer, primary_key=True))
+    cols.append(Column('tc_sid', String(13), nullable=False))
+
+    cols.append(Column('ibtracs_datetime', DateTime, nullable=False))
+    cols.append(Column('ibtracs_windspd_mps', Float, nullable=False))
+    cols.append(Column('ibtracs_pres_mb', Float, nullable=False))
+
+    cols.append(Column(f'{tgt_name}_datetime', DateTime, nullable=False))
+    cols.append(Column(f'{tgt_name}_windspd_mps', Float, nullable=False))
+
+    cols.append(Column('tc_sid_ibtracs_datetime', String(70),
+                       nullable=False, unique=True))
+
+    metadata = MetaData(bind=the_class.engine)
+    t = Table(table_name, metadata, *cols)
+    metadata.create_all()
+    mapper(Validation, t)
+
+    the_class.session.commit()
+
+    return Validation

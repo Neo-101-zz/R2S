@@ -34,13 +34,10 @@ class matchManager(object):
         self.logger = logging.getLogger(__name__)
         utils.setup_database(self, Base)
 
-        # utils.load_match_data_sources(self)
         # self.load_match()
         # breakpoint()
 
         self.extract()
-
-        # utils.update_match_data_sources(self)
 
     def load_match(self):
         Match = utils.create_match_table(self, 'sfmr', 'era5')
@@ -230,9 +227,9 @@ class matchManager(object):
                 exit(msg)
 
             if data is None:
-                # Exception occurs and do not need to save matchup of data
-                # sources before shutdowning program.  Because all hours
-                # between `tc` and `next_tc` are recored in `Match`
+                # Exception occurs and do not need to save matchup of
+                # data sources before shutdowning program.  Because all
+                # hours between `tc` and `next_tc` are recored in `Match`
                 # table
                 need_exit = True
                 break
@@ -326,7 +323,7 @@ class matchManager(object):
         data = []
         try:
             success, sfmr_tracks, sfmr_dts, sfmr_lons, sfmr_lats, \
-                    sfmr_windspd = utils.get_sfmr_windspd_along_track(
+                    sfmr_windspd = utils.average_sfmr_along_track(
                         self, interped_tc, sfmr_brief_info,
                         one_hour_info_pt_idx, use_slow_wind=True)
 
