@@ -1,4 +1,3 @@
-from datetime import date
 import datetime
 import logging
 import math
@@ -6,7 +5,6 @@ import os
 import signal
 import sys
 import pickle
-import time
 
 import numpy as np
 from urllib import request
@@ -15,7 +13,6 @@ import progressbar
 import mysql.connector
 from mysql.connector import errorcode
 import netCDF4
-import bytemaps
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine
 from sqlalchemy import Integer, Float, String, DateTime, Boolean
@@ -31,6 +28,11 @@ from global_land_mask import globe
 from scipy import interpolate
 import pandas as pd
 from geopy import distance
+import seaborn as sns
+import smogn
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.utils import shuffle
 
 from amsr2_daily import AMSR2daily
 from ascat_daily import ASCATDaily
@@ -50,11 +52,12 @@ KM_OF_ONE_DEGREE = KM_OF_ONE_NMILE / DEGREE_OF_ONE_NMILE
 RADII_LEVELS = [34, 50, 64]
 
 
-# Python program to check if rectangles overlap 
-class Point: 
-    def __init__(self, x, y): 
+# Python program to check if rectangles overlap
+class Point:
+    def __init__(self, x, y):
         self.x = x
         self.y = y
+
 
 class SFMRPoint:
     def __init__(self, date_time=None, lon=None, lat=None,
@@ -69,8 +72,9 @@ class SFMRPoint:
         self.rain_rate = rain_rate
         self.windspd = windspd
 
+
 # Returns true if two rectangles(l1, r1)
-# and (l2, r2) overlap 
+# and (l2, r2) overlap
 def doOverlap(l1, r1, l2, r2):
     """Check if two rectangles overlap.
 
@@ -91,19 +95,18 @@ def doOverlap(l1, r1, l2, r2):
         True if two rectangles overlap, False otherwise.
 
     """
-    # If one rectangle is on left side of other 
-    if(l1.x > r2.x or l2.x > r1.x): 
+    # If one rectangle is on left side of other
+    if(l1.x > r2.x or l2.x > r1.x):
         return False
 
-    # If one rectangle is above other 
-    if(l1.y < r2.y or l2.y < r1.y): 
+    # If one rectangle is above other
+    if(l1.y < r2.y or l2.y < r1.y):
         return False
 
     return True
 
 
 def delete_last_lines(n=1):
-    CURSOR_UP_ONE = '\x1b[1A'
     CURSOR_LEFT_HEAD = '\x1b[1G'
     ERASE_LINE = '\x1b[2K'
 
@@ -139,8 +142,8 @@ def reset_signal_handler():
 
 
 def handler(signum, frame):
-    """Handle forcing quit which may be made by pressing Control + C and
-    sending SIGINT which will interupt this application.
+    """Handle forcing quit which may be made by pressing Control + C
+    and sending SIGINT which will interupt this application.
 
     Parameters
     ----------
@@ -183,7 +186,7 @@ def set_format_custom_text(len):
     """
     global format_custom_text
     format_custom_text = progressbar.FormatCustomText(
-        '%(f)-' + str(len) +'s ',
+        '%(f)-' + str(len) + 's ',
         dict(
             f='',
         ),
@@ -199,7 +202,7 @@ def sizeof_fmt(num, suffix='B'):
     num : float
         File size in bit.
     suffix : str, optional
-        Character(s) after value of file size after convertion.  
+        Character(s) after value of file size after convertion.
         Default value is 'B'.
 
     Returns
@@ -208,7 +211,7 @@ def sizeof_fmt(num, suffix='B'):
         File size after convertion.
 
     """
-    for unit in ['','K','M','G','T','P','E','Z']:
+    for unit in ['', 'K', 'M', 'G', 'T', 'P', 'E', 'Z']:
         if abs(num) < 1024.0:
             return "%3.1f %s%s" % (num, unit, suffix)
         num /= 1024.0
@@ -291,20 +294,23 @@ def url_exists(url):
         # if url.startswith('ftp'):
         return True
 
+
 def check_period(temporal, period):
     if type(temporal) is datetime.date:
         period = [x.date() for x in period]
     elif type(temporal) is datetime.time:
         period = [x.time() for x in period]
     elif type(temporal) is not datetime.datetime:
-        logger.error('Type of inputted temporal variable should be ' \
-             'datetime.date or datetime.time or datetime.datetime')
+        logger.error('Type of inputted temporal variable should be '
+                     'datetime.date or datetime.time or '
+                     'datetime.datetime')
     start = period[0]
     end = period[1]
     if temporal < start or temporal > end or start > end:
         return False
 
     return True
+
 
 def download(url, path, progress=False):
     """Download file by its url.
@@ -342,7 +348,9 @@ def download(url, path, progress=False):
         else:
             request.urlretrieve(url, path)
     except Exception as msg:
-        logger.exception(f'Error occured when downloading {path} from {url}')
+        logger.exception((f"""Error occured when downloading """
+                          f"""{path} from {url}: {msg}"""))
+
 
 def check_and_update_period(period, limit, prompt):
     """Check whether period is in range of date limit,
@@ -362,7 +370,8 @@ def check_and_update_period(period, limit, prompt):
         end_limit = datetime.datetime.now()
     # Correct start_datetime to start_limit
     if start_datetime < start_limit:
-        print('%s %s' % (prompt['error']['too_early'], str(start_limit)))
+        print('%s %s' % (prompt['error']['too_early'],
+                         str(start_limit)))
         start_datetime = start_limit
     # Correct end_datetime to end_limit
     if end_datetime > end_limit:
@@ -371,22 +380,23 @@ def check_and_update_period(period, limit, prompt):
 
     return True, [start_datetime, end_datetime]
 
+
 def save_relation(path, var):
     """Append variable to pickle file.
-    
+
     Parameters
     ----------
     path : str
         Location of pickle file to store the relation.
     var : dict
-        Store the relation in the form of dict, of which key is str and
-        value is set of str.
-    
+        Store the relation in the form of dict, of which key is str
+        and value is set of str.
+
     Returns
     -------
     None
         Nothing returned by this function.
-    
+
     """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     # read relation if it exists
@@ -414,6 +424,7 @@ def input_period(CONFIG):
         input(CONFIG['workflow']['prompt']['input']['end_date']))
 
     return [start_datetime, end_datetime]
+
 
 def input_region(CONFIG):
     """Set selected region with user's input of range of latitude and
@@ -443,6 +454,7 @@ def input_region(CONFIG):
 
     return inputted_region
 
+
 def filter_datetime(input):
     """Filter the inputted date.
 
@@ -460,6 +472,7 @@ def filter_datetime(input):
     """
     return datetime.datetime.strptime(input, '%Y/%m/%d/%H/%M/%S')
 
+
 def filter_date(input):
     """Filter the inputted date.
 
@@ -476,7 +489,8 @@ def filter_date(input):
 
     """
     return datetime.datetime.strptime(input + '/0/0/0',
-                               '%Y/%m/%d/%H/%M/%S').date()
+                                      '%Y/%m/%d/%H/%M/%S').date()
+
 
 def create_database(cnx, db_name):
     """Create a database.
@@ -484,12 +498,13 @@ def create_database(cnx, db_name):
     """
     cursor = cnx.cursor()
     try:
-        cursor.execute(
-            "CREATE DATABASE IF NOT EXISTS {} DEFAULT CHARACTER SET " \
-            "'utf8'".format(db_name))
+        cursor.execute((
+            f"""CREATE DATABASE IF NOT EXISTS {db_name} DEFAULT """
+            f"""CHARACTER SET "utf8" """))
     except mysql.connector.Error as err:
         print("Failed creating database: {}".format(err))
         exit(1)
+
 
 def use_database(cnx, db_name):
     """Swith to particular database.
@@ -507,6 +522,7 @@ def use_database(cnx, db_name):
         else:
             print(err)
             exit(1)
+
 
 def extract_netcdf_to_table(nc_file, table_class, skip_vars,
                             datetime_func, datetime_col_name, missing,
@@ -577,7 +593,7 @@ def extract_netcdf_to_table(nc_file, table_class, skip_vars,
         lat = vars[lat_name][i]
         lon = (vars[lon_name][i] + 360) % 360
         if (not lat or not lon or lat < min_lat or lat > max_lat
-            or lon < min_lon or lon > max_lon):
+                or lon < min_lon or lon > max_lon):
             continue
         setattr(table_row, lat_name, convert_dtype(lat))
         setattr(table_row, lon_name, convert_dtype(lon))
@@ -628,10 +644,12 @@ def extract_netcdf_to_table(nc_file, table_class, skip_vars,
 
     return whole_table, ds_min_lat, ds_max_lat, ds_min_lon, ds_max_lon
 
+
 def is_missing(var, missing):
     if var is missing:
         return True
     return False
+
 
 def convert_dtype(nparray):
     # In case that type of array is <class 'numpy.ma.core.MaskedArray'>
@@ -646,13 +664,14 @@ def convert_dtype(nparray):
     if np.issubdtype(nparray.dtype, np.dtype(bool).type):
         return bool(nparray)
 
+
 def create_table_from_netcdf(engine, nc_file, table_name, session,
                              skip_vars=None, notnull_vars=None,
                              unique_vars=None, custom_cols=None):
     class Netcdf(object):
         pass
 
-    if engine.dialect.has_table(engine, table_name): 
+    if engine.dialect.has_table(engine, table_name):
         metadata = MetaData(bind=engine, reflect=True)
         t = metadata.tables[table_name]
         mapper(Netcdf, t)
@@ -699,13 +718,14 @@ def create_table_from_netcdf(engine, nc_file, table_name, session,
 
     return Netcdf
 
+
 def table_objects_same(object_1, object_2, unique_cols):
-    unique_key = '_sa_instance_state'
     for key in unique_cols:
         if object_1.__dict__[key] == object_2.__dict__[key]:
             return True
 
     return False
+
 
 def bulk_insert_avoid_duplicate_unique(total_sample, batch_size,
                                        table_class, unique_cols,
@@ -714,9 +734,6 @@ def bulk_insert_avoid_duplicate_unique(total_sample, batch_size,
     Bulkly insert into a table which has unique columns.
 
     """
-    total = len(total_sample)
-    count = 0
-
     while total_sample:
         # count += batch_size
         # progress = float(count)/total*100
@@ -752,11 +769,11 @@ def bulk_insert_avoid_duplicate_unique(total_sample, batch_size,
                 data
             )
             for data in session.query(table_class).filter(
-                tuple_(*[getattr(table_class, name) \
+                tuple_(*[getattr(table_class, name)
                          for name in unique_cols]).in_(
                              [
-                                 tuple_(*[getattr(x, name) \
-                                 for name in unique_cols]) \
+                                 tuple_(*[getattr(x, name)
+                                          for name in unique_cols])
                                  for x in batch
                              ]
                          )
@@ -789,20 +806,23 @@ def bulk_insert_avoid_duplicate_unique(total_sample, batch_size,
 
     session.commit()
 
+
 def row2dict(row):
     d = row.__dict__
     d.pop('_sa_instance_state', None)
 
     return d
 
-def create_table_from_bytemap(engine, satel_name, bytemap_file, table_name,
-                              session, skip_vars=None, notnull_vars=None,
-                              unique_vars=None, custom_cols=None):
+
+def create_table_from_bytemap(engine, satel_name, bytemap_file,
+                              table_name, session, skip_vars=None,
+                              notnull_vars=None, unique_vars=None,
+                              custom_cols=None):
 
     class Satel(object):
         pass
 
-    if engine.dialect.has_table(engine, table_name): 
+    if engine.dialect.has_table(engine, table_name):
         metadata = MetaData(bind=engine, reflect=True)
         t = metadata.tables[table_name]
         mapper(Satel, t)
@@ -845,9 +865,9 @@ def create_table_from_bytemap(engine, satel_name, bytemap_file, table_name,
 
     return Satel
 
+
 def var2sacol(vars, var_name, col_name, nullable=True, unique=False):
     var_dtype = vars[var_name].dtype
-    column = None
     for dtype in [np.int32, np.int64]:
         if np.issubdtype(var_dtype, dtype):
             return Column(col_name, Integer(), nullable=nullable,
@@ -859,6 +879,7 @@ def var2sacol(vars, var_name, col_name, nullable=True, unique=False):
     if np.issubdtype(var_dtype, np.dtype(bool).type):
         return Column(col_name, Boolean(), nullable=nullable,
                       unique=unique)
+
 
 def dataset_of_daily_satel(satel_name, file_path, missing_val=-999.0):
     if satel_name == 'ascat':
@@ -877,12 +898,14 @@ def dataset_of_daily_satel(satel_name, file_path, missing_val=-999.0):
 
     return dataset
 
+
 def show_bytemap_dimensions(ds):
     print('')
     print('Dimensions')
     for dim in ds.dimensions:
         aline = ' '.join([' '*3, dim, ':', str(ds.dimensions[dim])])
         print(aline)
+
 
 def show_bytemap_variables(ds):
     print('')
@@ -891,15 +914,17 @@ def show_bytemap_variables(ds):
         aline = ' '.join([' '*3, var, ':', ds.variables[var].long_name])
         print(aline)
 
+
 def show_bytemap_validrange(ds):
     print('')
     print('Valid min and max and units:')
     for var in ds.variables:
         aline = ' '.join([' '*3, var, ':',
-                str(ds.variables[var].valid_min), 'to',
-                str(ds.variables[var].valid_max),
-                '(',ds.variables[var].units,')'])
+                          str(ds.variables[var].valid_min), 'to',
+                          str(ds.variables[var].valid_max),
+                          '(', ds.variables[var].units, ')'])
         print(aline)
+
 
 def find_index(range, lat_or_lon):
     # latitude: from -89.875 to 89.875, 720 values, interval = 0.25
@@ -929,11 +954,12 @@ def find_index(range, lat_or_lon):
 
     return res
 
-def extract_bytemap_to_table(satel_name, bm_file, table_class, skip_vars,
-                            datetime_func, datetime_col_name, missing,
-                            valid_func, unique_func, unique_col_name,
-                            lat_name, lon_name,
-                            period, region, not_null_vars):
+
+def extract_bytemap_to_table(satel_name, bm_file, table_class,
+                             skip_vars, datetime_func,
+                             datetime_col_name, missing, valid_func,
+                             unique_func, unique_col_name, lat_name,
+                             lon_name, period, region, not_null_vars):
     """Extract variables from netcdf file to generate an instance of
     table class.
 
@@ -993,7 +1019,6 @@ def extract_bytemap_to_table(satel_name, bm_file, table_class, skip_vars,
     # Store all rows
     whole_table = []
 
-    st = time.time()
     iasc = [0, 1]
     # iasc = 0 (morning, descending passes)
     # iasc = 1 (evening, ascending passes)
@@ -1002,7 +1027,7 @@ def extract_bytemap_to_table(satel_name, bm_file, table_class, skip_vars,
             for k in lon_indices:
                 count += 1
                 if count % 10000 == 0:
-                    print('\r{:5f}%'.format((float(count)/total)*100), end='')
+                    print(f'\r{100*float(count/total):5f}%')
                 # if j == 120:
                 #     et = time.time()
                 #     print('\ntime: %s' % (et - st))
@@ -1012,8 +1037,9 @@ def extract_bytemap_to_table(satel_name, bm_file, table_class, skip_vars,
                 table_row = table_class()
                 lat = vars[lat_name][j]
                 lon = vars[lon_name][k]
-                if (not lat or not lon or lat < min_lat or lat > max_lat
-                    or lon < min_lon or lon > max_lon):
+                if (not lat or not lon
+                        or lat < min_lat or lat > max_lat
+                        or lon < min_lon or lon > max_lon):
                     continue
                 setattr(table_row, lat_name, convert_dtype(lat))
                 setattr(table_row, lon_name, convert_dtype(lon))
@@ -1058,9 +1084,11 @@ def extract_bytemap_to_table(satel_name, bm_file, table_class, skip_vars,
 
     return whole_table
 
+
 def gen_space_time_fingerprint(datetime, lat, lon):
 
     return '%s %f %f' % (datetime, lat, lon)
+
 
 def cut_map(satel_name, dataset, region, year, month, day,
             missing_val=-999.0):
@@ -1119,8 +1147,8 @@ def cut_map(satel_name, dataset, region, year, month, day,
                         continue
                 elif satel_name == 'wsat':
                     if (cut_wspd_lf == missing_val
-                        or cut_wspd_mf == missing_val
-                        or cut_wspd_aw == missing_val):
+                            or cut_wspd_mf == missing_val
+                            or cut_wspd_aw == missing_val):
                         # at least one of three wind speed is missing
                         num_c3 += 1
                         continue
@@ -1154,9 +1182,9 @@ def cut_map(satel_name, dataset, region, year, month, day,
     print('skip condition 2: ' + str(num_c2))
     print('skip condition 3: ' + str(num_c3))
     print('returned data point: ' + str(len(data_list)))
-   #  print()
 
     return data_list
+
 
 def narrow_map(dataset, region):
     # Find rectangle range of area
@@ -1173,16 +1201,21 @@ def narrow_map(dataset, region):
     iasc = [0, 1]
     vars = dataset.variables
     for i in iasc:
-        wspd = vars['windspd'][i][min_lat:max_lat+1, min_lon:max_lon+1]
-        wdir = vars['winddir'][i][min_lat:max_lat+1, min_lon:max_lon+1]
-        rain = vars['scatflag'][i][min_lat:max_lat+1, min_lon:max_lon+1]
-        time = vars['mingmt'][i][min_lat:max_lat+1, min_lon:max_lon+1]
+        wspd = vars['windspd'][i][min_lat:max_lat+1,
+                                  min_lon:max_lon+1]
+        wdir = vars['winddir'][i][min_lat:max_lat+1,
+                                  min_lon:max_lon+1]
+        rain = vars['scatflag'][i][min_lat:max_lat+1,
+                                   min_lon:max_lon+1]
+        time = vars['mingmt'][i][min_lat:max_lat+1,
+                                 min_lon:max_lon+1]
         map['wspd'].append(wspd)
         map['wdir'].append(wdir)
         map['rain'].append(rain)
         map['time'].append(time)
 
     return map
+
 
 def get_class_by_tablename(engine, table_fullname):
     """Return class reference mapped to table.
@@ -1199,26 +1232,39 @@ def get_class_by_tablename(engine, table_fullname):
         mapper(Template, t)
         return Template
     else:
-        return None
+        logger.error(f'No such table: {table_fullname}')
+        sys.exit(1)
+
+
+def drop_table_by_name(engine, table_fullname):
+    if engine.dialect.has_table(engine, table_fullname):
+        metadata = MetaData(bind=engine, reflect=True)
+        t = metadata.tables[table_fullname]
+        t.drop()
+    else:
+        logger.error(f'No such table: {table_fullname}')
+        sys.exit(1)
+
 
 def add_column(engine, table_name, column):
     column_name = column.compile(dialect=engine.dialect)
     column_type = column.type.compile(engine.dialect)
     connection = engine.connect()
-    result = connection.execute('ALTER TABLE %s ADD COLUMN %s %s' % (
+    connection.execute('ALTER TABLE %s ADD COLUMN %s %s' % (
         table_name, column_name, column_type))
     connection.close()
 
+
 def setup_database(the_class, Base):
     DB_CONFIG = the_class.CONFIG['database']
-    PROMPT = the_class.CONFIG['workflow']['prompt']
+    # PROMPT = the_class.CONFIG['workflow']['prompt']
     DBAPI = DB_CONFIG['db_api']
     USER = DB_CONFIG['user']
     password_ = the_class.db_root_passwd
     HOST = DB_CONFIG['host']
-    PORT = DB_CONFIG['port']
+    # PORT = DB_CONFIG['port']
     DB_NAME = DB_CONFIG['db_name']
-    ARGS = DB_CONFIG['args']
+    # ARGS = DB_CONFIG['args']
 
     try:
         # ATTENTION
@@ -1237,9 +1283,9 @@ def setup_database(the_class, Base):
         # shell> mysqladmin version
         # Maybe need user name and password.
         #
-        # If we are connecting to mysqld server by using a Unix socket,
-        # there should not be 'host' and 'port' parameters in the
-        # function mysql.connector.connect()
+        # If we are connecting to mysqld server by using a Unix
+        # socket, there should not be 'host' and 'port' parameters
+        # in the function mysql.connector.connect()
         #
         # If we are connecting to mysqld server by using TCP/IP,
         # 'host' and 'port' are needed.
@@ -1274,6 +1320,7 @@ def setup_database(the_class, Base):
     the_class.Session = sessionmaker(bind=the_class.engine)
     the_class.session = the_class.Session()
 
+
 def convert_10(wspd, height):
     """Convert the wind speed at the the height of anemometer to
     the wind speed at the height of 10 meters.
@@ -1306,6 +1353,7 @@ def convert_10(wspd, height):
 
     return con_wspd
 
+
 def get_subset_range_of_grib_point(lat, lon, lat_grid_points,
                                    lon_grid_points):
     lon = (lon + 360) % 360
@@ -1323,6 +1371,7 @@ def get_subset_range_of_grib_point(lat, lon, lat_grid_points,
 
     return lat1, lat2, lon1, lon2
 
+
 def get_latlon_index_of_closest_grib_point(lat, lon, lat_grid_points,
                                            lon_grid_points):
     lon = (lon + 360) % 360
@@ -1335,8 +1384,10 @@ def get_latlon_index_of_closest_grib_point(lat, lon, lat_grid_points,
 
     return lat_match_index, lon_match_index
 
-def get_subset_range_of_grib(lat, lon, lat_grid_points, lon_grid_points,
-                             edge, mode='rss', spatial_resolution=None):
+
+def get_subset_range_of_grib(lat, lon, lat_grid_points,
+                             lon_grid_points, edge, mode='rss',
+                             spatial_resolution=None):
     lon = (lon + 360) % 360
 
     lat_ae = [abs(lat-y) for y in lat_grid_points]
@@ -1347,7 +1398,7 @@ def get_subset_range_of_grib(lat, lon, lat_grid_points, lon_grid_points,
 
     half_edge = float(edge / 2)
 
-    if lat_match - half_edge < -90 or lat_match + half_edge > 90 :
+    if lat_match - half_edge < -90 or lat_match + half_edge > 90:
         return False, 0, 0, 0, 0
 
     lat1 = lat_match - half_edge
@@ -1355,7 +1406,8 @@ def get_subset_range_of_grib(lat, lon, lat_grid_points, lon_grid_points,
     lon1 = (lon_match - half_edge + 360) % 360
     lon2 = (lon_match + half_edge + 360) % 360
 
-    # When the edge of square along parallel crosses the primie meridian
+    # When the edge of square along parallel crosses the primie
+    # meridian
     if lon2 - lon1 != 2 * half_edge:
         return False, None, None, None, None
 
@@ -1365,20 +1417,22 @@ def get_subset_range_of_grib(lat, lon, lat_grid_points, lon_grid_points,
 
     return True, lat1, lat2, lon1, lon2
 
+
 def area_of_contour(vs):
     """Use Green's theorem to compute the area enclosed by the given
     contour.
 
     """
     a = 0
-    x0,y0 = vs[0]
-    for [x1,y1] in vs[1:]:
+    x0, y0 = vs[0]
+    for [x1, y1] in vs[1:]:
         dx = x1-x0
         dy = y1-y0
         a += 0.5*(y0*dx - x0*dy)
         x0 = x1
         y0 = y1
     return a
+
 
 def autolabel(ax, rects):
     """Attach a text label above each bar in *rects*, displaying its
@@ -1394,10 +1448,12 @@ def autolabel(ax, rects):
                     textcoords="offset points",
                     ha='center', va='bottom')
 
+
 def hour_rounder(t):
     # Rounds to nearest hour by adding a timedelta hour if minute >= 30
     return (t.replace(second=0, microsecond=0, minute=0, hour=t.hour)
             + datetime.timedelta(hours=t.minute//30))
+
 
 def draw_compare_basemap(ax, lon1, lon2, lat1, lat2, zorders):
     map = Basemap(llcrnrlon=lon1, llcrnrlat=lat1, urcrnrlon=lon2,
@@ -1410,51 +1466,38 @@ def draw_compare_basemap(ax, lon1, lon2, lat1, lat2, zorders):
     # meridians on bottom and left
     parallels = np.arange(int(lat1), int(lat2), 2.)
     # labels = [left,right,top,bottom]
-    map.drawparallels(parallels,labels=[False,True,True,False])
+    map.drawparallels(parallels, labels=[False, True, True, False])
     meridians = np.arange(int(lon1), int(lon2), 2.)
-    map.drawmeridians(meridians,labels=[True,False,False,True])
+    map.drawmeridians(meridians, labels=[True, False, False, True])
+
 
 def set_basemap_title(ax, tc_row, data_name):
     title_prefix = (f'IBTrACS wind radii and {data_name} ocean surface'
                     + f'wind speed of'
                     + f'\n{tc_row.sid}')
     if tc_row.name is not None:
-        tc_name =  f'({tc_row.name}) '
+        tc_name = f'({tc_row.name}) '
     title_suffix = f'on {tc_row.date_time}'
     ax.set_title(f'{title_prefix} {tc_name} {title_suffix}')
 
-"""
-def draw_windspd(ax, lats, lons, windspd, zorders):
-    # Plot windspd in knots with matplotlib's contour
-    X, Y = np.meshgrid(lons, lats)
-    Z = windspd
-
-    windspd_levels = [5*x for x in range(15)]
-
-    cs = ax.contour(X, Y, Z, levels=windspd_levels,
-                    zorder=zorders['contour'], colors='k')
-    ax.clabel(cs, inline=1, colors='k', fontsize=10)
-    ax.contourf(X, Y, Z, levels=windspd_levels,
-                zorder=zorders['contourf'],
-                cmap=plt.cm.rainbow)
-"""
 
 def get_radii_from_tc_row(tc_row):
     r34 = dict()
     r34['nw'], r34['sw'], r34['se'], r34['ne'] = \
-            tc_row.r34_nw, tc_row.r34_sw, tc_row.r34_se, tc_row.r34_ne
+        tc_row.r34_nw, tc_row.r34_sw, tc_row.r34_se, tc_row.r34_ne
 
     r50 = dict()
     r50['nw'], r50['sw'], r50['se'], r50['ne'] = \
-            tc_row.r50_nw, tc_row.r50_sw, tc_row.r50_se, tc_row.r50_ne
+        tc_row.r50_nw, tc_row.r50_sw, tc_row.r50_se, tc_row.r50_ne
 
     r64 = dict()
     r64['nw'], r64['sw'], r64['se'], r64['ne'] = \
-            tc_row.r64_nw, tc_row.r64_sw, tc_row.r64_se, tc_row.r64_ne
+        tc_row.r64_nw, tc_row.r64_sw, tc_row.r64_se, tc_row.r64_ne
 
     radii = {34: r34, 50: r50, 64: r64}
 
     return radii
+
 
 def draw_ibtracs_radii(ax, tc_row, zorders):
     center = get_tc_center(tc_row)
@@ -1476,7 +1519,7 @@ def draw_ibtracs_radii(ax, tc_row, zorders):
                     r=tc_radii[r][dir]*DEGREE_OF_ONE_NMILE,
                     theta1=idx*90, theta2=(idx+1)*90,
                     zorder=zorders['wedge'],
-                    #color=radii_color[r], alpha=0.6
+                    # color=radii_color[r], alpha=0.6
                     fill=False, linestyle=radii_linestyle[r]
                 )
             )
@@ -1487,6 +1530,7 @@ def draw_ibtracs_radii(ax, tc_row, zorders):
         ibtracs_area.append(area_in_radii)
 
     return ibtracs_area
+
 
 def get_area_within_radii(ax, lats, lons, windspd):
     X, Y = np.meshgrid(lons, lats)
@@ -1511,6 +1555,7 @@ def get_area_within_radii(ax, lats, lons, windspd):
             area_of_contour(vs) * (KM_OF_ONE_DEGREE)**2))
 
     return area
+
 
 def create_area_compare_table(the_class):
     """Get table of ERA5 reanalysis.
@@ -1548,6 +1593,7 @@ def create_area_compare_table(the_class):
 
     return WindRadiiAreaCompare
 
+
 def write_area_compare(the_class, tc_row, ibtracs_area,
                        area_type, area_to_compare):
     area = {
@@ -1567,10 +1613,10 @@ def write_area_compare(the_class, tc_row, ibtracs_area,
     row.sid_date_time = f'{tc_row.sid}_{tc_row.date_time}'
 
     bulk_insert_avoid_duplicate_unique(
-        [row], the_class.CONFIG['database']\
-        ['batch_size']['insert'],
+        [row], the_class.CONFIG['database']['batch_size']['insert'],
         CompareTable, ['sid_date_time'], the_class.session,
         check_self=True)
+
 
 def draw_compare_area_bar(ax, ibtracs_area, area_to_compare, data_name,
                           tc_row):
@@ -1578,7 +1624,7 @@ def draw_compare_area_bar(ax, ibtracs_area, area_to_compare, data_name,
     x = np.arange(len(labels))  # the label locations
     width = 0.35  # the width of the bars
     rects1 = ax.bar(x - width/2, ibtracs_area, width,
-                     label='IBTrACS')
+                    label='IBTrACS')
     rects2 = ax.bar(x + width/2, area_to_compare, width,
                     label=data_name)
 
@@ -1587,12 +1633,13 @@ def draw_compare_area_bar(ax, ibtracs_area, area_to_compare, data_name,
     autolabel(ax, rects1)
     autolabel(ax, rects2)
 
+
 def set_bar_title_and_so_on(ax, tc_row, labels, x, data_name):
     title_prefix = (f'Area within wind radii of IBTrACS '
                     + f'and area within corresponding contour of '
                     + f'{data_name}\n of {tc_row.sid}')
     if tc_row.name is not None:
-        tc_name =  f'({tc_row.name}) '
+        tc_name = f'({tc_row.name}) '
     title_suffix = f'on {tc_row.date_time}'
 
     ax.set_title(f'{title_prefix} {tc_name} {title_suffix}')
@@ -1600,6 +1647,7 @@ def set_bar_title_and_so_on(ax, tc_row, labels, x, data_name):
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.legend()
+
 
 def get_basic_satel_columns():
     cols = []
@@ -1613,6 +1661,7 @@ def get_basic_satel_columns():
                        unique=True))
 
     return cols
+
 
 def get_basic_satel_era5_columns(tc_info=False):
     cols = []
@@ -1629,6 +1678,7 @@ def get_basic_satel_era5_columns(tc_info=False):
                        nullable=False, unique=True))
 
     return cols
+
 
 def get_basic_sfmr_era5_columns(tc_info=False):
     cols = []
@@ -1648,12 +1698,15 @@ def get_basic_sfmr_era5_columns(tc_info=False):
 
     return cols
 
+
 class GetChildDataIndices(object):
+
     def __init__(self, grid_pts, lats, lons, owi_az_size):
         self.grid_pts = grid_pts
         self.lats = lats
         self.lons = lons
         self.owi_az_size = owi_az_size
+
 
 def get_data_indices_around_grid_pts(workload):
     grid_pts = workload.grid_pts
@@ -1674,12 +1727,12 @@ def get_data_indices_around_grid_pts(workload):
             print((f"""\rTask ({os.getpid()} """
                    f"""is getting data indices around ocean """
                    f"""grid points {percent:.2f}%"""),
-                  end = '')
+                  end='')
 
             lat_row, lon_row = lats[i], lons[i]
-            lat_match_indices = [i for i,v in enumerate(
+            lat_match_indices = [i for i, v in enumerate(
                 abs(lat_row - pt.lat) < 0.025) if v]
-            lon_match_indices = [i for i,v in enumerate(
+            lon_match_indices = [i for i, v in enumerate(
                 abs(lon_row - pt.lon) < 0.025) if v]
 
             match_indices = np.intersect1d(lat_match_indices,
@@ -1692,22 +1745,18 @@ def get_data_indices_around_grid_pts(workload):
 
     return pt_region_data_indices
 
+
 def gen_satel_era5_tablename(satel_name, dt):
-    return f'{satel_name}_{dt.year}_{str(dt.month).zfill(2)}'
+    return f'{satel_name}_era5'
 
-def gen_tc_sfmr_era5_tablename(dt, basin):
-    if isinstance(dt, datetime.datetime):
-        return f'tc_sfmr_era5_{dt.year}_{basin}'
-    # `dt` is year
-    elif isinstance(dt, int):
-        return f'tc_sfmr_era5_{dt}_{basin}'
 
-def gen_tc_satel_era5_tablename(satel_name, dt, basin):
-    if isinstance(dt, datetime.datetime):
-        return f'tc_{satel_name}_era5_{dt.year}_{basin}'
-    # `dt` is year
-    elif isinstance(dt, int):
-        return f'tc_{satel_name}_era5_{dt}_{basin}'
+def gen_tc_sfmr_era5_tablename(basin):
+    return f'tc_sfmr_era5_{basin}'
+
+
+def gen_tc_satel_era5_tablename(satel_name, basin):
+    return f'tc_{satel_name}_era5_{basin}'
+
 
 def backtime_to_last_entire_hour(dt):
     # Initial datetime is not entire-houred
@@ -1717,6 +1766,7 @@ def backtime_to_last_entire_hour(dt):
 
     return dt
 
+
 def forwardtime_to_next_entire_hour(dt):
     # Initial datetime is not entire-houred
     dt = (dt.replace(second=0, microsecond=0, minute=0,
@@ -1724,6 +1774,7 @@ def forwardtime_to_next_entire_hour(dt):
           + datetime.timedelta(hours=1))
 
     return dt
+
 
 def load_grid_lonlat_xy(the_class):
     grid_pickles = the_class.CONFIG['grid']['pickle']
@@ -1733,6 +1784,7 @@ def load_grid_lonlat_xy(the_class):
             var = pickle.load(f)
 
         setattr(the_class, f'grid_{key}', var)
+
 
 def decompose_wind(windspd, winddir, input_convention):
     """Decompose windspd with winddir into u and v component of wind.
@@ -1745,8 +1797,9 @@ def decompose_wind(windspd, winddir, input_convention):
         Wind direction in degree.  It increases clockwise from North
         when viewed from above.
     input_convention: str
-        Convention of inputted wind direction.  'o' means oceanographic
-        convention and 'm' means meteorological convention.
+        Convention of inputted wind direction.  'o' means
+        oceanographic convention and 'm' means meteorological
+        convention.
 
     Returns
     -------
@@ -1769,6 +1822,7 @@ def decompose_wind(windspd, winddir, input_convention):
         v_wind = -windspd * math.cos(math.radians(winddir))
 
     return u_wind, v_wind
+
 
 def compose_wind(u_wind, v_wind, output_convention):
     """Compose windspd and winddir from u and v component of wind.
@@ -1805,14 +1859,15 @@ def compose_wind(u_wind, v_wind, output_convention):
 
     return windspd, winddir
 
+
 def get_dataframe_cols_with_no_nans(df, col_type):
     '''
     Arguments :
     df : The dataframe to process
-    col_type : 
+    col_type :
           num : to only get numerical columns with no nans
           no_num : to only get nun-numerical columns with no nans
-          all : to get any columns with no nans    
+          all : to get any columns with no nans
     '''
     if (col_type == 'num'):
         predictors = df.select_dtypes(exclude=['object'])
@@ -1820,7 +1875,7 @@ def get_dataframe_cols_with_no_nans(df, col_type):
         predictors = df.select_dtypes(include=['object'])
     elif (col_type == 'all'):
         predictors = df
-    else :
+    else:
         print('Error : choose a type (num, no_num, all)')
         return 0
     cols_with_no_nans = []
@@ -1830,11 +1885,13 @@ def get_dataframe_cols_with_no_nans(df, col_type):
 
     return cols_with_no_nans
 
+
 def gen_scs_era5_table_name(dt_cursor, hourtime):
     table_name = (f"""era5_scs_{dt_cursor.strftime('%Y_%m%d')}"""
                   f"""_{str(hourtime).zfill(4)}""")
 
     return table_name
+
 
 def draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
                                wind_zorder, max_windspd, mesh):
@@ -1867,6 +1924,7 @@ def draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
                        format='%.1f')
     clb.ax.set_title('m/s')
 
+
 def draw_SCS_basemap(the_class, ax, custom, region):
     if not custom:
         lat1 = the_class.lat1
@@ -1894,13 +1952,14 @@ def draw_SCS_basemap(the_class, ax, custom, region):
                       labels=[1, 0, 0, 1],  fmt='%.2f',
                       zorder=the_class.zorders['grid'])
     map.drawparallels(np.arange(lat1, lat2+0.01, parallels_interval),
-                      labels=[1, 0 , 0, 1], fmt='%.2f',
+                      labels=[1, 0, 0, 1], fmt='%.2f',
                       zorder=the_class.zorders['grid'])
 
     return map
 
+
 def draw_windspd_with_imshow(map, fig, ax, lons, lats, windspd,
-                               wind_zorder, max_windspd, mesh):
+                             wind_zorder, max_windspd, mesh):
     rows_num, cols_num = windspd.shape
     for i in range(rows_num):
         for j in range(cols_num):
@@ -1918,7 +1977,8 @@ def draw_windspd_with_imshow(map, fig, ax, lons, lats, windspd,
                            cmap=plt.cm.rainbow,
                            vmin=0, vmax=max_windspd,
                            interpolation='none',
-                           extent=(X.min(), X.max(), Y.min(), Y.max()))
+                           extent=(X.min(), X.max(),
+                                   Y.min(), Y.max()))
         # plt.colorbar()
     except Exception as msg:
         breakpoint()
@@ -1931,9 +1991,10 @@ def draw_windspd_with_imshow(map, fig, ax, lons, lats, windspd,
                        format='%.1f')
     clb.ax.set_title('m/s')
 
+
 def draw_windspd(the_class, fig, ax, dt, lons, lats, windspd,
                  max_windspd, mesh, custom=False, region=None):
-    map = draw_SCS_basemap(the_class, ax, custom, region)
+    draw_SCS_basemap(the_class, ax, custom, region)
 
     draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
                                the_class.zorders['contourf'],
@@ -1942,6 +2003,7 @@ def draw_windspd(the_class, fig, ax, dt, lons, lats, windspd,
     # draw_windspd_with_imshow(map, fig, ax, lons, lats, windspd,
     #                          the_class.zorders['contourf'],
     #                            max_windspd, mesh)
+
 
 def get_latlon_and_index_in_grid(value, range, grid_lat_or_lon_list):
     """Getting region corners' lat or lon's value and its index
@@ -1987,11 +2049,13 @@ def get_latlon_and_index_in_grid(value, range, grid_lat_or_lon_list):
 
     return grid_pt_value, grid_pt_index
 
+
 def get_nearest_element_and_index(list_, element):
     ae = [abs(element - x) for x in list_]
     match_index = ae.index(min(ae))
 
     return list_[match_index], match_index
+
 
 def get_pixel_of_smap_windspd(smap_file_path, dt, lon, lat):
     spa_resolu = 0.25
@@ -2021,7 +2085,7 @@ def get_pixel_of_smap_windspd(smap_file_path, dt, lon, lat):
     wind_missing = -99.99
     for i in range(passes_num):
         if (minute[y][x][i] == minute_missing
-            or wind[y][x][i] == wind_missing):
+                or wind[y][x][i] == wind_missing):
             continue
         if minute[y][x][0] == minute[y][x][1]:
             break
@@ -2038,8 +2102,10 @@ def get_pixel_of_smap_windspd(smap_file_path, dt, lon, lat):
 
     return windspd
 
-def get_xyz_matrix_of_smap_windspd_or_diff_mins(
-    target, smap_file_path, tc_dt, region):
+
+def get_xyz_matrix_of_smap_windspd_or_diff_mins(target,
+                                                smap_file_path,
+                                                tc_dt, region):
     """Temporal window is one hour.
 
     """
@@ -2073,7 +2139,8 @@ def get_xyz_matrix_of_smap_windspd_or_diff_mins(
     # faster than 1 m/s, so must disable auto mask
     dataset.set_auto_mask(False)
     vars = dataset.variables
-    minute = vars['minute'][lat1_idx:lat2_idx+1, lon1_idx:lon2_idx+1, :]
+    minute = vars['minute'][lat1_idx:lat2_idx+1,
+                            lon1_idx:lon2_idx+1, :]
     wind = vars['wind'][lat1_idx:lat2_idx+1, lon1_idx:lon2_idx+1, :]
 
     rows, cols = minute.shape[:2]
@@ -2085,7 +2152,7 @@ def get_xyz_matrix_of_smap_windspd_or_diff_mins(
             for i in range(passes_num):
                 try:
                     if (minute[y][x][i] == minute_missing
-                        or wind[y][x][i] == wind_missing):
+                            or wind[y][x][i] == wind_missing):
                         continue
                     if minute[y][x][0] == minute[y][x][1]:
                         continue
@@ -2120,126 +2187,20 @@ def get_xyz_matrix_of_smap_windspd_or_diff_mins(
     else:
         return None, None, None
 
-# def get_xyz_matrix_of_smap_windspd(smap_file_path, tc_dt, region):
-#     """Temporal window is one hour.
-# 
-#     """
-#     spa_resolu = 0.25
-# 
-#     smap_lats = [y * spa_resolu - 89.875 for y in range(720)]
-#     smap_lons = [x * spa_resolu + 0.125 for x in range(1440)]
-# 
-#     lat1, lat1_idx = get_latlon_and_index_in_grid(
-#         region[0], (region[0], region[1]), smap_lats)
-#     lat2, lat2_idx = get_latlon_and_index_in_grid(
-#         region[1], (region[0], region[1]), smap_lats)
-#     lon1, lon1_idx = get_latlon_and_index_in_grid(
-#         region[2], (region[2], region[3]), smap_lons)
-#     lon2, lon2_idx = get_latlon_and_index_in_grid(
-#         region[3], (region[2], region[3]), smap_lons)
-# 
-#     lons = list(np.arange(lon1, lon2 + 0.5 * spa_resolu, spa_resolu))
-#     lats = list(np.arange(lat1, lat2 + 0.5 * spa_resolu, spa_resolu))
-#     lons = [round(x, 3) for x in lons]
-#     lats = [round(y, 3) for y in lats]
-#     windspd = np.full(shape=(len(lats), len(lons)), fill_value=-1,
-#                       dtype=float)
-# 
-#     dataset = netCDF4.Dataset(smap_file_path)
-#     # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which
-#     # faster than 1 m/s, so must disable auto mask
-#     dataset.set_auto_mask(False)
-#     vars = dataset.variables
-#     minute = vars['minute'][lat1_idx:lat2_idx+1, lon1_idx:lon2_idx+1, :]
-#     wind = vars['wind'][lat1_idx:lat2_idx+1, lon1_idx:lon2_idx+1, :]
-# 
-#     rows, cols = minute.shape[:2]
-#     passes_num = 2
-#     minute_missing = -9999
-#     wind_missing = -99.99
-#     for y in range(len(lats)):
-#         for x in range(len(lons)):
-#             for i in range(passes_num):
-#                 try:
-#                     if (minute[y][x][i] == minute_missing
-#                         or wind[y][x][i] == wind_missing):
-#                         continue
-#                     if minute[y][x][0] == minute[y][x][1]:
-#                         continue
-#                     pt_time = datetime.time(
-#                         *divmod(int(minute[y][x][i]), 60), 0)
-#                     pt_dt = datetime.datetime.combine(tc_dt.date(), pt_time)
-#                     delta = abs(pt_dt - tc_dt)
-#                     # Temporal window is one hour
-#                     if delta.seconds > 1800:
-#                         continue
-#                         continue
-# 
-#                     # SMAP originally has land mask, so it's not necessary
-#                     # to check whether each pixel is land or ocean
-#                     windspd[y][x] = float(wind[y][x][i])
-#                 except Exception as msg:
-#                     breakpoint()
-#                     exit(msg)
-# 
-#     if windspd.max() > 0:
-#         return lons, lats, windspd
-#     else:
-#         return None, None, None
 
 def satel_data_cover_tc_center(lons, lats, windspd, tc):
     # (lon, lat)
     tc_lon, tc_lat = get_tc_center(tc)
     tc_lon_in_grid, tc_lon_in_grid_idx = \
-            get_nearest_element_and_index(lons, tc_lon)
+        get_nearest_element_and_index(lons, tc_lon)
     tc_lat_in_grid, tc_lat_in_grid_idx = \
-            get_nearest_element_and_index(lats, tc_lat)
+        get_nearest_element_and_index(lats, tc_lat)
 
     if windspd[tc_lat_in_grid_idx][tc_lon_in_grid_idx] > 0:
         return True
     else:
         return False
 
-def cover_tc_wind_radii(lons, lats, windspd, tc):
-    # (lon, lat)
-    center = get_tc_center(tc_row)
-    tc_radii = get_radii_from_tc_row(tc_row)
-
-    largest_radii = RADII_LEVELS[0]
-
-    pass
-
-def draw_ibtracs_radii(ax, tc_row, zorders):
-    center = get_tc_center(tc_row)
-    tc_radii = get_radii_from_tc_row(tc_row)
-    # radii_color = {34: 'yellow', 50: 'orange', 64: 'red'}
-    radii_linestyle = {34: 'solid', 50: 'dashed', 64: 'dotted'}
-    dirs = ['ne', 'se', 'sw', 'nw']
-    ibtracs_area = []
-
-    for r in RADII_LEVELS:
-        area_in_radii = 0
-        for idx, dir in enumerate(dirs):
-            if tc_radii[r][dir] is None:
-                continue
-
-            ax.add_patch(
-                mpatches.Wedge(
-                    center,
-                    r=tc_radii[r][dir]*DEGREE_OF_ONE_NMILE,
-                    theta1=idx*90, theta2=(idx+1)*90,
-                    zorder=zorders['wedge'],
-                    #color=radii_color[r], alpha=0.6
-                    fill=False, linestyle=radii_linestyle[r]
-                )
-            )
-
-            radii_in_km = tc_radii[r][dir] * KM_OF_ONE_NMILE
-            area_in_radii += math.pi * (radii_in_km)**2 / 4
-
-        ibtracs_area.append(area_in_radii)
-
-    return ibtracs_area
 
 def get_xyz_matrix_of_ccmp_windspd(ccmp_file_path, dt, region):
     ccmp_hours = [0, 6, 12, 18]
@@ -2269,10 +2230,10 @@ def get_xyz_matrix_of_ccmp_windspd(ccmp_file_path, dt, region):
     windspd = np.ndarray(shape=(len(lats), len(lons)), dtype=float)
 
     vars = netCDF4.Dataset(ccmp_file_path).variables
-    u_wind = vars['uwnd'][hour_idx]\
-            [lat1_idx:lat2_idx+1, lon1_idx:lon2_idx+1]
-    v_wind = vars['vwnd'][hour_idx]\
-            [lat1_idx:lat2_idx+1, lon1_idx:lon2_idx+1]
+    u_wind = vars['uwnd'][hour_idx][lat1_idx:lat2_idx+1,
+                                    lon1_idx:lon2_idx+1]
+    v_wind = vars['vwnd'][hour_idx][lat1_idx:lat2_idx+1,
+                                    lon1_idx:lon2_idx+1]
 
     for y in range(len(lats)):
         for x in range(len(lons)):
@@ -2290,6 +2251,7 @@ def get_xyz_matrix_of_ccmp_windspd(ccmp_file_path, dt, region):
                 exit(msg)
 
     return lons, lats, windspd
+
 
 def get_pixel_of_era5_windspd(era5_file_path, product_type, dt,
                               lon, lat):
@@ -2337,6 +2299,7 @@ def get_pixel_of_era5_windspd(era5_file_path, product_type, dt,
 
     return windspd
 
+
 def get_xyz_matrix_of_era5_windspd(era5_file_path, product_type,
                                    dt, region):
     grbidx = pygrib.index(era5_file_path, 'dataTime')
@@ -2362,7 +2325,6 @@ def get_xyz_matrix_of_era5_windspd(era5_file_path, product_type,
         lats = np.flip(lats, 0)
         lons = np.flip(lons, 0)
 
-
         if name == u_wind_var_name:
             u_wind = data
         elif name == v_wind_var_name:
@@ -2374,7 +2336,7 @@ def get_xyz_matrix_of_era5_windspd(era5_file_path, product_type,
         for x in range(lons_num):
             try:
                 lon_180_mode = longitude_converter(lons[y][x], '360',
-                                                    '-180')
+                                                   '-180')
                 if not bool(globe.is_land(lats[y][x], lon_180_mode)):
                     windspd[y][x] = math.sqrt(u_wind[y][x] ** 2
                                               + v_wind[y][x] ** 2)
@@ -2387,6 +2349,7 @@ def get_xyz_matrix_of_era5_windspd(era5_file_path, product_type,
 
     return lons, lats, windspd
 
+
 def if_mesh(lons):
     if isinstance(lons, list):
         return False
@@ -2394,6 +2357,7 @@ def if_mesh(lons):
         if len(lons.shape) == 2:
             return True
         return True
+
 
 def get_subplots_row_col_and_fig_size(subplots_num):
     if subplots_num == 1:
@@ -2405,6 +2369,7 @@ def get_subplots_row_col_and_fig_size(subplots_num):
     else:
         logger.error('Too many subplots, should not more than 4.')
         exit()
+
 
 def get_era5_corners_of_rss_cell(lat, lon, era5_lats_grid,
                                  era5_lons_grid, grb_spa_resolu):
@@ -2438,7 +2403,7 @@ def get_era5_corners_of_rss_cell(lat, lon, era5_lats_grid,
                 lat1 = era5_lats[lat1_idx]
 
             nearest_lon, nearest_lon_idx = \
-                    get_nearest_element_and_index(era5_lons, lon)
+                get_nearest_element_and_index(era5_lons, lon)
             if nearest_lon < lon:
                 lon1 = nearest_lon
                 lon1_idx = nearest_lon_idx
@@ -2451,12 +2416,14 @@ def get_era5_corners_of_rss_cell(lat, lon, era5_lats_grid,
                 lon1 = era5_lons[lon1_idx]
     except Exception as msg:
         breakpoint()
-        # exit(msg)
+        exit(msg)
 
     return [lat1, lat2, lon1, lon2], [lat1_idx, lat2_idx, lon1_idx,
                                       lon2_idx]
 
-def get_era5_corners_of_cell(lat, lon, era5_lats_grid, era5_lons_grid):
+
+def get_era5_corners_of_cell(lat, lon, era5_lats_grid,
+                             era5_lons_grid):
     era5_lats = list(era5_lats_grid[:, 0])
     era5_lons = list(era5_lons_grid[0, :])
 
@@ -2475,7 +2442,7 @@ def get_era5_corners_of_cell(lat, lon, era5_lats_grid, era5_lons_grid):
             lat1 = era5_lats[lat1_idx]
 
         nearest_lon, nearest_lon_idx = \
-                get_nearest_element_and_index(era5_lons, lon)
+            get_nearest_element_and_index(era5_lons, lon)
         if nearest_lon < lon:
             lon1 = nearest_lon
             lon1_idx = nearest_lon_idx
@@ -2488,17 +2455,19 @@ def get_era5_corners_of_cell(lat, lon, era5_lats_grid, era5_lons_grid):
             lon1 = era5_lons[lon1_idx]
     except Exception as msg:
         breakpoint()
-        # exit(msg)
+        exit(msg)
 
     return [lat1, lat2, lon1, lon2], [lat1_idx, lat2_idx, lon1_idx,
                                       lon2_idx]
 
+
 def find_neighbours_of_pt_in_half_degree_grid(pt):
     nearest = round(pt * 2) / 2
     direction = ((pt - nearest) / abs(pt - nearest))
-    the_other = pt + (0.5 - abs(pt- nearest)) * direction
+    the_other = pt + (0.5 - abs(pt - nearest)) * direction
 
     return min(nearest, the_other), max(nearest, the_other)
+
 
 def get_center_shift_of_two_tcs(next_tc, tc):
     next_tc_center = get_tc_center(next_tc)
@@ -2520,15 +2489,18 @@ def get_center_shift_of_two_tcs(next_tc, tc):
 
     return lons_shift, lats_shift
 
+
 def get_tc_center(tc_row):
     lon_converted = tc_row.lon + 360 if tc_row.lon < 0 else tc_row.lon
     center = (lon_converted, tc_row.lat)
 
     return center
 
+
 def process_grib_message_name(name):
     return name.replace(" ", "_").replace("-", "_").replace('(', '')\
             .replace(')', '').lower()
+
 
 def longitude_converter(lon, input_mode, output_mode):
     if input_mode == '360' and output_mode == '-180':
@@ -2539,6 +2511,7 @@ def longitude_converter(lon, input_mode, output_mode):
             lon += 360
 
     return lon
+
 
 def find_best_NN_weights_file(dir):
     filenames = [f for f in os.listdir(dir) if f.endswith('.hdf5')]
@@ -2553,23 +2526,15 @@ def find_best_NN_weights_file(dir):
 
     return f'{dir}{best_weights_filename}'
 
-def filter_dataframe_by_column_value_divide(df, col_name, divide,
-                                            large_or_small):
-    if large_or_small == 'large':
-        in_range = df[col_name] > divide
-    elif large_or_small == 'small':
-        in_range = df[col_name] < divide
-
-    condition = f'{col_name}_{large_or_small}_than_{divide}'
-
-    return df[in_range], condition
 
 def is_multiple_of(a, b):
     result = a % b
     return (result < 1e-3)
 
-def get_sharpened_lats_of_era5_ocean_grid(
-    lats, new_lats_num, new_lons_num, spa_resolu_diff):
+
+def get_sharpened_lats_of_era5_ocean_grid(lats, new_lats_num,
+                                          new_lons_num,
+                                          spa_resolu_diff):
     """Increase resolution of new lats grid to half of before.
 
     """
@@ -2590,8 +2555,10 @@ def get_sharpened_lats_of_era5_ocean_grid(
 
     return new_lats
 
-def get_sharpened_lons_of_era5_ocean_grid(
-    lons, new_lats_num, new_lons_num, spa_resolu_diff):
+
+def get_sharpened_lons_of_era5_ocean_grid(lons, new_lats_num,
+                                          new_lons_num,
+                                          spa_resolu_diff):
     """Increase resolution of new lons grid to half of before.
 
     """
@@ -2611,6 +2578,7 @@ def get_sharpened_lons_of_era5_ocean_grid(
         new_lons[y][-1] = lon
 
     return new_lons
+
 
 def sharpen_era5_ocean_grid(data, lats, lons):
     """Sharpen ERA5 ocean grid to resolution of 0.25 x 0.25 degree.
@@ -2642,15 +2610,12 @@ def sharpen_era5_ocean_grid(data, lats, lons):
 
     return new_data, new_lats, new_lons
 
-def fill_era5_masked_and_not_masked_ocean_data(
-    masked, data, new_data, lats, lons, masked_value):
-    """
 
-    """
+def fill_era5_masked_and_not_masked_ocean_data(masked, data, new_data,
+                                               lats, lons,
+                                               masked_value):
     lats_num = data.shape[0]
     lons_num = data.shape[1]
-    new_lats_num = lats_num * 2 - 1
-    new_lons_num = lons_num * 2 - 1
 
     # Project from data to new_data
     if masked:
@@ -2727,9 +2692,66 @@ def fill_era5_masked_and_not_masked_ocean_data(
 
     if masked:
         # Make new_data to be a masked array
-        new_data = np.ma.masked_where(new_data==masked_value, new_data)
+        new_data = np.ma.masked_where(new_data == masked_value,
+                                      new_data)
 
     return new_data
+
+
+def load_model(the_class, model_dir, suffix='.pickle.dat'):
+    if hasattr(the_class, 'model_tag'):
+        model_files = [f for f in os.listdir(model_dir)
+                       if (f.endswith(suffix)
+                           and the_class.model_tag in f)]
+    else:
+        model_files = [f for f in os.listdir(model_dir)
+                       if f.endswith(suffix)]
+    if not len(model_files):
+        if hasattr(the_class, 'model_tag'):
+            the_class.logger.error((
+                f"""Model not found in {model_dir} """
+                f"""with tag "{the_class.model_tag}"""))
+        else:
+            the_class.logger.error((
+                f"""Model not found in {model_dir} """))
+        breakpoint()
+        exit()
+
+    try:
+        min_mse = 99999999
+        best_model_name = None
+        # Find best model
+        for file in model_files:
+            mse = float(
+                file.split(f'_{the_class.model_tag}')[0].split(
+                    'mse_')[1])
+            if mse < min_mse:
+                min_mse = mse
+                best_model_name = file
+
+        # load model from file
+        best_model = pickle.load(
+            open(f'{model_dir}{best_model_name}', 'rb'))
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+    return best_model
+
+
+def load_model_from_bunch(model_dir, suffix, model_attr_name):
+    fnames = [f for f in os.listdir(model_dir)
+              if f.endswith(suffix)]
+    if len(fnames) != 1:
+        logger.error('Wrong file count')
+        breakpoint()
+        sys.exit(1)
+
+    with open(f'{model_dir}{fnames[0]}', 'rb') as f:
+        best_result = pickle.load(f)
+
+    return getattr(best_result, model_attr_name)
+
 
 def load_best_model(model_dir, basin):
     model_files = [f for f in os.listdir(model_dir)
@@ -2749,6 +2771,7 @@ def load_best_model(model_dir, basin):
 
     return best_model
 
+
 def sfmr_nc_converter(var_name, value, file_path=None):
     value = str(value)
     try:
@@ -2760,6 +2783,7 @@ def sfmr_nc_converter(var_name, value, file_path=None):
     except Exception as msg:
         breakpoint()
         exit(msg)
+
 
 def sfmr_vars_filter(var_name, nc_var, masked_value,
                      time_masked_indices=None):
@@ -2792,7 +2816,7 @@ def sfmr_vars_filter(var_name, nc_var, masked_value,
                     # is invalid value too, then this point is
                     # invalid
                     if (var[idx - 1] == invalid_value
-                        or var[idx + 1] == invalid_value):
+                            or var[idx + 1] == invalid_value):
                         var[idx] = masked_value
                 else:
                     var[idx] = masked_value
@@ -2823,6 +2847,7 @@ def sfmr_vars_filter(var_name, nc_var, masked_value,
 
     return result, masked_indices
 
+
 def get_min_max_from_nc_var(name, var):
     if name == 'DATE':
         the_min = datetime.datetime.strptime(str(var[0]),
@@ -2842,6 +2867,7 @@ def get_min_max_from_nc_var(name, var):
         the_max = max(var)
 
     return the_min, the_max
+
 
 def sfmr_nc_time_converter(time_str):
     # Only seconds
@@ -2866,22 +2892,6 @@ def sfmr_nc_time_converter(time_str):
 
     return the_time
 
-"""
-def get_terminal_index_among_vars(side, vars, masked_value):
-    terminal_indices = []
-    for var in vars:
-        one_var_termianl_indices = get_terminal_indices_of_nc_var(
-            var, masked_value)
-        terminal_indices.append(one_var_indices)
-
-def get_terminal_indices_of_nc_var(var, masked_value):
-    encounter_masked = False
-    start_indices = []
-    for idx, val in enumerate(var):
-        if val == masked_value and not encounter_masked:
-            encounter_masked = True
-            start_indices.append(idx)
-"""
 
 def get_sfmr_track_and_windspd(nc_file_path, data_indices):
     dataset = netCDF4.Dataset(nc_file_path)
@@ -2931,7 +2941,7 @@ def get_sfmr_track_and_windspd(nc_file_path, data_indices):
         # If the difference between longitude or latitude is not smaller
         # than square edge, we encounter the center point of next square
         if (abs(pt.lon - avg_pts[-1].lon) >= square_edge
-            or abs(pt.lat - avg_pts[-1].lat) >= square_edge):
+                or abs(pt.lat - avg_pts[-1].lat) >= square_edge):
             # Record the new square center
             one_avg_pt = SFMRPoint()
             one_avg_pt.lon = pt.lon
@@ -2949,7 +2959,7 @@ def get_sfmr_track_and_windspd(nc_file_path, data_indices):
         if idx <= square_center_indices[-1]:
             continue
         if (abs(pt.lon - avg_pts[-1].lon) >= half_square_edge
-            or abs(pt.lat - avg_pts[-1].lat) >= half_square_edge):
+                or abs(pt.lat - avg_pts[-1].lat) >= half_square_edge):
             # Make sure of the necessity of setting the end terminal as
             # the last square center
             end_is_center = True
@@ -2975,8 +2985,7 @@ def get_sfmr_track_and_windspd(nc_file_path, data_indices):
             idx_of_nearest_center_idx = None
 
             for index_of_center_indices in range(
-                len(square_center_indices)):
-                #
+                    len(square_center_indices)):
                 center_index = square_center_indices[
                     index_of_center_indices]
                 tmp_center = track_pts[center_index]
@@ -2984,14 +2993,14 @@ def get_sfmr_track_and_windspd(nc_file_path, data_indices):
                 lat_diff = abs(pt.lat - tmp_center.lat)
 
                 if (lon_diff <= half_square_edge
-                    and lat_diff <= half_square_edge):
+                        and lat_diff <= half_square_edge):
                     # This point along track is in the square
                     dis = math.sqrt(math.pow(lon_diff, 2)
                                     + math.pow(lat_diff, 2))
                     if dis < min_dis:
                         min_dis = dis
                         idx_of_nearest_center_idx = \
-                                index_of_center_indices
+                            index_of_center_indices
 
             if idx_of_nearest_center_idx is not None:
                 square_groups[idx_of_nearest_center_idx].append(idx)
@@ -3025,8 +3034,8 @@ def get_sfmr_track_and_windspd(nc_file_path, data_indices):
                                       + temporal_shift.seconds)
             avg_seconds_shift = seconds_shift_sum / group_size
             avg_pts[index_of_center_indices].date_time = \
-                    earliest_dt_of_track + datetime.timedelta(
-                        seconds=avg_seconds_shift)
+                earliest_dt_of_track + datetime.timedelta(
+                    seconds=avg_seconds_shift)
 
             # Calculated the average of other variables of each group
             for attr in ['air_temp', 'salinity', 'sst', 'rain_rate',
@@ -3053,6 +3062,7 @@ def get_sfmr_track_and_windspd(nc_file_path, data_indices):
         avg_pts = new_avg_pts
 
     return track_lonlats, avg_pts
+
 
 def old_get_sfmr_track_and_windspd(nc_file_path, data_indices):
     """Get data points along SFMR track, averaged points' longitude,
@@ -3092,10 +3102,6 @@ def old_get_sfmr_track_and_windspd(nc_file_path, data_indices):
     vars = dataset.variables
 
     track = []
-    track_air_temp = []
-    track_salinity = []
-    track_rain_rate = []
-    track_sst = []
     track_wind = []
     track_dt = []
 
@@ -3137,7 +3143,7 @@ def old_get_sfmr_track_and_windspd(nc_file_path, data_indices):
         # If the difference between longitude or latitude is not smaller
         # than square edge, we encounter the center point of next square
         if (abs(pt[0] - avg_lons[-1]) >= square_edge
-            or abs(pt[1] - avg_lats[-1]) >= square_edge):
+                or abs(pt[1] - avg_lats[-1]) >= square_edge):
             # Record the new square center
             avg_lons.append(pt[0])
             avg_lats.append(pt[1])
@@ -3153,7 +3159,7 @@ def old_get_sfmr_track_and_windspd(nc_file_path, data_indices):
         if idx <= square_center_indices[-1]:
             continue
         if (abs(pt[0] - avg_lons[-1]) >= half_square_edge
-            or abs(pt[1] - avg_lats[-1]) >= half_square_edge):
+                or abs(pt[1] - avg_lats[-1]) >= half_square_edge):
             # Make sure of the necessity of setting the end terminal as
             # the last square center
             end_is_center = True
@@ -3176,21 +3182,20 @@ def old_get_sfmr_track_and_windspd(nc_file_path, data_indices):
             min_dis = 999
             idx_of_nearest_center_idx = None
             for index_of_center_indices in range(
-                len(square_center_indices)):
-                #
+                    len(square_center_indices)):
                 center_index = square_center_indices[
                     index_of_center_indices]
                 tmp_center = track[center_index]
                 lon_diff = abs(pt[0] - tmp_center[0])
                 lat_diff = abs(pt[1] - tmp_center[1])
                 if (lon_diff <= half_square_edge
-                    and lat_diff <= half_square_edge):
+                        and lat_diff <= half_square_edge):
                     dis = math.sqrt(math.pow(lon_diff, 2)
                                     + math.pow(lat_diff, 2))
                     if dis < min_dis:
                         min_dis = dis
                         idx_of_nearest_center_idx = \
-                                index_of_center_indices
+                            index_of_center_indices
                     # This point along track is in one square
 
             if idx_of_nearest_center_idx is not None:
@@ -3261,6 +3266,7 @@ def old_get_sfmr_track_and_windspd(nc_file_path, data_indices):
 
     return track, avg_dts, avg_lons, avg_lats, avg_windspd
 
+
 def draw_sfmr_windspd_and_track(the_class, fig, ax, tc_datetime,
                                 sfmr_tracks, sfmr_pts, max_windspd):
     track_lons = []
@@ -3289,13 +3295,15 @@ def draw_sfmr_windspd_and_track(the_class, fig, ax, tc_datetime,
             all_windspd.append(tmp_windspd)
 
         for i in range(len(sfmr_pts)):
-            ax.scatter(all_lons[i], all_lats[i], s=60, c=all_windspd[i],
-                       cmap=plt.cm.rainbow, vmin=0, vmax=max_windspd,
+            ax.scatter(all_lons[i], all_lats[i], s=60,
+                       c=all_windspd[i], cmap=plt.cm.rainbow,
+                       vmin=0, vmax=max_windspd,
                        zorder=the_class.zorders['sfmr_point'],
                        edgecolors='black')
     except Exception as msg:
         breakpoint()
         exit(msg)
+
 
 def interp_satel_era5_diff_mins_matrix(diff_mins):
     rows_num, cols_num = diff_mins.shape
@@ -3345,7 +3353,7 @@ def validate_with_sfmr(the_class, tgt_name, tc, sfmr_pts, tgt_lons,
     num_sfmr_tracks = len(sfmr_pts)
     num_tgt_lats, num_tgt_lons = tgt_windspd.shape
 
-    grid_edge = 0.25
+    grid_edge = the_class.CONFIG['spatial_resolution'][tgt_name]
     half_grid_edge = grid_edge / 2
     max_min_dis = math.sqrt(half_grid_edge ** 2 + half_grid_edge ** 2)
 
@@ -3370,15 +3378,15 @@ def validate_with_sfmr(the_class, tgt_name, tc, sfmr_pts, tgt_lons,
                         # Skip if the data point from target source is
                         # invalid
                         if (tgt_windspd[j][k] is None
-                            or tgt_windspd[j][k] <= 0):
+                                or tgt_windspd[j][k] <= 0):
                             continue
                         if not tgt_mesh:
                             tmp_lon = tgt_lons[k]
                         else:
                             tmp_lat = tgt_lats[j][k]
                             tmp_lon = tgt_lons[j][k]
-                        # Calculate the distance between SFMR data point
-                        # and data point from target source
+                        # Calculate the distance between SFMR data
+                        # point and data point from target source
                         dis = math.sqrt(
                             math.pow(base_lon - tmp_lon, 2)
                             + math.pow(base_lat - tmp_lat, 2))
@@ -3390,14 +3398,16 @@ def validate_with_sfmr(the_class, tgt_name, tc, sfmr_pts, tgt_lons,
                 breakpoint()
                 exit(msg)
 
-            # Skip if there are no data point from target source in the
-            # spatial window around SFMR data point
+            # Skip if there are no data point from target source
+            # in the spatial window around SFMR data point
             if min_dis > max_min_dis:
                 continue
 
             if tgt_mesh:
-                min_dis_lat = tgt_lats[min_dis_lat_idx][min_dis_lon_idx]
-                min_dis_lon = tgt_lons[min_dis_lat_idx][min_dis_lon_idx]
+                min_dis_lat = tgt_lats[min_dis_lat_idx][
+                    min_dis_lon_idx]
+                min_dis_lon = tgt_lons[min_dis_lat_idx][
+                    min_dis_lon_idx]
             else:
                 min_dis_lat = tgt_lats[min_dis_lat_idx]
                 min_dis_lon = tgt_lons[min_dis_lon_idx]
@@ -3424,6 +3434,9 @@ def validate_with_sfmr(the_class, tgt_name, tc, sfmr_pts, tgt_lons,
                 value = getattr(sfmr_pts[t][i], attr)
                 setattr(row, f'sfmr_{attr}', value)
 
+            row.x = int((min_dis_lon - tc.lon) / grid_edge)
+            row.y = int((min_dis_lat - tc.lat) / grid_edge)
+
             setattr(row, f'{tgt_name}_datetime', min_dis_dt)
             setattr(row, f'{tgt_name}_lon', min_dis_lon)
             setattr(row, f'{tgt_name}_lat', min_dis_lat)
@@ -3438,13 +3451,13 @@ def validate_with_sfmr(the_class, tgt_name, tc, sfmr_pts, tgt_lons,
                 base_lon, '360', '-180'))
             one_tgt_pt = (min_dis_lat, longitude_converter(
                 min_dis_lon, '360', '-180'))
-            row.dis_kms = distance.distance(one_tgt_pt, one_sfmr_pt).km
+            row.dis_kms = distance.distance(one_tgt_pt,
+                                            one_sfmr_pt).km
             # Bias of wind speed
             row.windspd_bias = min_dis_windspd - row.sfmr_windspd
 
             row.tc_sid_sfmr_datetime = (f"""{row.tc_sid}_"""
                                         f"""{row.sfmr_datetime}""")
-
             validation_list.append(row)
 
     bulk_insert_avoid_duplicate_unique(
@@ -3452,6 +3465,7 @@ def validate_with_sfmr(the_class, tgt_name, tc, sfmr_pts, tgt_lons,
         the_class.CONFIG['database']['batch_size']['insert'],
         Validation, ['tc_sid_sfmr_datetime'], the_class.session,
         check_self=True)
+
 
 def get_bound_of_multiple_int(lims, interval):
     """lims[0] < lims[1]
@@ -3461,6 +3475,7 @@ def get_bound_of_multiple_int(lims, interval):
     top_lim = closest_multiple_int('top', lims[1], interval)
 
     return (bottom_lim, top_lim)
+
 
 def closest_multiple_int(direction, value, interval):
     nearest = round(value / interval) * interval
@@ -3474,6 +3489,7 @@ def closest_multiple_int(direction, value, interval):
 
     return int(nearest)
 
+
 def const_line(x_min, x_max, ratio, bias, color, linewidth, linestyle):
     """Plot a const line.
 
@@ -3481,6 +3497,7 @@ def const_line(x_min, x_max, ratio, bias, color, linewidth, linestyle):
     x = np.arange(x_min, x_max, .5)
     y = ratio * x + bias
     plt.plot(y, x, C=color, linewidth=linewidth, linestyle=linestyle)
+
 
 def sfmr_exists(the_class, tc, next_tc):
     """Check the existence of SFMR data between two
@@ -3513,8 +3530,8 @@ def sfmr_exists(the_class, tc, next_tc):
 
     # Rough spaitally check
     spatial_existence, spatial_temporal_sfmr_info = \
-            sfmr_spatially_exists(the_class, tc, next_tc,
-                                  temporal_sfmr_info)
+        sfmr_spatially_exists(the_class, tc, next_tc,
+                              temporal_sfmr_info)
     if not spatial_existence:
         return False, None
 
@@ -3523,13 +3540,13 @@ def sfmr_exists(the_class, tc, next_tc):
 
     return True, spatial_temporal_sfmr_info
 
+
 def sfmr_temporally_exists(the_class, tc, next_tc):
     existence = False
     temporal_info = []
 
     table_name = the_class.CONFIG['sfmr']['table_names']['brief_info']
-    BriefInfo = get_class_by_tablename(the_class.engine,
-                                             table_name)
+    BriefInfo = get_class_by_tablename(the_class.engine, table_name)
 
     direct_query = the_class.session.query(BriefInfo).filter(
         BriefInfo.end_datetime > tc.date_time,
@@ -3542,6 +3559,7 @@ def sfmr_temporally_exists(the_class, tc, next_tc):
             temporal_info.append(row)
 
     return existence, temporal_info
+
 
 def sfmr_spatially_exists(the_class, tc, next_tc, temporal_info):
     # It seems that need to compare rectangle of SFMR range with
@@ -3564,7 +3582,8 @@ def sfmr_spatially_exists(the_class, tc, next_tc, temporal_info):
     except Exception as msg:
         breakpoint()
         exit(msg)
-    half_reg_edge = the_class.CONFIG['regression']['edge_in_degree'] / 2
+    half_reg_edge = the_class.CONFIG['regression'][
+        'edge_in_degree'] / 2
     corners = {'left': [], 'top': [], 'right': [], 'bottom': []}
     # Extract from the interval between two TC records
     for h in range(hours):
@@ -3576,19 +3595,20 @@ def sfmr_spatially_exists(the_class, tc, next_tc, temporal_info):
         corners['bottom'].append(interped_tc_lat - half_reg_edge)
     # Describe rectangle of regression area between two TCs
     left_top_tc = Point(min(corners['left']),
-                              max(corners['top']))
+                        max(corners['top']))
     right_bottom_tc = Point(max(corners['right']),
-                                  min(corners['bottom']))
+                            min(corners['bottom']))
 
     for info in temporal_info:
         left_top_sfmr = Point(info.min_lon, info.max_lat)
         right_bottom_sfmr = Point(info.max_lon, info.min_lat)
         if doOverlap(left_top_tc, right_bottom_tc,
-                           left_top_sfmr, right_bottom_sfmr):
+                     left_top_sfmr, right_bottom_sfmr):
             existence = True
             spatial_temporal_info.append(info)
 
     return existence, spatial_temporal_info
+
 
 def load_match_data_sources(the_class):
     match_str = f'sfmr_vs_era5'
@@ -3605,6 +3625,7 @@ def load_match_data_sources(the_class):
         with open(file_path, 'rb') as f:
             the_class.match_data_sources = pickle.load(f)
 
+
 def update_match_data_sources(the_class):
     if os.path.exists(the_class.match_data_source_file_path):
         os.remove(the_class.match_data_source_file_path)
@@ -3612,6 +3633,7 @@ def update_match_data_sources(the_class):
                 exist_ok=True)
     the_class.match_data_sources.to_pickle(
         the_class.match_data_source_file_path)
+
 
 def update_no_match_between_tcs(the_class, Match, hours, tc, next_tc):
     """Reocrd the nonexistence of matchup of data sources.
@@ -3635,6 +3657,7 @@ def update_no_match_between_tcs(the_class, Match, hours, tc, next_tc):
         Match, ['tc_sid_datetime'], the_class.session,
         check_self=True)
 
+
 def update_one_row_of_match(the_class, Match, interped_tc, match):
     row = Match()
     row.tc_sid = interped_tc.sid
@@ -3646,6 +3669,7 @@ def update_one_row_of_match(the_class, Match, interped_tc, match):
         [row], the_class.CONFIG['database']['batch_size']['insert'],
         Match, ['tc_sid_datetime'], the_class.session,
         check_self=True)
+
 
 def interp_tc(the_class, h, tc, next_tc):
     """Get sid, interpolated datetime, longitude and latitude of
@@ -3665,8 +3689,7 @@ def interp_tc(the_class, h, tc, next_tc):
         # Get IBTrACS table
         table_name = the_class.CONFIG['ibtracs']['table_name'][
             the_class.basin]
-        IBTrACS = get_class_by_tablename(the_class.engine,
-                                               table_name)
+        IBTrACS = get_class_by_tablename(the_class.engine, table_name)
         # ATTENTIONL: DO NOT direct use `interped_tc = tc`
         # Because it makes a link between two variables
         # any modification will simultaneously change two variables
@@ -3691,7 +3714,7 @@ def interp_tc(the_class, h, tc, next_tc):
         # Only interpolate `date_time`, `lon`, `lat` variables
         # Other variables stays same with `tc`
         interped_tc.date_time = tc.date_time + datetime.timedelta(
-            seconds = h * 3600)
+            seconds=h*3600)
         interped_tc.lon = (h * hourly_lon_shift + tc.lon)
         interped_tc.lat = (h * hourly_lat_shift + tc.lat)
     except Exception as msg:
@@ -3699,6 +3722,7 @@ def interp_tc(the_class, h, tc, next_tc):
         exit(msg)
 
     return interped_tc
+
 
 def sfmr_rounded_hours(the_class, tc, next_tc, spatial_temporal_info):
     # Include start hour, but not end hour
@@ -3716,20 +3740,17 @@ def sfmr_rounded_hours(the_class, tc, next_tc, spatial_temporal_info):
 
     for h in range(hours):
         interp_dt = tc.date_time + datetime.timedelta(
-            seconds = h * 3600)
+            seconds=h*3600)
         hours_between_two_tcs.append(interp_dt)
 
         datetime_area[interp_dt] = dict()
 
-        tc_pre = tc
         interped_tc = interp_tc(the_class, h, tc, next_tc)
-        tc_aft = tc
         if tc.date_time == next_tc.date_time:
-        # if tc_pre.date_time != tc_aft.date_time:
             breakpoint()
 
         half_reg_edge = \
-                the_class.CONFIG['regression']['edge_in_degree'] / 2
+            the_class.CONFIG['regression']['edge_in_degree'] / 2
         datetime_area[interp_dt]['lon1'] = (interped_tc.lon
                                             - half_reg_edge)
         datetime_area[interp_dt]['lon2'] = (interped_tc.lon
@@ -3785,12 +3806,10 @@ def sfmr_rounded_hours(the_class, tc, next_tc, spatial_temporal_info):
             # Check whether SFMR data points are in area around
             # TC at rounded hour
             if (lon < datetime_area[rounded_hour]['lon1']
-                or lon > datetime_area[rounded_hour]['lon2']
-                or lat < datetime_area[rounded_hour]['lat1']
-                or lat > datetime_area[rounded_hour]['lat2']):
+                    or lon > datetime_area[rounded_hour]['lon2']
+                    or lat < datetime_area[rounded_hour]['lat1']
+                    or lat > datetime_area[rounded_hour]['lat2']):
                 continue
-            rounded_hour_idx = hours_between_two_tcs.index(
-                rounded_hour)
 
             # Add SFMR data point index into `hour_info_pt_idx`
             if rounded_hour not in hour_info_pt_idx:
@@ -3801,6 +3820,7 @@ def sfmr_rounded_hours(the_class, tc, next_tc, spatial_temporal_info):
             hour_info_pt_idx[rounded_hour][info_idx].append(i)
 
     return hour_info_pt_idx
+
 
 def average_sfmr_along_track(the_class, tc, sfmr_brief_info,
                              one_hour_info_pt_idx,
@@ -3847,15 +3867,11 @@ def average_sfmr_along_track(the_class, tc, sfmr_brief_info,
     final_tracks = []
     final_pts = []
     try:
-        for track_idx, single_track_pts in enumerate(
-            all_pts):
-            #
+        for track_idx, single_track_pts in enumerate(all_pts):
             tmp_pts = []
-            for pt_idx, pt in enumerate(
-                single_track_pts):
-                #
+            for pt_idx, pt in enumerate(single_track_pts):
                 if (pt.windspd == 0
-                    or (not use_slow_wind and pt.windspd < 15)):
+                        or (not use_slow_wind and pt.windspd < 15)):
                     continue
                 tmp_pts.append(all_pts[track_idx][pt_idx])
 
@@ -3866,7 +3882,7 @@ def average_sfmr_along_track(the_class, tc, sfmr_brief_info,
         breakpoint()
         exit(msg)
 
-    # if (tc.name == 'ARTHUR' 
+    # if (tc.name == 'ARTHUR'
     #     and tc.date_time == datetime.datetime(2014, 7, 2, 6, 0)):
     #     breakpoint()
 
@@ -3874,6 +3890,7 @@ def average_sfmr_along_track(the_class, tc, sfmr_brief_info,
         return False, None, None
     else:
         return True, final_tracks, final_pts
+
 
 def east_or_north_shift(direction, base_pt, tgt_pt):
     if direction == 'east':
@@ -3911,30 +3928,73 @@ def east_or_north_shift(direction, base_pt, tgt_pt):
 
     return ratio * dis
 
+
+def create_smap_era5_table(the_class, dt, suffix=''):
+    table_name = gen_tc_satel_era5_tablename('smap', the_class.basin)
+    table_name += suffix
+
+    class Satel(object):
+        pass
+
+    if the_class.engine.dialect.has_table(the_class.engine,
+                                          table_name):
+        metadata = MetaData(bind=the_class.engine, reflect=True)
+        t = metadata.tables[table_name]
+        mapper(Satel, t)
+
+        return Satel
+
+    cols = get_basic_satel_era5_columns(tc_info=True)
+
+    cols.append(Column('smap_windspd', Float, nullable=False))
+
+    cols.append(Column('smap_u_wind', Float, nullable=False))
+    cols.append(Column('smap_v_wind', Float, nullable=False))
+
+    era5_ = era5.ERA5Manager(the_class.CONFIG, the_class.period,
+                             the_class.region,
+                             the_class.db_root_passwd, False,
+                             the_class.save_disk, '', 'tc')
+    era5_cols = era5_.get_era5_columns()
+    cols = cols + era5_cols
+
+    cols.append(Column('era5_10m_neutral_equivalent_windspd',
+                       Float, nullable=False))
+    cols.append(Column('era5_10m_neutral_equivalent_winddir',
+                       Float, nullable=False))
+
+    metadata = MetaData(bind=the_class.engine)
+    t = Table(table_name, metadata, *cols)
+    metadata.create_all()
+    mapper(Satel, t)
+
+    the_class.session.commit()
+
+    return Satel
+
+
 def add_era5(the_class, tgt_name, tc, tgt_part, hourtimes, area):
     try:
         era5_step_1, pres_lvls = extract_era5_single_levels(
             the_class, tgt_name, tc, tgt_part,
             hourtimes, area)
-        if era5_step_1 is None:
-            return None
         if not len(era5_step_1):
             return []
 
         era5_step_2 = extract_era5_pressure_levels(
             the_class, tgt_name, tc, era5_step_1,
             hourtimes, area, pres_lvls)
+
     except Exception as msg:
         exit(msg)
 
-    if era5_step_2 is None:
-        return None
-
     return era5_step_2
+
 
 def extract_era5_single_levels(the_class, tgt_name, tc, tgt_part,
                                hourtimes, area):
-    era5_manager = era5.ERA5Manager(the_class.CONFIG, the_class.period,
+    era5_manager = era5.ERA5Manager(the_class.CONFIG,
+                                    the_class.period,
                                     the_class.region,
                                     the_class.db_root_passwd,
                                     work=False,
@@ -3944,13 +4004,15 @@ def extract_era5_single_levels(the_class, tgt_name, tc, tgt_part,
     try:
         era5_file_path = \
                 era5_manager.download_single_levels_vars(
-                    'tc', tc.date_time, '', hourtimes, area, tgt_name,
-                    tc.sid)
+                    vars_mode='tc', target_datetime=tc.date_time,
+                    time_mode='', times=hourtimes, area=area,
+                    match_satel=tgt_name, filename_suffix=tc.sid)
     except Exception as msg:
         the_class.logger.error((
             f"""Fail downloading ERA5 single levels: {tgt_name} """
-            f"""around TC {tc.name} on {tc.date_time}"""))
-        return None, None
+            f"""around TC {tc.name} on {tc.date_time}: {msg}"""))
+        breakpoint()
+        exit()
 
     try:
         era5_step_1, pres_lvls = add_era5_single_levels(
@@ -3962,10 +4024,12 @@ def extract_era5_single_levels(the_class, tgt_name, tc, tgt_part,
 
     return era5_step_1, pres_lvls
 
+
 def extract_era5_pressure_levels(the_class, tgt_name, tc,
                                  era5_step_1, hourtimes, area,
                                  pres_lvls):
-    era5_manager = era5.ERA5Manager(the_class.CONFIG, the_class.period,
+    era5_manager = era5.ERA5Manager(the_class.CONFIG,
+                                    the_class.period,
                                     the_class.region,
                                     the_class.db_root_passwd,
                                     work=False,
@@ -3980,8 +4044,9 @@ def extract_era5_pressure_levels(the_class, tgt_name, tc,
     except Exception as msg:
         the_class.logger.error((
             f"""Fail downloading ERA5 pressure levels: {tgt_name} """
-            f"""around TC {tc.name} on {tc.date_time}"""))
-        return None
+            f"""around TC {tc.name} on {tc.date_time}: {msg}"""))
+        breakpoint()
+        exit()
 
     try:
         era5_step_2 = add_era5_pressure_levels(
@@ -3994,16 +4059,23 @@ def extract_era5_pressure_levels(the_class, tgt_name, tc,
 
     return era5_step_2
 
+
 def add_era5_single_levels(the_class, era5_file_path, tc_dt, tgt_name,
                            tgt_part, area):
-    hourtime_row_mapper = get_hourtime_row_mapper(tgt_part, tgt_name)
+    tgt_from_rss = False
+    rss_tgt_name = None
+    if tgt_name in the_class.CONFIG['satel_data_sources']['rss']:
+        tgt_from_rss = True
+        rss_tgt_name = 'satel'
+        hourtime_row_mapper = get_hourtime_row_mapper(tgt_part,
+                                                      rss_tgt_name)
+    else:
+        hourtime_row_mapper = get_hourtime_row_mapper(tgt_part,
+                                                      tgt_name)
     north, west, south, east = area
 
     grbs = pygrib.open(era5_file_path)
-    messages_num = grbs.messages
     grbs.close()
-    data_num = len(tgt_part)
-    total = data_num * messages_num
     count = 0
 
     grbidx = pygrib.index(era5_file_path, 'dataTime')
@@ -4047,17 +4119,23 @@ def add_era5_single_levels(the_class, era5_file_path, tc_dt, tgt_name,
                 row.era5_datetime = datetime.datetime.combine(
                     tc_dt.date(), grb_time)
 
-                tgt_datetime = getattr(row, f'{tgt_name}_datetime')
+                if tgt_from_rss:
+                    tgt_datetime = getattr(row,
+                                           f'{rss_tgt_name}_datetime')
+                else:
+                    tgt_datetime = getattr(row,
+                                           f'{tgt_name}_datetime')
+
                 tgt_minute = (tgt_datetime.hour * 60
                               + tgt_datetime.minute)
                 grb_minute = int(hourtime/100) * 60
-                setattr(row, f'{tgt_name}_era5_diff_mins',
-                        tgt_minute - grb_minute)
 
-                tgt_from_rss = False
-                if tgt_name in the_class.CONFIG[
-                    'satel_data_sources']['rss']:
-                    tgt_from_rss = True
+                if tgt_from_rss:
+                    setattr(row, f'{rss_tgt_name}_era5_diff_mins',
+                            tgt_minute - grb_minute)
+                else:
+                    setattr(row, f'{tgt_name}_era5_diff_mins',
+                            tgt_minute - grb_minute)
 
                 try:
                     if tgt_from_rss:
@@ -4074,7 +4152,7 @@ def add_era5_single_levels(the_class, era5_file_path, tc_dt, tgt_name,
                     exit(msg)
                 lat1, lat2, lon1, lon2 = latlons
                 lat1_idx, lat2_idx, lon1_idx, lon2_idx = \
-                        latlon_indices
+                    latlon_indices
 
                 # Check out whether there is masked cell in square
                 if masked_data:
@@ -4112,6 +4190,12 @@ def add_era5_single_levels(the_class, era5_file_path, tc_dt, tgt_name,
 
                 setattr(row, name, value)
 
+                # if (tc_dt == datetime.datetime(2015, 5, 7, 23, 0, 0)
+                #     and (name == '2_metre_temperature'
+                #          or name == 'mean_direction_of_total_swell')
+                #     and row.x == -11 and row.y == -8):
+                #     breakpoint()
+
             delete_last_lines()
             # print(f'{name}: Done')
 
@@ -4140,23 +4224,31 @@ def add_era5_single_levels(the_class, era5_file_path, tc_dt, tgt_name,
         row.era5_10m_neutral_equivalent_windspd = windspd
         row.era5_10m_neutral_equivalent_winddir = winddir
 
-        # row.smap_u_wind, row.smap_v_wind = decompose_wind(
-        #     row.smap_windspd, winddir, 'o')
+        if tgt_name == 'smap' and row.smap_windspd is not None:
+            row.smap_u_wind, row.smap_v_wind = decompose_wind(
+                row.smap_windspd, winddir, 'o')
 
         pres_lvls.append(nearest_pres_lvl)
 
     return new_tgt_part, pres_lvls
 
-def add_era5_pressure_levels(the_class, era5_file_path, tc_dt, tgt_name,
-                             era5_step_1, area, pres_lvls):
-    hourtime_row_mapper = get_hourtime_row_mapper(era5_step_1, tgt_name)
+
+def add_era5_pressure_levels(the_class, era5_file_path, tc_dt,
+                             tgt_name, era5_step_1, area, pres_lvls):
+    tgt_from_rss = False
+    rss_tgt_name = None
+    if tgt_name in the_class.CONFIG['satel_data_sources']['rss']:
+        tgt_from_rss = True
+        rss_tgt_name = 'satel'
+        hourtime_row_mapper = get_hourtime_row_mapper(era5_step_1,
+                                                      rss_tgt_name)
+    else:
+        hourtime_row_mapper = get_hourtime_row_mapper(era5_step_1,
+                                                      tgt_name)
     north, west, south, east = area
 
     grbs = pygrib.open(era5_file_path)
-    messages_num = grbs.messages
     grbs.close()
-    data_num = len(era5_step_1)
-    total = data_num * messages_num
     count = 0
 
     grbidx = pygrib.index(era5_file_path, 'dataTime')
@@ -4208,25 +4300,31 @@ def add_era5_pressure_levels(the_class, era5_file_path, tc_dt, tgt_name,
                     tc_dt.date(), grb_time)
                 if row.era5_datetime != era5_datetime:
                     the_class.logger.error((f"""datetime not same """
-                                       f"""in two steps of """
-                                       f"""extracting ERA5"""))
+                                            f"""in two steps of """
+                                            f"""extracting ERA5"""))
 
-                tgt_datetime = getattr(row, f'{tgt_name}_datetime')
+                if tgt_from_rss:
+                    tgt_datetime = getattr(row,
+                                           f'{rss_tgt_name}_datetime')
+                else:
+                    tgt_datetime = getattr(row, f'{tgt_name}_datetime')
+
                 tgt_minute = (tgt_datetime.hour * 60
                               + tgt_datetime.minute)
                 grb_minute = int(hourtime/100) * 60
                 tgt_era5_diff_mins = tgt_minute - grb_minute
-                if (getattr(row, f'{tgt_name}_era5_diff_mins')
-                    != tgt_era5_diff_mins):
-                    #
-                    the_class.logger.error((f"""diff_mins not same """
-                                       f"""in two steps of """
-                                       f"""extracting ERA5"""))
 
-                tgt_from_rss = False
-                if tgt_name in the_class.CONFIG[
-                    'satel_data_sources']['rss']:
-                    tgt_from_rss = True
+                if tgt_from_rss:
+                    existing_diff_mins = getattr(
+                        row, f'{rss_tgt_name}_era5_diff_mins')
+                else:
+                    existing_diff_mins = getattr(
+                        row, f'{tgt_name}_era5_diff_mins')
+
+                if existing_diff_mins != tgt_era5_diff_mins:
+                    the_class.logger.error((
+                        f"""diff_mins not same in two steps of """
+                        f"""extracting ERA5"""))
 
                 try:
                     if tgt_from_rss:
@@ -4243,7 +4341,7 @@ def add_era5_pressure_levels(the_class, era5_file_path, tc_dt, tgt_name,
                     exit(msg)
                 lat1, lat2, lon1, lon2 = latlons
                 lat1_idx, lat2_idx, lon1_idx, lon2_idx = \
-                        latlon_indices
+                    latlon_indices
 
                 # Check out whether there is masked cell in square
                 if masked_data:
@@ -4265,7 +4363,7 @@ def add_era5_pressure_levels(the_class, era5_file_path, tc_dt, tgt_name,
                                    lon1_idx:lon2_idx+1]
 
                 if tgt_from_rss and grb_spa_resolu == 0.25:
-                    value = float(data.mean())
+                    value = float(square_data.mean())
                 else:
                     value = value_of_pt_in_era5_square(
                         square_data, square_lats, square_lons,
@@ -4278,6 +4376,11 @@ def add_era5_pressure_levels(the_class, era5_file_path, tc_dt, tgt_name,
                         continue
 
                 setattr(row, name, value)
+
+                # if (tc_dt == datetime.datetime(2015, 5, 7, 23, 0, 0)
+                #     and (name == 'relative_humidity')
+                #     and row.x == -11 and row.y == -8):
+                #     breakpoint()
 
             delete_last_lines()
             # print(f'{name}: Done')
@@ -4292,6 +4395,7 @@ def add_era5_pressure_levels(the_class, era5_file_path, tc_dt, tgt_name,
             result.append(row)
 
     return result
+
 
 def get_hourtime_row_mapper(tgt_part, tgt_name):
     tgt_datetime_name = f'{tgt_name}_datetime'
@@ -4311,6 +4415,7 @@ def get_hourtime_row_mapper(tgt_part, tgt_name):
 
     return hourtime_row_mapper
 
+
 def value_of_pt_in_era5_square(data, lats, lons, pt_lat, pt_lon):
     if lats.shape != (2, 2) or lons.shape != (2, 2):
         return None
@@ -4320,17 +4425,25 @@ def value_of_pt_in_era5_square(data, lats, lons, pt_lat, pt_lon):
 
     return float(value)
 
+
+def gen_match_tablenname(the_class, src_1, src_2):
+    return f'match_of_{src_1}_and_{src_2}_{the_class.basin}'
+
+
 def create_match_table(the_class, src_1, src_2):
-    if 'era5' in [src_1, src_2]:
-        if src_2 != 'era5':
-            src_1 = src_2
-            src_2 = 'era5'
-    else:
+    src_hit = False
+    for name in the_class.CONFIG['compare_and_validate_targets']:
+        if name in [src_1, src_2]:
+            src_hit = True
+            if src_2 != name:
+                src_1 = src_2
+                src_2 = name
+    if not src_hit:
         the_class.logger.error(
             'Sources of match have not been considered')
         exit()
 
-    table_name = f'match_of_{src_1}_and_{src_2}'
+    table_name = gen_match_tablenname(the_class, src_1, src_2)
 
     class Match(object):
         pass
@@ -4359,8 +4472,14 @@ def create_match_table(the_class, src_1, src_2):
 
     return Match
 
+
+def gen_validation_tablename(the_class, base_name, tgt_name):
+    return f'{tgt_name}_validation_by_{base_name}_{the_class.basin}'
+
+
 def create_sfmr_validation_table(the_class, tgt_name):
-    table_name = f'{tgt_name}_validation_by_sfmr'
+    table_name = gen_validation_tablename(the_class, 'sfmr', tgt_name)
+    table_name = f'{table_name}_{the_class.model_tag}'
 
     class Validation(object):
         pass
@@ -4385,9 +4504,12 @@ def create_sfmr_validation_table(the_class, tgt_name):
     cols.append(Column('sfmr_rain_rate', Float, nullable=False))
     cols.append(Column('sfmr_windspd', Float, nullable=False))
 
-    cols.append(Column(f'{tgt_name}_datetime', DateTime, nullable=False))
+    cols.append(Column(f'{tgt_name}_datetime', DateTime,
+                       nullable=False))
     cols.append(Column(f'{tgt_name}_lon', Float, nullable=False))
     cols.append(Column(f'{tgt_name}_lat', Float, nullable=False))
+    cols.append(Column('x', Integer, nullable=False))
+    cols.append(Column('y', Integer, nullable=False))
     cols.append(Column(f'{tgt_name}_windspd', Float, nullable=False))
 
     cols.append(Column('dis_minutes', Float, nullable=False))
@@ -4406,8 +4528,10 @@ def create_sfmr_validation_table(the_class, tgt_name):
 
     return Validation
 
+
 def create_ibtracs_validation_table(the_class, tgt_name):
-    table_name = f'{tgt_name}_validation_by_ibtracs'
+    table_name = gen_validation_tablename(the_class, 'ibtracs',
+                                          tgt_name)
 
     class Validation(object):
         pass
@@ -4427,8 +4551,10 @@ def create_ibtracs_validation_table(the_class, tgt_name):
     cols.append(Column('ibtracs_windspd_mps', Float, nullable=False))
     cols.append(Column('ibtracs_pres_mb', Float, nullable=False))
 
-    cols.append(Column(f'{tgt_name}_datetime', DateTime, nullable=False))
-    cols.append(Column(f'{tgt_name}_windspd_mps', Float, nullable=False))
+    cols.append(Column(f'{tgt_name}_datetime', DateTime,
+                       nullable=False))
+    cols.append(Column(f'{tgt_name}_windspd_mps', Float,
+                       nullable=False))
 
     cols.append(Column('tc_sid_ibtracs_datetime', String(70),
                        nullable=False, unique=True))
@@ -4441,3 +4567,422 @@ def create_ibtracs_validation_table(the_class, tgt_name):
     the_class.session.commit()
 
     return Validation
+
+
+def combine_tables(the_class, sum_tablename, tablenames,
+                   unique_colname):
+    SumTable = get_class_by_tablename(the_class.engine, sum_tablename)
+
+    for name in tablenames:
+        one_table_rows = []
+        print(f'Now combining {name}')
+        SmallTable = get_class_by_tablename(the_class.engine, name)
+        total_query = the_class.session.query(SmallTable)
+
+        for row in total_query:
+            sum_row = SumTable()
+
+            for attr in row.__dict__.keys():
+                if attr in ['_sa_instance_state', 'key']:
+                    continue
+                value = getattr(row, attr)
+                setattr(sum_row, attr, value)
+
+            one_table_rows.append(sum_row)
+
+        bulk_insert_avoid_duplicate_unique(
+            one_table_rows, the_class.CONFIG['database'][
+                'batch_size']['insert'],
+            SumTable, unique_colname, the_class.session,
+            check_self=True)
+
+
+def distplot_imbalance_windspd(y_test, y_pred):
+    try:
+        value = np.append(y_test, y_pred)
+        label = ['test'] * len(y_test) + ['pred'] * len(y_pred)
+
+        df = pd.DataFrame({'windspd': value, 'source': label})
+        g = sns.FacetGrid(df, col='source')
+        g.map(sns.distplot, 'windspd')
+        plt.show()
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+
+def jointplot_kernel_dist_of_imbalance_windspd(dir, y_test,
+                                               y_pred):
+    try:
+        df = pd.DataFrame({'y_test': y_test, 'y_pred': y_pred})
+        g = sns.jointplot(x='y_test', y='y_pred', data=df, kind='kde')
+        g.plot_joint(plt.scatter, c='g', s=30, linewidth=1,
+                     marker="+")
+        g.ax_joint.plot([0, 70], [0, 70], 'r-', linewidth=2)
+        plt.savefig((f'{dir}kde_of_y_test_y_pred.png'))
+        plt.close()
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+
+def box_plot_windspd(dir, y_test, y_pred):
+    # Classify tropical cyclone wind according to wind speed
+    split_values = [0, 15, 25, 35, 45, 999]
+
+    try:
+        df = pd.DataFrame({'y_test': y_test, 'y_pred': y_pred})
+        df['y_bias'] = df['y_pred'] - df['y_test']
+        df['windspd_range'] = ''
+        sorted_order = []
+
+        for idx, val in enumerate(split_values):
+            if idx == len(split_values) - 1:
+                break
+            left = val
+            right = split_values[idx + 1]
+            indices = df.loc[(df['y_test'] >= left)
+                             & (df['y_test'] < right)].index
+            label = f'{left} - {right}'
+            df.loc[indices, ['windspd_range']] = label
+            sorted_order.append(label)
+
+        sns.set()
+        sns.boxplot(x='windspd_range', y='y_bias', data=df,
+                    order=sorted_order)
+        plt.savefig((f'{dir}bias_box_plot.png'))
+        plt.close()
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+    return
+
+
+def undersample(df, tgt_colname):
+    try:
+        original_count = len(df)
+        min_val = df[tgt_colname].min()
+        max_val = df[tgt_colname].max()
+        diff = max_val - min_val
+        interval_count = int(diff)
+        interval_length = diff / interval_count
+
+        df_list = []
+        for i in range(interval_count):
+            left = min_val + i * interval_length
+            right = left + interval_length
+
+            df_larger_than_left = df.loc[df[tgt_colname] >= left]
+            df_hit = df_larger_than_left.loc[
+                df_larger_than_left[tgt_colname] < right]
+            hit_count = len(df_hit)
+            ratio = hit_count / original_count
+
+            tmp_df = df_hit.sample(frac=math.pow(1-ratio, 10),
+                                   replace=False,
+                                   random_state=1)
+            df_list.append(tmp_df)
+
+        undersampled_df = pd.concat(df_list).reset_index(drop=True)
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+    return undersampled_df
+
+
+def get_combined_data(the_class, sample):
+    train, test = get_train_test(the_class, sample)
+    if train is None or test is None:
+        return None, None, None, None
+
+    y_train = getattr(train, the_class.y_name).reset_index(drop=True)
+    y_test = getattr(test, the_class.y_name).reset_index(drop=True)
+    X_train = train.drop([the_class.y_name], axis=1).reset_index()
+    X_test = test.drop([the_class.y_name], axis=1).reset_index()
+
+    return X_train, y_train, X_test, y_test
+
+
+def get_train_test(the_class, sample):
+    df = None
+    all_basins = the_class.CONFIG['ibtracs']['urls'].keys()
+    if the_class.center:
+        center_clause = (f"""WHERE x >= -8 and x <= 8 """
+                         f"""and y >= -8 and y <= 8""")
+    else:
+        center_clause = ''
+    if the_class.borrow:
+        borrow_clause = 'and smap_windspd > 40'
+    else:
+        borrow_clause = ''
+
+    if the_class.basin == 'all':
+        for basin in all_basins:
+            if basin == 'sa':
+                continue
+            table_name = f'tc_smap_era5_{basin}'
+            tmp_df = pd.read_sql(
+                f'SELECT * FROM {table_name} {center_clause}',
+                the_class.engine)
+            if df is None:
+                df = tmp_df
+            else:
+                df = df.append(tmp_df)
+    else:
+        table_name = f'tc_smap_era5_{the_class.basin}'
+        df = pd.read_sql(
+            f'SELECT * FROM {table_name} {center_clause}',
+            the_class.engine)
+        if the_class.borrow:
+            for basin in all_basins:
+                if basin == 'sa' or basin == the_class.basin:
+                    continue
+                table_name = f'tc_smap_era5_{basin}'
+                tmp_df = pd.read_sql(
+                    (f"""SELECT * FROM {table_name} """
+                     f"""{center_clause} {borrow_clause}"""),
+                    the_class.engine)
+                if df is None:
+                    df = tmp_df
+                else:
+                    df = df.append(tmp_df)
+
+    df.drop(the_class.CONFIG['regression']['useless_columns'][
+        'smap_era5'], axis=1, inplace=True)
+
+    if sample:
+        df = shuffle(df)
+        rows, cols = df.shape
+        cut_rows = int(rows * 0.3)
+        df = df[:cut_rows]
+
+    cols = list(df.columns)
+    cols_num = len(df.columns)
+    group_size = 1
+    groups_num = math.ceil(cols_num / group_size)
+    fig_dir = the_class.CONFIG['result']['dirs']['fig'][
+        'hist_of_regression_features']['original']
+    os.makedirs(fig_dir, exist_ok=True)
+    for i in range(groups_num):
+        try:
+            start = i * group_size
+            end = min(cols_num, (i + 1) * group_size)
+            cols_to_draw = cols[start:end]
+            save_features_histogram(the_class, df, cols_to_draw,
+                                    fig_dir)
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
+
+    if 'normalization' in the_class.instructions:
+        # Normalization
+        normalized_columns = df.columns.drop(the_class.y_name)
+        scaler = MinMaxScaler()
+        df[normalized_columns] = scaler.fit_transform(
+            df[normalized_columns])
+
+        fig_dir = the_class.CONFIG['result']['dirs']['fig'][
+            'hist_of_regression_features'][
+                'after_normalization']
+        os.makedirs(fig_dir, exist_ok=True)
+        for i in range(groups_num):
+            try:
+                start = i * group_size
+                end = min(cols_num, (i + 1) * group_size)
+                save_features_histogram(the_class, df,
+                                        cols[start:end], fig_dir)
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
+
+    smogn_suffix = ''
+    lgb_model_dir = ('/Users/lujingze/Programming/SWFusion/'
+                     'regression/tc/lightgbm/model/')
+
+    if the_class.smogn:
+        # smogn_dir = (f"""/Users/lujingze/Programming/SWFusion/"""
+        #              f"""regression/tc/lightgbm/smogn/only_na/""")
+        # smogn_params_name = (f"""k_7_pert_0.02_smap_extreme_0.9"""
+        #                      f"""_manual_50""")
+        # the_class.smogn_setting_dir = (f"""{smogn_dir}"""
+        #                                f"""{smogn_params_name}/""")
+        # os.makedirs(the_class.smogn_setting_dir, exist_ok=True)
+
+        # specify phi relevance values
+        rg_mtrx = [
+            [5, 0, 0],  # over-sample ("minority")
+            [20, 0, 0],  # under-sample ("majority")
+            [35, 0, 0],  # under-sample
+            [50, 1, 0],  # under-sample
+        ]
+
+        for part in rg_mtrx:
+            if part[1] == 1:
+                smogn_suffix += f'_{part[0]}'
+
+    train_path = f'{lgb_model_dir}train'
+    test_path = f'{lgb_model_dir}test'
+    if the_class.smogn:
+        train_path += f'_smogn{smogn_suffix}'
+        test_path += f'_smogn{smogn_suffix}'
+    train_path += '.pkl'
+    test_path += '.pkl'
+
+    if the_class.load:
+        with open(train_path, 'rb') as f:
+            train = pickle.load(f)
+        with open(test_path, 'rb') as f:
+            test = pickle.load(f)
+
+        return train, test
+
+    if the_class.plot_dist:
+        df_smogn_path = f'{lgb_model_dir}df_smogn.pkl'
+        with open(df_smogn_path, 'rb') as f:
+            df_smogn = pickle.load(f)
+        # plot y distribution
+        sns.kdeplot(df['smap_windspd'], label='Original')
+        sns.kdeplot(df_smogn['smap_windspd'], label='Modified')
+        # add labels of x and y axis
+        plt.xlabel('SMAP wind speed (m/s)')
+        plt.ylabel('Probability')
+        # plt.savefig((f"""{the_class.smogn_setting_dir}"""
+        #              f"""dist_of_trainset_comparison.png"""))
+        plt.savefig((f"""{lgb_model_dir}"""
+                     f"""comparison_of_dist.png"""))
+        plt.close()
+
+        sys.exit(1)
+
+    if the_class.smogn:
+        # conduct smogn
+        df_smogn = smogn.smoter(
+
+            # main arguments
+            data=df,                 # pandas dataframe
+            y='smap_windspd',        # string ('header name')
+            k=7,                     # positive integer (k < n)
+            pert=0.02,               # real number (0 < R < 1)
+            samp_method='extreme',   # string ('balance' or 'extreme')
+            drop_na_col=True,        # boolean (True or False)
+            drop_na_row=True,        # boolean (True or False)
+            replace=False,           # boolean (True or False)
+
+            # phi relevance arguments
+            rel_thres=0.9,          # real number (0 < R < 1)
+            rel_method='manual',     # string ('auto' or 'manual')
+            # rel_xtrm_type='both',  # unused (rel_method='manual')
+            # rel_coef=1.50,         # unused (rel_method='manual')
+            rel_ctrl_pts_rg=rg_mtrx  # 2d array (format: [x, y])
+        )
+        # dimensions - original data
+        print(df.shape)
+        # dimensions - modified data
+        print(df_smogn.shape)
+
+        # plot y distribution
+        sns.kdeplot(df['smap_windspd'], label='Original')
+        sns.kdeplot(df_smogn['smap_windspd'], label='Modified')
+        # add labels of x and y axis
+        plt.xlabel('SMAP wind speed (m/s)')
+        plt.ylabel('Probability')
+        # plt.savefig((f"""{the_class.smogn_setting_dir}"""
+        #              f"""dist_of_trainset_comparison.png"""))
+        plt.savefig((f"""{lgb_model_dir}"""
+                     f"""comparison_of_dist.png"""))
+        plt.close()
+
+        # save SMOGNed df
+        # df_smogn.to_pickle((f"""{the_class.smogn_setting_dir}"""
+        #                        f"""df_smogn.pkl"""))
+        df_smogn.to_pickle((f"""{lgb_model_dir}df_smogn"""
+                            f"""{smogn_suffix}.pkl"""))
+
+        df = df_smogn
+
+    try:
+        y_full = df[the_class.y_name]
+        indices_to_delete = []
+        bins = np.linspace(0, y_full.max(), int(y_full.max() / 5))
+        y_binned = np.digitize(y_full, bins)
+
+        unique, counts = np.unique(y_binned, return_counts=True)
+        for idx, val in enumerate(counts):
+            if val < 2:
+                indices_to_delete.append(idx)
+        bins = np.delete(bins, indices_to_delete)
+        y_binned = np.digitize(y_full, bins)
+
+        train, test = train_test_split(df, test_size=0.2,
+                                       stratify=y_binned)
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+    print(f'Dataset shape: {df.shape}')
+    print(f'Train set shape: {train.shape}')
+    print(f'Test set shape: {test.shape}')
+
+    train.reset_index(drop=True, inplace=True)
+    test.reset_index(drop=True, inplace=True)
+
+    train.to_pickle(train_path)
+    test.to_pickle(test_path)
+
+    return train, test
+
+
+def save_features_histogram(the_class, df, columns, fig_dir):
+    if not len(columns):
+        return
+
+    try:
+        ax = df.hist(column=columns, figsize=(12, 10))
+        if ax.shape != (1, 1):
+            the_class.logger.error('Hist shape is not as expected')
+            breakpoint()
+            exit(1)
+        fig = ax[0][0].get_figure()
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+    fig_name = '-'.join(columns)
+    fig_name = f'{fig_name}.png'
+    plt.savefig(f'{fig_dir}{fig_name}')
+    plt.close(fig)
+
+
+def show_correlation_heatmap(data):
+    C_mat = data.corr()
+    plt.figure(figsize=(15, 15))
+    sns.heatmap(C_mat, vmax=.8, square=True)
+    plt.show()
+
+
+def show_diff_count(the_class, diff_count):
+    try:
+        print((f"""diff_count:\n"""
+               f"""-------\n"""
+               f"""single:\n"""
+               f"""-------\n"""))
+
+        for idx, (key, val) in enumerate(
+                diff_count['single'].items()):
+            if not val:
+                continue
+            print(f'{key}: {val}')
+
+        print((f"""\n\n---------\n"""
+               f"""pressure:\n"""
+               f"""---------\n"""))
+
+        for idx, (key, val) in enumerate(
+                diff_count['pressure'].items()):
+            if not val:
+                continue
+            print(f'{key}: {val}')
+    except Exception as msg:
+        breakpoint()
+        sys.exit(msg)

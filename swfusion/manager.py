@@ -32,6 +32,8 @@ import statistic_era5_smap_sfmr as sta_era5_smap
 import smart_compare
 import merra2
 import match_era5_sfmr
+import combine_table
+import classify
 
 unixOptions = 'p:r:eg:c:siv:k'
 # gnuOptions = ['match_smap', 'reg-dnn', 'reg-xgb', 'reg-dt',
@@ -40,7 +42,8 @@ unixOptions = 'p:r:eg:c:siv:k'
 gnuOptions = ['period=', 'region=', 'basin=', 'match_smap', 'reg=',
               'compare=', 'sfmr', 'ibtracs', 'validate=', 'check',
               'sta_ibtracs', 'sta_era5_smap=', 'smart_compare',
-              'merra2', 'match_sfmr']
+              'merra2', 'match_sfmr', 'combine', 'model_tag=',
+              'classify=']
 
 def work_flow():
     """The work flow of blending several TC OSW.
@@ -75,6 +78,9 @@ def work_flow():
     do_match_smap = False
     do_regression = False
     reg_instructions = None
+    do_classify = False
+    classify_instruction = None
+    model_tag = None
     do_compare = False
     do_sfmr = False
     sfmr_instructions = None
@@ -87,6 +93,7 @@ def work_flow():
     do_smart_compare = False
     do_merra2 = False
     do_match_sfmr = False
+    do_combine = False
     # evaluate given options
     for current_argument, current_value in arguments:
         if current_argument in ('-p', '--period'):
@@ -113,6 +120,11 @@ def work_flow():
         elif current_argument in ('-g', '--reg'):
             do_regression = True
             reg_instructions = current_value.split(',')
+        elif current_argument in ('--classify'):
+            do_classify = True
+            classify_instructions = current_value.split(',')
+        elif current_argument in ('--model_tag'):
+            model_tag = current_value.split(',')[0]
         elif current_argument in ('-c', '--compare'):
             do_compare = True
             compare_instructions = current_value.split(',')
@@ -136,6 +148,8 @@ def work_flow():
             do_merra2 = True
         elif current_argument in ('--match_sfmr'):
             do_match_sfmr = True
+        elif current_argument in ('--combine'):
+            do_combine = True
 
     if not specify_basin:
         logger.error('Must specify basin')
@@ -171,6 +185,9 @@ def work_flow():
     passwd = '399710'
     # Download and read
     try:
+        if do_combine:
+            combine_table.TableCombiner(CONFIG, period, region, basin,
+                                        passwd)
         if do_match_sfmr:
             match_era5_sfmr.matchManager(CONFIG, period, region, basin,
                                          passwd, False)
@@ -179,7 +196,8 @@ def work_flow():
         if do_smart_compare:
             smart_compare.SmartComparer(CONFIG, period, basin, passwd)
         if do_sta_era5_smap:
-            sta_era5_smap.Statisticer(CONFIG, period, basin, sources)
+            sta_era5_smap.Statisticer(CONFIG, period, basin, sources,
+                                      passwd)
         if do_sta_ibtracs:
             sta_ibtracs.Statisticer(CONFIG, period, basin, passwd)
         if do_check:
@@ -190,14 +208,25 @@ def work_flow():
         if do_match_smap:
             match_era5_smap.matchManager(
                 CONFIG, period, region, basin, passwd, False)
+        if do_classify:
+            classify.Classifier(
+                CONFIG, period, train_test_split_dt, region, basin,
+                passwd, False, classify_instructions)
         if do_regression:
+            # if model_tag is None:
+            #     logger.error('No model tag')
+            #     exit()
             regression.Regression(
                 CONFIG, period, train_test_split_dt, region, basin,
-                passwd, False, reg_instructions)
+                passwd, False, reg_instructions, model_tag)
         if do_compare:
+            # if ('smap_prediction' in compare_instructions
+            #         and model_tag is None):
+            #     logger.error('No model tag')
+            #     exit()
             compare_tc.TCComparer(CONFIG, period, region, basin,
-                                           passwd, False,
-                                           compare_instructions)
+                                  passwd, False, compare_instructions,
+                                  model_tag)
         # ccmp_ = ccmp.CCMPManager(CONFIG, period, region, passwd,
         #                          work_mode='fetch_and_compare')
         # era5_ = era5.ERA5Manager(CONFIG, period, region, passwd,

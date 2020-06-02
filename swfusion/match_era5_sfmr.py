@@ -195,7 +195,6 @@ class matchManager(object):
         self, tc, next_tc, hours, match_dt, spatial_temporal_info,
         hour_info_pt_idx):
         #
-        need_exit = False
         for h in range(hours):
             interped_tc = utils.interp_tc(self, h, tc, next_tc)
             SFMRERA5 = self.create_sfmr_era5_table(interped_tc.date_time)
@@ -211,10 +210,7 @@ class matchManager(object):
                         spatial_temporal_info,
                         hour_info_pt_idx[interped_tc.date_time],
                         interped_tc)
-            print((f"""[Redo] extract SFMR """
-                   f"""around TC {interped_tc.name} """
-                   f"""on {interped_tc.date_time}"""))
-            if not sfmr_success:
+            if not sfmr_success or not len(data) or not len(hourtimes):
                 self.logger.error(
                     'Match True but fail extracting SFMR')
                 continue
@@ -226,31 +222,23 @@ class matchManager(object):
                 breakpoint()
                 exit(msg)
 
-            if data is None:
-                # Exception occurs and do not need to save matchup of
-                # data sources before shutdowning program.  Because all
-                # hours between `tc` and `next_tc` are recored in `Match`
-                # table
-                need_exit = True
-                break
-
             if not len(data):
                 self.logger.error(
                     'Match True but fail adding ERA5')
                 continue
+
+            print((f"""[Redo] extract SFMR and ERA5"""
+                   f"""around TC {interped_tc.name} """
+                   f"""on {interped_tc.date_time}"""))
 
             utils.bulk_insert_avoid_duplicate_unique(
                 data, self.CONFIG['database']['batch_size']['insert'],
                 SFMRERA5, ['sfmr_datetime_lon_lat'], self.session,
                 check_self=True)
 
-        if need_exit:
-            exit(1)
-
     def extract_with_not_all_hours_hit(self, tc, next_tc, hours,
                                        spatial_temporal_info, 
                                        hour_info_pt_idx):
-        need_exit = False
         Match = utils.create_match_table(self, 'sfmr', 'era5')
 
         for h in range(hours):
@@ -275,7 +263,7 @@ class matchManager(object):
                 breakpoint()
                 exit(msg)
 
-            if not sfmr_success:
+            if not sfmr_success or not len(data) or not len(hourtimes):
                 # Normal fail, need continue comparing
                 utils.update_one_row_of_match(self, Match, interped_tc,
                                               False)
@@ -290,11 +278,6 @@ class matchManager(object):
             except Exception as msg:
                 breakpoint()
                 exit(msg)
-
-            if data is None:
-                # Exception occurs
-                need_exit = True
-                break
 
             if not len(data):
                 utils.update_one_row_of_match(self, Match, interped_tc,
@@ -314,19 +297,15 @@ class matchManager(object):
                 SFMRERA5, ['sfmr_datetime_lon_lat'], self.session,
                 check_self=True)
 
-        if need_exit:
-            exit(1)
-
     def extract_sfmr_around_interped_tc(
         self, sfmr_brief_info, one_hour_info_pt_idx, interped_tc):
         #
         data = []
         try:
-            success, sfmr_tracks, sfmr_dts, sfmr_lons, sfmr_lats, \
-                    sfmr_windspd = utils.average_sfmr_along_track(
+            success, sfmr_tracks, sfmr_pts = \
+                    utils.average_sfmr_along_track(
                         self, interped_tc, sfmr_brief_info,
                         one_hour_info_pt_idx, use_slow_wind=True)
-
             if not success:
                 return success, data, None, None
 
@@ -337,9 +316,9 @@ class matchManager(object):
             south = 90
             east = 0
 
-            interped_tc_center = (
-                interped_tc.lat,
-                utils.longitude_converter(interped_tc.lon, '360', '-180'))
+            interped_tc_center = (interped_tc.lat,
+                                  utils.longitude_converter(
+                                      interped_tc.lon, '360', '-180'))
             SFMRERA5 = self.create_sfmr_era5_table(interped_tc.date_time)
             tracks_num = len(sfmr_tracks)
         except Exception as msg:
@@ -348,17 +327,17 @@ class matchManager(object):
 
         try:
             for i in range(tracks_num):
-                north = max(max(sfmr_lats[i]), north)
-                west = min(min(sfmr_lons[i]), west)
-                south = min(min(sfmr_lats[i]), south)
-                east = max(max(sfmr_lons[i]), east)
+                for j in range(len(sfmr_pts[i])):
+                    north = max(sfmr_pts[i][j].lat, north)
+                    west = min(sfmr_pts[i][j].lon, west)
+                    south = min(sfmr_pts[i][j].lat, south)
+                    east = max(sfmr_pts[i][j].lon, east)
 
-                for j in range(len(sfmr_dts[i])):
                     row = SFMRERA5()
                     row.sid = interped_tc.sid
-                    row.sfmr_datetime = sfmr_dts[i][j]
-                    row.lon = sfmr_lons[i][j]
-                    row.lat = sfmr_lats[i][j]
+                    row.sfmr_datetime = sfmr_pts[i][j].date_time
+                    row.lon = sfmr_pts[i][j].lon
+                    row.lat = sfmr_pts[i][j].lat
 
                     sfmr_pt = (row.lat, utils.longitude_converter(
                         row.lon,  '360', '-180'))
@@ -374,7 +353,7 @@ class matchManager(object):
                         f"""{row.sfmr_datetime}"""
                         f"""_{row.lon:.3f}_{row.lat:.3f}""")
 
-                    row.sfmr_windspd = sfmr_windspd[i][j]
+                    row.sfmr_windspd = sfmr_pts[i][j].windspd
 
                     this_hourtime = utils.hour_rounder(
                         row.sfmr_datetime).hour
@@ -407,7 +386,7 @@ class matchManager(object):
         return success, data, list(hourtimes), area
 
     def create_sfmr_era5_table(self, dt):
-        table_name = utils.gen_tc_sfmr_era5_tablename(dt, self.basin)
+        table_name = utils.gen_tc_sfmr_era5_tablename(self.basin)
 
         class SFMRERA5(object):
             pass

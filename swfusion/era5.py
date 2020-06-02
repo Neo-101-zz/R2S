@@ -301,10 +301,13 @@ class ERA5Manager(object):
             'time':hour_times
         }
 
-        self.cdsapi_client.retrieve(
-            'reanalysis-era5-single-levels',
-            request,
-            file_path)
+        try:
+            self.cdsapi_client.retrieve(
+                'reanalysis-era5-single-levels',
+                request,
+                file_path)
+        except Exception as msg:
+            breakpoint()
 
         return file_path
 
@@ -364,10 +367,13 @@ class ERA5Manager(object):
             'time':hour_times
         }
 
-        self.cdsapi_client.retrieve(
-            'reanalysis-era5-pressure-levels',
-            request,
-            file_path)
+        try:
+            self.cdsapi_client.retrieve(
+                'reanalysis-era5-pressure-levels',
+                request,
+                file_path)
+        except Exception as msg:
+            breakpoint()
 
         return file_path
 

@@ -1,86 +1,96 @@
 import logging
 import math
-import pickle
 
+from sqlalchemy.ext.declarative import declarative_base
 import pandas as pd
 from sklearn.metrics import mean_squared_error
 import seaborn as sns
 import matplotlib.pyplot as plt
 from scipy import stats
+from sklearn.metrics import r2_score
 
 import utils
 
+Base = declarative_base()
+
+
 class Statisticer(object):
 
-    def __init__(self, CONFIG, period, basin, sources):
+    def __init__(self, CONFIG, period, basin, sources, passwd):
         self.logger = logging.getLogger(__name__)
         self.CONFIG = CONFIG
         self.period = period
         self.basin = basin
+        self.db_root_passwd = passwd
+        self.engine = None
+        self.session = None
 
-        self.bias_root_dir = self.CONFIG['result']['dirs']['statistic'][
-            'windspd_bias_to_sfmr']
-        self.sources = sources
+        self.logger = logging.getLogger(__name__)
+        utils.setup_database(self, Base)
 
-        if set(sources) == set(['smap', 'era5']):
-            self.predict_smap = False
-            self.compare_era5_smap_by_sfmr()
-        elif set(sources) == set(['smap_prediction', 'era5']):
-            self.predict_smap = True
-            self.compare_era5_smap_prediction_by_sfmr()
+        self.period_str = []
+        for dt in self.period:
+            self.period_str.append(dt.strftime('%Y-%m-%d %H:%M:%S'))
 
-    def compare_era5_smap_by_sfmr(self):
-        bias = dict()
-        for src in self.sources:
-            name = f'{self.basin}'
-            for dt in self.period:
-                name = f'{name}_{dt.strftime("%Y%m%d%H%M%S")}'
-            dir = f'{self.bias_root_dir}{src}_vs_sfmr/{name}/'
-            with open(f'{dir}{name}.pkl', 'rb') as f:
-                bias[src] = pickle.load(f)
+        src_name_priority = {
+            'smap_prediction': 1,
+            'smap': 2,
+            'era5': 3,
+        }
+        if len(sources) != 2:
+            self.logger.error('Sources length should be 2')
+            exit(1)
+        self.sources = sorted(sources, key=src_name_priority.get)
+        self.src_1 = self.sources[0]
+        self.src_2 = self.sources[1]
 
-        overlay_era5_indices = []
-        for i in range(len(bias['era5'])):
-            if (bias['era5']['sfmr_dt'].values[i]
-                not in bias['smap']['sfmr_dt'].values):
-                continue
-            else:
-                overlay_era5_indices.append(i)
+        src_plot_names_mapper = {
+            'smap_prediction': 'SMAP Prediction',
+            'smap': 'SMAP',
+            'era5': 'ERA5',
+        }
+        self.src_plot_names = [src_plot_names_mapper[src]
+                               for src in self.sources]
 
-        if len(overlay_era5_indices) != len(bias['smap']):
-            self.logger.error('Not all SMAP bias overlay with ERA5 bias')
-            breakpoint()
-            exit()
+        # self.show_hist_of_matchup()
+        # breakpoint()
+        self.compare_two_sources()
 
-        df_list = []
-        for idx in overlay_era5_indices:
-            one_row_df = bias['era5'].loc[[idx]]
-            df_list.append(one_row_df)
+    def show_hist_of_matchup(self):
+        # df = pd.read_sql('SELECT * FROM tc_sfmr_era5_na',
+        #                  self.engine)
+        # df.hist(column=['sfmr_windspd'], figsize = (12,10))
+        # plt.show()
 
-        overlay_era5_bias = pd.concat(df_list).reset_index(drop=True)
+        all_basins = self.CONFIG['ibtracs']['urls'].keys()
+        for basin in all_basins:
+            table_name = f'tc_smap_era5_{basin}'
+            if (utils.get_class_by_tablename(self.engine, table_name)
+                    is not None):
+                df = pd.read_sql(f'SELECT * FROM {table_name}',
+                                 self.engine)
+                df.hist(column=['smap_windspd'], figsize=(12, 10))
+                plt.show()
 
-        name_list = ['All ERA5', 'Overlay SMAP',
-                     'Overlay ERA5']
-        bias_list = [bias['era5'], bias['smap'], overlay_era5_bias]
-
-        # self.show_simple_statistic(name_list, bias_list)
-        self.plot_scatter_regression(bias_list[1:])
-
-    def compare_era5_smap_prediction_by_sfmr(self):
+    def compare_two_sources(self):
         bias = dict()
         sfmr_dt = dict()
-        sfmr_dt_name = 'sfmr_dt'
-        for src in self.sources:
-            name = f'{self.basin}'
-            for dt in self.period:
-                name = f'{name}_{dt.strftime("%Y%m%d%H%M%S")}'
-            dir = f'{self.bias_root_dir}{src}_vs_sfmr/{name}/'
-            with open(f'{dir}{name}.pkl', 'rb') as f:
-                bias[src] = pickle.load(f)
-                sfmr_dt[src] = bias[src][sfmr_dt_name]
+        sfmr_dt_name = 'sfmr_datetime'
 
-        sfmr_dt_intersection = set(sfmr_dt['smap_prediction']) & \
-                set(sfmr_dt['era5'])
+        for src in self.sources:
+            tablename = utils.gen_validation_tablename(self, 'sfmr',
+                                                       src)
+            df = pd.read_sql(
+                (f"""SELECT * FROM {tablename} """
+                 f"""where sfmr_datetime > "{self.period_str[0]}" """
+                 f"""and sfmr_datetime < "{self.period_str[1]}" """),
+                self.engine)
+
+            bias[src] = df
+            sfmr_dt[src] = bias[src][sfmr_dt_name]
+
+        sfmr_dt_intersection = set(sfmr_dt[self.src_1]) & \
+            set(sfmr_dt[self.src_2])
         tmp = set()
         for ts in sfmr_dt_intersection:
             tmp.add(ts.to_datetime64())
@@ -90,117 +100,143 @@ class Statisticer(object):
             drop_row_indices = []
             for i in range(len(bias[src])):
                 if (bias[src][sfmr_dt_name].values[i]
-                    not in sfmr_dt_intersection):
-                    #
+                        not in sfmr_dt_intersection):
                     drop_row_indices.append(i)
             bias[src].drop(drop_row_indices, inplace=True)
+            bias[src].drop_duplicates(subset='sfmr_datetime',
+                                      inplace=True, ignore_index=True)
 
-        len_smap_p = len(bias['smap_prediction'])
-        len_era5 = len(bias['era5'])
-        if len_smap_p != len_era5:
+        len_src1 = len(bias[self.src_1])
+        len_src2 = len(bias[self.src_2])
+        if len_src1 != len_src2:
             self.logger.error((f"""Fail intersecting: """
-                               f"""smap_prediction({len_smap_p}) """
-                               f"""!= era5({len_era5})"""))
+                               f"""{self.src_1}({len_src1})"""
+                               f""" != """
+                               f"""{self.src_2}({len_src2})"""))
             breakpoint()
             exit(1)
 
-        name_list = ['SMAP prediction', 'ERA5']
-        bias_list = [bias['smap_prediction'], bias['era5']]
+        bias_list = [bias[src] for src in self.sources]
+        bias_list = self.unify_df_colnames(bias_list)
 
-        self.show_simple_statistic(name_list, bias_list)
+        self.show_simple_statistic(bias_list)
+        self.show_detailed_statistic(bias_list)
         self.plot_scatter_regression(bias_list)
+        val_dir = self.CONFIG['results']['dirs']['fig'][
+            'validation_by_sfmr']
+        # utils.box_plot_windspd(val_dir
+
+    def unify_df_colnames(self, bias_list):
+        for i in range(len(bias_list)):
+            name = self.sources[i]
+            bias_list[i]['tgt_name'] = name
+            bias_list[i].rename(columns={
+                f'{name}_datetime': 'tgt_datetime',
+                f'{name}_lon': 'tgt_lon',
+                f'{name}_lat': 'tgt_lat',
+                f'{name}_windspd': 'tgt_windspd'
+            }, inplace=True)
+
+        return bias_list
 
     def plot_scatter_regression(self, bias_list):
         sns.set(style="ticks", color_codes=True)
-        df = pd.concat(bias_list, ignore_index=True)
         sfmr_min = bias_list[0]['sfmr_windspd'].min()
         sfmr_max = bias_list[0]['sfmr_windspd'].max()
 
-        era5_name = 'era5'
-        if self.predict_smap:
-            smap_x_name = 'smap_prediction'
-        else:
-            smap_x_name = 'smap'
+        df = pd.concat(bias_list, ignore_index=True)
 
         slope = dict()
         interpect = dict()
         r_value = dict()
         p_value = dict()
         std_err = dict()
+        r2 = dict()
+        equation_str = dict()
+
+        def linefitline(src, x):
+            return slope[src] * x + interpect[src]
+
         # get coeffs of linear fit
-        for name in [smap_x_name, era5_name]:
-            df_part = df.loc[df['tgt_name'] == name]
-            slope[name], interpect[name], r_value[name], p_value[name],\
-                    std_err[name] = stats.linregress(
-                        df_part['sfmr_windspd'], df_part['tgt_windspd'])
+        for src in self.sources:
+            df_part = df.loc[df['tgt_name'] == src]
+            slope[src], interpect[src], r_value[src], \
+                p_value[src], std_err[src] = stats.linregress(
+                    df_part['sfmr_windspd'],
+                    df_part['tgt_windspd'])
+            r2[src] = r2_score(df_part['tgt_windspd'],
+                               linefitline(src, df_part['tgt_windspd']))
+            equation_str[src] = (f"""y={slope[src]:.1f}x"""
+                                 f"""{interpect[src]:+.1f}""")
 
-        smap_x_equation = (f"""y={slope[smap_x_name]:.1f}x"""
-                           f"""{interpect[smap_x_name]:+.1f}""")
-        era5_equation = (f"""y={slope[era5_name]:.1f}x"""
-                         f"""{interpect[era5_name]:+.1f}""")
+        print(f'R2: {r2}')
 
-        kws = dict(s=50, linewidth=.5, edgecolor="w")
-        if self.predict_smap:
-            pal = dict(era5="red", smap_prediction="blue")
-            labels=[f'SMAP prediction: {smap_x_equation}']
-        else:
-            pal = dict(era5="red", smap="blue")
-            labels=[f'SMAP: {smap_x_equation}']
-        labels.append(f'ERA5: {era5_equation}')
+        pal = dict()
+        labels = []
+        colors = ['blue', 'red']
+        for idx, src in enumerate(self.sources):
+            pal[src] = colors[idx]
+            labels.append((f"""{self.src_plot_names[idx]}: """
+                           f"""{equation_str[src]} """
+                           f"""(Corr Coeff: {r2[src]:.3f})"""))
 
-        g = sns.lmplot(x="sfmr_windspd", y="tgt_windspd", hue="tgt_name",
-                       data=df, markers=["o", "x"], palette=pal,
-                       legend=False)
+        plt.rcParams['figure.figsize'] = (50.0, 30.0)
+
+        g = sns.lmplot(x="sfmr_windspd", y="tgt_windspd",
+                       hue="tgt_name", data=df, markers=["o", "x"],
+                       palette=pal, legend=False,
+                       size=7, aspect=1)
         g.despine(top=False, bottom=False, left=False, right=False)
-        utils.const_line(sfmr_min, sfmr_max, 1, 0, 'green', 4, 'dashed')
+        utils.const_line(sfmr_min, sfmr_max, 1, 0, 'green',
+                         4, 'dashed')
 
-        # g.add_legend()
-        # leg = g._legend
-        # leg.set_bbox_to_anchor([0.9, 0.125])
-        # leg._loc = 4
-        # leg._title = None
-        # leg.edgecolor = 'black'
+        font_size = 15
+        plt.ylim(0, 80)
         plt.legend(title=None, loc='upper left', labels=labels)
-        plt.xlabel('resampled SFMR wind speed (m/s)')
-        plt.ylabel('matched wind speed (m/s)')
+        plt.xlabel('resampled SFMR wind speed (m/s)',
+                   fontsize=font_size)
+        plt.ylabel('matched wind speed (m/s)', fontsize=font_size)
+        plt.tick_params(labelsize=font_size)
 
         plt.show()
 
-    def plot_scatter_regression_old(self, bias_list):
-        sns.set(style="ticks", color_codes=True)
-        df = pd.concat(bias_list, ignore_index=True)
-        sfmr_min = bias_list[0]['sfmr_windspd'].min()
-        sfmr_max = bias_list[0]['sfmr_windspd'].max()
+    def show_detailed_statistic(self, bias_list):
+        windspd_split = [15, 25, 35, 45]
+        for idx, val in enumerate(windspd_split):
+            left = val
+            if idx == len(windspd_split) - 1:
+                right = 999
+                interval_str = f'>{left}'
+            else:
+                right = windspd_split[idx + 1]
+                interval_str = f'{left}-{right}'
+            print(interval_str)
+            print('=' * len(interval_str))
+            print()
 
-        kws = dict(s=50, linewidth=.5, edgecolor="w")
-        if self.predict_smap:
-            pal = dict(era5="red", smap_prediction="blue")
-            labels=['SMAP prediction', 'ERA5']
-        else:
-            pal = dict(era5="red", smap="blue")
-            labels=['SMAP', 'ERA5']
+            for name, df in zip(self.src_plot_names, bias_list):
+                print(name)
+                print('-' * len(name))
+                df_part = df.loc[(df['sfmr_windspd'] >= left)
+                                 & (df['sfmr_windspd'] < right)]
+                windspd_bias = df_part['windspd_bias']
 
-        g = sns.FacetGrid(df, hue='tgt_name', palette=pal, size=7,
-                          despine=False, legend_out=False)
-        g.map(plt.scatter, "sfmr_windspd", "tgt_windspd", **kws)
-        g.map(sns.regplot, "sfmr_windspd", "tgt_windspd",
-              ci=None, robust=1)
-        utils.const_line(sfmr_min, sfmr_max, 1, 0, 'green', 'dashed')
+                print(f'Count: {len(df_part)}')
+                print(f'Max bias: {windspd_bias.max()}')
+                print(f'Min bias: {windspd_bias.min()}')
+                print(f'Mean bias: {windspd_bias.mean()}')
+                print(f'Median bias: {windspd_bias.median()}')
+                print((f"""Mean absolute bias: """
+                       f"""{windspd_bias.abs().mean()}"""))
 
-        # g.add_legend()
-        # leg = g._legend
-        # leg.set_bbox_to_anchor([0.9, 0.125])
-        # leg._loc = 4
-        # leg._title = None
-        # leg.edgecolor = 'black'
-        plt.legend(title=None, loc='upper left', labels=labels)
-        plt.xlabel('resampled SFMR wind speed (m/s)')
-        plt.ylabel('matched wind speed (m/s)')
+                truth = df_part['sfmr_windspd']
+                observation = df_part['tgt_windspd']
+                mse = mean_squared_error(truth, observation)
+                print(f'RMSE: {math.sqrt(mse)}')
+                print('\n\n')
 
-        plt.show()
-
-    def show_simple_statistic(self, name_list, bias_list):
-        for name, df in zip(name_list, bias_list):
+    def show_simple_statistic(self, bias_list):
+        for name, df in zip(self.src_plot_names, bias_list):
             print(name)
             print('-' * len(name))
             windspd_bias = df['windspd_bias']

@@ -4,56 +4,46 @@ import os
 import pickle
 import shutil
 import warnings
-warnings.filterwarnings('ignore')
-warnings.filterwarnings('ignore', category=DeprecationWarning)
 
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from sqlalchemy.orm import mapper
-from sqlalchemy import MetaData
 from sqlalchemy.ext.declarative import declarative_base
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
 import seaborn as sb
 from keras import backend as K
 from keras.models import Sequential
 from keras.callbacks import ModelCheckpoint
 from keras.callbacks import TensorBoard
 from keras import optimizers
-from keras.layers import Dense, Activation, Flatten
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error
+from keras.layers import Dense
 import xgboost as xgb
-import lightgbm as lgbm
-from mpl_toolkits.basemap import Basemap
-from matplotlib import patches as mpatches
-import matplotlib.pyplot as plt
-from keras.models import model_from_yaml
+import lightgbm as lgb
 import yaml
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.utils import shuffle
-from scipy import stats
 from sklearn.preprocessing import MinMaxScaler
-from scipy.stats import randint as sp_randint
-from scipy.stats import uniform as sp_uniform
-from sklearn.datasets import load_boston
-from sklearn.model_selection import (cross_val_score, train_test_split, 
-                                     GridSearchCV, RandomizedSearchCV)
-from sklearn.metrics import r2_score
+from sklearn.model_selection import cross_val_score, train_test_split
 from sklearn.metrics import mean_squared_error
 from functools import partial
 from hyperopt import fmin, hp, tpe, Trials, space_eval
+from sklearn.utils import Bunch
 
 import utils
 import era5
+from metrics import (custom_asymmetric_train, custom_asymmetric_valid,
+                     symmetric_train, symmetric_valid)
 
+warnings.filterwarnings('ignore')
+warnings.filterwarnings('ignore', category=DeprecationWarning)
 Base = declarative_base()
+
 
 class DNNLayerConf(object):
 
     def __init__(self, units):
         self.units = units
+
 
 class DNNLayerStructure(object):
 
@@ -73,8 +63,10 @@ class DNNLayerStructure(object):
         for hidden in hidden_list:
             self.hidden_layer.append(DNNLayerConf(hidden['units']))
 
+
 def root_mean_squared_error(y_true, y_pred):
     return K.sqrt(K.mean(K.square(y_pred - y_true)))
+
 
 class TrainValTensorBoard(TensorBoard):
     def __init__(self, log_dir='./logs', **kwargs):
@@ -114,10 +106,12 @@ class TrainValTensorBoard(TensorBoard):
         super(TrainValTensorBoard, self).on_train_end(logs)
         self.val_writer.close()
 
+
 class Regression(object):
 
-    def __init__(self, CONFIG, train_period, train_test_split_dt, region,
-                 basin, passwd, save_disk, instructions):
+    def __init__(self, CONFIG, train_period, train_test_split_dt,
+                 region, basin, passwd, save_disk, instructions,
+                 model_tag):
         self.logger = logging.getLogger(__name__)
         self.CONFIG = CONFIG
         self.train_period = train_period
@@ -129,6 +123,7 @@ class Regression(object):
         self.save_disk = save_disk
         self.basin = basin
         self.instructions = instructions
+        self.model_tag = model_tag
 
         self.smap_columns = ['x', 'y', 'lon', 'lat', 'windspd']
         # self.era5_columns = self.CONFIG['era5']['all_vars']
@@ -144,10 +139,10 @@ class Regression(object):
             self.CONFIG['era5']['lon_grid_points_number'])]
 
         self.model_dir = dict()
-        self.model_dir['xgb'] = self.CONFIG['regression']['dirs']['tc']\
-                ['xgboost']['model']
-        self.model_dir['lgbm'] = self.CONFIG['regression']['dirs']['tc']\
-                ['lightgbm']['model']
+        self.model_dir['xgb'] = self.CONFIG['regression']['dirs'][
+            'tc']['xgboost']['model']
+        self.model_dir['lgb'] = self.CONFIG['regression']['dirs'][
+            'tc']['lightgbm']['model']
 
         self.validation_split = 0.2
 
@@ -159,21 +154,60 @@ class Regression(object):
 
         utils.setup_database(self, Base)
 
-        self.y_name = self.CONFIG['regression']['target']\
-                ['smap_era5']
+        self.y_name = self.CONFIG['regression']['target']['smap_era5']
 
-        self.read_smap_era5(False, '', 15, 'large')
+        self.set_variables()
+
+        self.read_smap_era5(False)
         if 'dt' in self.instructions:
             self.decision_tree()
         if 'xgb' in self.instructions:
             # self.evaluation_df_visualition()
             self.xgb_regressor()
             # self.xgb_importance()
-        if 'lgbm' in self.instructions:
-            # self.lgbm_hyperoptimization()
-            self.lgbm_regressor()
+        if 'lgb' in self.instructions:
+            # self.optimize_lgb(maxevals=60)
+            self.lgb_best_regressor()
+            # self.lgb_default_regressor()
+            # self.lgb_hyperoptimization()
         if 'dnn' in self.instructions:
             self.deep_neural_network()
+
+    def set_variables(self):
+        if 'plot_dist' in self.instructions:
+            self.plot_dist = True
+        else:
+            self.plot_dist = False
+
+        if 'smogn' in self.instructions:
+            self.smogn = True
+        else:
+            self.smogn = False
+
+        if 'save' in self.instructions:
+            self.save = True
+        else:
+            self.save = False
+
+        if 'load' in self.instructions:
+            self.load = True
+        else:
+            self.load = False
+
+        if 'focus' in self.instructions:
+            self.with_focal_loss = True
+        else:
+            self.with_focal_loss = False
+
+        if 'center' in self.instructions:
+            self.center = True
+        else:
+            self.center = False
+
+        if 'borrow' in self.instructions:
+            self.borrow = True
+        else:
+            self.borrow = False
 
     def evaluation_df_visualition(self):
         reg_tc_dir = self.CONFIG['regression']['dirs']['tc']
@@ -216,8 +250,8 @@ class Regression(object):
         # load model from file
         best_model = pickle.load(
             open(f'{self.model_dir["xgb"]}{best_model_name}', 'rb'))
-        fig_dir = self.CONFIG['regression']['dirs']['tc']['xgboost']\
-                ['importance']
+        fig_dir = self.CONFIG['regression']['dirs']['tc'][
+            'xgboost']['importance']
         os.makedirs(fig_dir, exist_ok=True)
         selected_features_num = int(self.X_train.shape[1] / 3)
 
@@ -317,7 +351,8 @@ class Regression(object):
     def evaluate(self, est, params, X, y):
         # Choices
         if 'choices' in params.keys():
-            params['learning_rate'] = params['choices']['learning_rate']
+            params['learning_rate'] = params['choices'][
+                'learning_rate']
             params['n_estimators'] = params['choices']['n_estimators']
             params.pop('choices')
 
@@ -332,46 +367,275 @@ class Regression(object):
 
         return score
 
-    def lgbm_regressor(self):
+    def lgb_best_regressor_old(self):
         self.logger.info((f"""Regress by lightgbm regressor"""))
 
         # Hyper parameters verified after hyperoptimization
+
+        # No SMOGN
+        # best_params = {
+        #     'boosting_type': 'gbdt',
+        #     'num_leaves': 255,
+        #     'max_depth': -1,
+        #     'learning_rate': 0.1,
+        #     'n_estimators': 2524,
+        #     'subsample': 0.874140028391694,
+        #     'colsample_bytree': 0.8732644854988912,
+        #     'n_jobs': -1,
+        # }
+
+        # With SMOGN
         best_params = {
             'boosting_type': 'gbdt',
-            'num_leaves': 255,
+            'num_leaves': 511,
             'max_depth': -1,
             'learning_rate': 0.1,
-            'n_estimators': 2524,
-            'subsample': 0.874140028391694,
-            'colsample_bytree': 0.8732644854988912,
+            'n_estimators': 1877,
+            'subsample': 0.937375580029069,
+            'colsample_bytree': 0.6484142866996947,
             'n_jobs': -1,
         }
 
-        est = lgbm.LGBMRegressor()
+        est = lgb.LGBMRegressor()
         # Set params
         est.set_params(**best_params)
 
         # Fit
         est.fit(self.X_train, self.y_train)
+        # Predict
         y_pred = est.predict(self.X_test)
 
-        # Predict
         y_test = self.y_test.to_numpy()
+        self.smogn_setting_dir = (
+            f"""{self.smogn_setting_dir[:-2]}_hyperoptimized/""")
+        os.makedirs(self.smogn_setting_dir, exist_ok=True)
+        utils.jointplot_kernel_dist_of_imbalance_windspd(
+            self.smogn_setting_dir, y_test, y_pred)
+        utils.box_plot_windspd(self.smogn_setting_dir, y_test, y_pred)
+
         mse = mean_squared_error(y_test, y_pred)
         print("MSE SCORE ON TEST DATA: {}".format(mse))
         print("RMSE SCORE ON TEST DATA: {}".format(math.sqrt(mse)))
 
-        # save model to file
-        pickle.dump(est, open((
-            f"""{self.model_dir["lgbm"]}"""
-            f"""{self.basin}_mse_{mse}.pickle.dat"""),
-            'wb'))
+        if hasattr(self, 'smogn_setting_dir'):
+            pickle.dump(est, open((
+                f"""{self.smogn_setting_dir}"""
+                f"""{self.basin}_mse_{mse}_{self.model_tag}"""
+                f""".pickle.dat"""), 'wb'))
+        else:
+            # save model to file
+            pickle.dump(est, open((
+                f"""{self.model_dir["lgb"]}"""
+                f"""{self.basin}_mse_{mse}_{self.model_tag}"""
+                f""".pickle.dat"""), 'wb'))
 
-    def lgbm_hyperoptimization(self):
+    def lgb_default_regressor(self):
+        self.logger.info((f"""Default lightgbm regressor"""))
+        # Initilize instance of estimator
+        est = lgb.LGBMRegressor()
+
+        # Fit
+        est.fit(self.X_train, self.y_train)
+        # Predict
+        y_pred = est.predict(self.X_test)
+
+        y_test = self.y_test.to_numpy()
+        # utils.distplot_imbalance_windspd(y_test, y_pred)
+        utils.jointplot_kernel_dist_of_imbalance_windspd(
+            self.smogn_setting_dir, y_test, y_pred)
+        utils.box_plot_windspd(self.smogn_setting_dir, y_test, y_pred)
+        mse = mean_squared_error(y_test, y_pred)
+        print("MSE SCORE ON TEST DATA: {}".format(mse))
+        print("RMSE SCORE ON TEST DATA: {}".format(math.sqrt(mse)))
+
+        if hasattr(self, 'smogn_setting_dir'):
+            pickle.dump(est, open((
+                f"""{self.smogn_setting_dir}"""
+                f"""{self.basin}_mse_{mse}_{self.model_tag}"""
+                f""".pickle.dat"""), 'wb'))
+        else:
+            # save model to file
+            pickle.dump(est, open((
+                f"""{self.model_dir["lgb"]}"""
+                f"""{self.basin}_mse_{mse}_{self.model_tag}"""
+                f""".pickle.dat"""), 'wb'))
+
+    def optimize_lgb(self, maxevals=200):
+        self.lgb_train = lgb.Dataset(self.X_train, self.y_train,
+                                     free_raw_data=False)
+        self.lgb_eval = lgb.Dataset(self.X_test, self.y_test,
+                                    reference=self.lgb_train,
+                                    free_raw_data=False)
+        self.early_stop_dict = {}
+
+        param_space = self.hyperparameter_space()
+        objective = self.get_objective(self.lgb_train)
+        objective.i = 0
+        trials = Trials()
+        best = fmin(fn=objective,
+                    space=param_space,
+                    algo=tpe.suggest,
+                    max_evals=maxevals,
+                    trials=trials)
+
+        best['num_boost_round'] = self.early_stop_dict[
+            trials.best_trial['tid']]
+        best['num_leaves'] = int(best['num_leaves'])
+        best['verbose'] = -1
+
+        if self.with_focal_loss:
+            focal_loss_obj = lambda x, y: custom_asymmetric_train(
+                x, y, best['slope'], best['min_alpha'])
+            # focal_loss_eval = lambda x, y: custom_asymmetric_valid(
+            #     x, y, best['slope'], best['min_alpha'])
+
+            model = lgb.train(best, self.lgb_train,
+                              fobj=focal_loss_obj,
+                              # feval=focal_loss_eval
+                             )
+            y_pred = model.predict(self.X_test)
+            eval_name, eval_result, is_higher_better = \
+                custom_asymmetric_valid(y_pred, self.lgb_eval,
+                                        best['slope'],
+                                        best['min_alpha'])
+            print((f"""---------------\n"""
+                   f"""With focal loss\n"""
+                   f"""---------------"""))
+        else:
+            model = lgb.train(best, self.lgb_train,
+                              fobj=symmetric_train,
+                              # feval=symmetric_valid
+                             )
+            y_pred = model.predict(self.X_test)
+            eval_name, eval_result, is_higher_better = \
+                symmetric_valid(y_pred, self.lgb_eval)
+            print((f"""------------------\n"""
+                   f"""Without focal loss\n"""
+                   f"""------------------"""))
+
+        print((f"""{eval_name}-mean: {eval_result}\n"""
+               f"""is_higher_better: {is_higher_better}"""))
+
+        if self.save:
+            results = Bunch()
+            out_fname = f'{self.basin}_{eval_result:.6f}'
+            out_name_suffix = {
+                'with_focal_loss': '_fl',
+                'center': '_center',
+                'smogn': '_smogn',
+                'borrow': '_borrow',
+            }
+            for idx, (key, val) in enumerate(out_name_suffix.items()):
+                if getattr(self, key) is True:
+                    out_fname += val
+            out_dir = f'{self.model_dir["lgb"]}{out_fname}/'
+            os.makedirs(out_dir, exist_ok=True)
+            out_fname += '.pkl'
+            results.model = model
+            results.best_params = best
+            pickle.dump(results, open(f'{out_dir}{out_fname}', 'wb'))
+
+        self.best = best
+        self.model = model
+
+    def lgb_best_regressor(self):
+        out_dir = ('/Users/lujingze/Programming/SWFusion/regression/'
+                   'tc/lightgbm/model/'
+                   'na_0.891876_fl_smogn_50_slope_0.05/')
+        save_file = [f for f in os.listdir(out_dir)
+                     if f.endswith('.pkl')]
+        if len(save_file) != 1:
+            self.logger.error('Count of Bunch is not ONE')
+            exit(1)
+
+        with open(f'{out_dir}{save_file[0]}', 'rb') as f:
+            best_result = pickle.load(f)
+
+        print((f"""-----------\n"""
+               f"""Best result\n"""
+               f"""-----------"""))
+        print(best_result)
+
+        y_pred = best_result.model.predict(self.X_test)
+        y_test = self.y_test.to_numpy()
+        utils.jointplot_kernel_dist_of_imbalance_windspd(
+            out_dir, y_test, y_pred)
+        utils.box_plot_windspd(out_dir, y_test, y_pred)
+
+    def get_objective(self, train):
+
+        def objective(params):
+            """
+            objective function for lightgbm.
+            """
+            # hyperopt casts as float
+            params['num_boost_round'] = int(params['num_boost_round'])
+            params['num_leaves'] = int(params['num_leaves'])
+
+            # need to be passed as parameter
+            params['verbose'] = -1
+            params['seed'] = 1
+
+            if self.with_focal_loss:
+                focal_loss_obj = lambda x, y: custom_asymmetric_train(
+                    x, y, params['slope'], params['min_alpha'])
+                focal_loss_eval = lambda x, y: custom_asymmetric_valid(
+                    x, y, params['slope'], params['min_alpha'])
+
+                cv_result = lgb.cv(
+                    params,
+                    train,
+                    num_boost_round=params['num_boost_round'],
+                    fobj=focal_loss_obj,
+                    feval=focal_loss_eval,
+                    stratified=False,
+                    early_stopping_rounds=20)
+
+                self.early_stop_dict[objective.i] = len(
+                    cv_result['custom_asymmetric_eval-mean'])
+                score = round(cv_result['custom_asymmetric_eval-mean'][
+                    -1], 4)
+            else:
+                cv_result = lgb.cv(
+                    params,
+                    train,
+                    num_boost_round=params['num_boost_round'],
+                    fobj=symmetric_train,
+                    feval=symmetric_valid,
+                    stratified=False,
+                    early_stopping_rounds=20)
+
+                self.early_stop_dict[objective.i] = len(
+                    cv_result['symmetric_eval-mean'])
+                score = round(cv_result['symmetric_eval-mean'][-1], 4)
+
+            objective.i += 1
+
+            return score
+
+        return objective
+
+    def hyperparameter_space(self):
+        space = {
+            'learning_rate': hp.uniform('learning_rate', 0.01, 0.2),
+            'num_boost_round': hp.quniform('num_boost_round',
+                                           50, 500, 20),
+            'num_leaves': hp.quniform('num_leaves', 31, 255, 4),
+            'min_child_weight': hp.uniform('min_child_weight', 0.1, 10),
+            'colsample_bytree': hp.uniform('colsample_bytree', 0.5, 1.),
+            'subsample': hp.uniform('subsample', 0.5, 1.),
+            'reg_alpha': hp.uniform('reg_alpha', 0.01, 0.1),
+            'reg_lambda': hp.uniform('reg_lambda', 0.01, 0.1),
+        }
+        if self.with_focal_loss:
+            space['slope'] = hp.uniform('slope', 0.05, 1.)
+            space['min_alpha'] = hp.uniform('min_alpha', 1., 2.)
+
+        return space
+
+    def lgb_hyperoptimization_old(self):
+        # NOTE: reference: http://dkopczyk.quantee.co.uk/hyperparameter-optimization/
         self.logger.info((f"""Hyperoptimize lightgbm regressor"""))
-
-        column_names = ['estimators_num', 'mse']
-        all_tests = []
 
         # Define searched space
         # hp.uniform('subsample', 0.6, 0.4) ?
@@ -392,7 +656,7 @@ class Regression(object):
         }
 
         # Initilize instance of estimator
-        est = lgbm.LGBMRegressor(boosting_type='gbdt', n_jobs=-1,
+        est = lgb.LGBMRegressor(boosting_type='gbdt', n_jobs=-1,
                                  random_state=2018)
 
         # Objective minizmied
@@ -403,12 +667,14 @@ class Regression(object):
         trials = Trials()
 
         # Set algoritm parameters
+        # TODO: try to just use tpe.suggest
         algo = partial(tpe.suggest,
-                       n_startup_jobs=20, gamma=0.25, n_EI_candidates=24)
+                       n_startup_jobs=20, gamma=0.25,
+                       n_EI_candidates=24)
 
         # Fit Tree Parzen Estimator
         best_vals = fmin(hyperopt_objective, space=hyper_space_tree,
-                         algo=algo, max_evals=60, trials=trials,
+                         algo=algo, max_evals=30, trials=trials,
                          rstate=np.random.RandomState(seed=2020))
 
         # Print best parameters
@@ -424,7 +690,7 @@ class Regression(object):
         # Print execution time
         tdiff = (trials.trials[-1]['book_time']
                  - trials.trials[0]['book_time'])
-        print("ELAPSED TIME (MINUTE): " + str(tdiff.total_seconds() / 60))
+        print(f'ELAPSED TIME (MINUTE): {tdiff.total_seconds() / 60}')
 
         choices = best_params['choices']
         best_params['learning_rate'] = choices['learning_rate']
@@ -444,35 +710,13 @@ class Regression(object):
         print("MSE SCORE ON TEST DATA: {}".format(mse))
         print("RMSE SCORE ON TEST DATA: {}".format(math.sqrt(mse)))
 
-        # os.makedirs(self.model_dir['lgbm'], exist_ok=True)
-
-        # model = lgbm.LGBMRegressor()
-        # model.fit(self.train, self.y_train)
-
-        # self.logger.info((f"""Evaluating on test set"""))
-        # predicted = model.predict(self.X_test)
-        # truth = self.y_test.to_numpy()
-        # mse = mean_squared_error(truth, predicted)
-        # print(f'MSE: {mse}')
-        # # one_test['mse'] = mse
-
-        # # save model to file
-        # pickle.dump(model, open((
-        #     f"""{self.model_dir["lgbm"]}"""
-        #     f"""{self.basin}_mse_{mse}.pickle.dat"""),
-        #     'wb'))
-
-        # # all_tests.append(one_test)
-
-        # utils.delete_last_lines()
-        # print('Done')
-
     def decision_tree(self):
         self.logger.info((f"""Regressing with decision tree"""))
         self.logger.info((f"""Evaluating on test set"""))
 
         for depth in range(3, 20):
-            tree = DecisionTreeRegressor(criterion='mse', max_depth=depth)
+            tree = DecisionTreeRegressor(criterion='mse',
+                                         max_depth=depth)
             tree.fit(self.X_train, self.y_train)
 
             predicted = tree.predict(self.X_test)
@@ -481,8 +725,25 @@ class Regression(object):
 
             print(f"""Max depth {depth}: MSE {mse:.2f}""")
 
+    def nn_hyperoptimization(self):
+        self.logger.info((f"""Hyperoptimize neural network"""))
+
+        hyper_space_tree = {
+            'choices': hp.choice('choices', [
+                {'learning_rate': 0.01,
+                 'n_estimators': hp.randint(
+                     'n_estimators_small_lr', 2000)},
+                {'learning_rate': 0.1,
+                 'n_estimators': 1000 + hp.randint(
+                     'n_estimators_medium_lr', 2000)}
+                ]),
+            'max_depth':  hp.choice('max_depth', [7, 8, 9, -1]),
+            'num_leaves': hp.choice('num_leaves', [127, 255, 511]),
+            'subsample': hp.uniform('subsample', 0.6, 1.0),
+            'colsample_bytree': hp.uniform('colsample_bytree', 0.6, 1.0)
+        }
+
     def deep_neural_network(self):
-        self.logger.info((f"""Regressing with deep neural network"""))
         """
         At least 4 variables to trail and error:
 
@@ -492,8 +753,8 @@ class Regression(object):
 
         Number of neurons
         -----------------
-        Plan A: 1/3, 2/3, 3/3 of the size of input layer, plus the size of
-        output layer.
+        Plan A: 1/3, 2/3, 3/3 of the size of input layer, plus the
+        size of output layer.
         Plan B: 64, 128, 256
 
         The number of hidden neurons should be between the size of the
@@ -812,7 +1073,6 @@ class Regression(object):
                 ['tc']['neural_network']['checkpoint']
 
         self.checkpoint_dir = (f"""{checkpoint_root_dir}""")
-                               # f"""{self.condition}/""")
         # Remove old checkpoint files
         if os.path.exists(self.checkpoint_dir):
             shutil.rmtree(self.checkpoint_dir)
@@ -827,8 +1087,8 @@ class Regression(object):
             checkpoint_path, monitor='val_loss', verbose=0,
             save_best_only=True, mode='auto')
 
-        log_dir = self.CONFIG['regression']['dirs']['tc']\
-                ['neural_network']['logs']
+        log_dir = self.CONFIG['regression']['dirs']['tc'][
+            'neural_network']['logs']
         log_dir = f'{log_dir}{self.DNN_structure_str}/'
         # Remove old tensorboard files
         if os.path.exists(log_dir):
@@ -844,172 +1104,7 @@ class Regression(object):
             update_freq='epoch')
         self.callbacks_list = [checkpoint_callback, tensorboard_callback]
 
-    def read_smap_era5(self, sample, col_name, divide, large_or_small):
+    def read_smap_era5(self, sample):
         self.logger.info((f"""Reading SMAP-ERA5 data"""))
-        combined, target, test_target, train_length = \
-                self.get_combined_data(sample, col_name, divide,
-                                       large_or_small)
-
-        if combined is None:
-            return
-
-        # num_cols = utils.get_dataframe_cols_with_no_nans(combined,
-        #                                                  'num')
-        # print ('Number of numerical columns with no nan values :',
-        #        len(num_cols))
-
-        self.X_train, self.X_test = self.split_combined(combined,
-                                                        train_length)
-        self.y_train = target
-        self.y_test = test_target
-
-        # train_data, test_data = self._get_train_test()
-        # train_data = self.X_train
-        # train_data['Target'] = target
-        # self._show_correlation_heatmap(train_data)
-        # breakpoint()
-
-    def split_combined(self, combined, train_length):
-        train = combined[:train_length]
-        test = combined[train_length:]
-
-        return train, test
-
-    def get_combined_data(self, sample, col_name, divide, large_or_small):
-        train, test = self._get_train_test(sample, col_name, divide,
-                                           large_or_small)
-        if train is None:
-            return None, None, None, None,
-
-        train_length = len(train)
-
-        target = getattr(train, self.y_name)
-        test_target = getattr(test, self.y_name)
-        train.drop([self.y_name], axis=1, inplace=True)
-        test.drop([self.y_name], axis=1, inplace=True)
-
-        combined = train.append(test)
-        combined.reset_index(inplace=True)
-        combined.drop(['index'], axis=1, inplace=True)
-
-        return combined, target, test_target, train_length
-
-    def _get_train_test(self, sample, col_name, divide, large_or_small):
-        years = [y for y in range(self.train_period[0].year,
-                                  self.train_period[1].year+1)]
-        # years = [2015, 2016, 2017, 2018, 2019]
-        df = None
-        for y in years:
-            table_name = f'tc_smap_era5_{y}_{self.basin}'
-            if (utils.get_class_by_tablename(self.engine, table_name)
-                is not None):
-                tmp_df = pd.read_sql(f'SELECT * FROM {table_name}',
-                                     self.engine)
-                if df is None:
-                    df = tmp_df
-                else:
-                    df = df.append(tmp_df)
-
-        df.drop(self.CONFIG['regression']['useless_columns']\
-                ['smap_era5'], axis=1, inplace=True)
-
-        split_col_name = 'era5_datetime'
-
-        if sample:
-            df = shuffle(df)
-            rows, cols = df.shape
-            cut_rows = int(rows * 0.3)
-            df = df[:cut_rows]
-
-        # if col_name is not None:
-        #     df, self.condition = \
-        #             utils.filter_dataframe_by_column_value_divide(
-        #                 df, col_name, divide, large_or_small)
-        # else:
-        #     self.condition = 'all'
-
-        # Fiiter outilers by z score
-        # z = np.abs(stats.zscore(df))
-        # threshold = 3
-        # outliers = np.where(z > threshold)
-
-        cols = list(df.columns)
-        cols_num = len(df.columns)
-        group_size = 1
-        groups_num = math.ceil(cols_num / group_size)
-        fig_dir = self.CONFIG['result']['dirs']['fig']\
-                ['hist_of_regression_features']['original']
-        os.makedirs(fig_dir, exist_ok=True)
-        for i in range(groups_num):
-            try:
-                start = i * group_size
-                end = min(cols_num, (i + 1) * group_size)
-                cols_to_draw = cols[start:end]
-                if split_col_name not in cols_to_draw:
-                    self.save_features_histogram(df, cols_to_draw,
-                                                 fig_dir)
-                else:
-                    skip_idx = cols.index(split_col_name)
-                    self.save_features_histogram(df, cols[start:skip_idx],
-                                                 fig_dir)
-                    self.save_features_histogram(df,
-                                                 cols[skip_idx+1:end],
-                                                 fig_dir)
-            except Exception as msg:
-                breakpoint()
-                exit(msg)
-
-        if 'normalization' in self.instructions:
-            # Normalization
-            normalized_columns = df.columns.drop(self.y_name)
-            scaler = MinMaxScaler()
-            df[normalized_columns] = scaler.fit_transform(
-                df[normalized_columns])
-
-            fig_dir = self.CONFIG['result']['dirs']['fig']\
-                    ['hist_of_regression_features']\
-                    ['after_normalization']
-            os.makedirs(fig_dir, exist_ok=True)
-            for i in range(groups_num):
-                try:
-                    start = i * group_size
-                    end = min(cols_num, (i + 1) * group_size)
-                    self.save_features_histogram(df, cols[start:end],
-                                                 fig_dir)
-                except Exception as msg:
-                    breakpoint()
-                    exit(msg)
-
-        df.drop(split_col_name, axis=1, inplace=True)
-        train, test = train_test_split(df, test_size=0.2)
-
-        # train = df.loc[df[split_col_name] < self.train_test_split_dt]
-        # test = df.loc[df[split_col_name] >= self.train_test_split_dt]
-
-        # train.drop(split_col_name, axis=1, inplace=True)
-        # test.drop(split_col_name, axis=1, inplace=True)
-
-        if 'only_hist' in self.instructions:
-            return None, None
-        else:
-            return train, test
-
-    def save_features_histogram(self, df, columns, fig_dir):
-        if not len(columns):
-            return
-
-        try:
-            df.hist(column=columns, figsize = (12,10))
-        except Exception as msg:
-            breakpoint()
-            exit(msg)
-
-        fig_name = '-'.join(columns)
-        fig_name = f'{fig_name}.png'
-        plt.savefig(f'{fig_dir}{fig_name}')
-
-    def _show_correlation_heatmap(self, data):
-        C_mat = data.corr()
-        fig = plt.figure(figsize=(15, 15))
-        sb.heatmap(C_mat, vmax=.8, square=True)
-        plt.show()
+        self.X_train, self.y_train, self.X_test, self.y_test = \
+            utils.get_combined_data(self, sample)

@@ -1,3 +1,13 @@
+classify:
+  interval: 5
+spatial_resolution:
+  era5: 0.25
+  smap: 0.25
+  smap_prediction: 0.25
+compare_and_validate_targets:
+  - 'smap'
+  - 'smap_prediction'
+  - 'era5'
 network:
   retry_times: 20
 logging:
@@ -106,7 +116,12 @@ ibtracs:
   table_name:
     scs: 'ibtracs_scs'
     wp: 'ibtracs_wp'
+    si: 'ibtracs_si'
+    ep: 'ibtracs_ep'
     na: 'ibtracs_na'
+    sp: 'ibtracs_sp'
+    ni: 'ibtracs_ni'
+    sa: 'ibtracs_sa'
     global_since_1980: 'ibtracs_global'
     statistic:
       moving_speed:
@@ -115,8 +130,13 @@ ibtracs:
         na: 'ibtracs_intensity_change_na'
   urls:
     wp: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.WP.v04r00.nc'
+    si: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.SI.v04r00.nc'
+    ep: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.EP.v04r00.nc'
     na: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.NA.v04r00.nc'
-    since1980: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.since1980.v04r00.nc'
+    sp: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.SP.v04r00.nc'
+    ni: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.NI.v04r00.nc'
+    sa: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.SA.v04r00.nc'
+    # since1980: 'https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/netcdf/IBTrACS.since1980.v04r00.nc'
   dirs: '../data/ibtracs/'
   data_name_length: 22
 rss:
@@ -583,6 +603,7 @@ result:
   dirs:
     fig:
       root: '../fig/'
+      validation_by_sfmr: '../fig/validation_by_sfmr/'
       hist_of_regression_features:
         original: '../fig/hist_of_regression_features/original/'
         after_normalization: '../fig/hist_of_regression_features/after_normalizatiion/'
@@ -663,7 +684,7 @@ workflow:
       time_flow_backward: |-
         Start datetime is later than end datetime.
 regression:
-  edge_in_degree: 8
+  edge_in_degree: 4
   dirs:
     scs: '../regression/scs/'
     tc:
@@ -706,6 +727,8 @@ regression:
       - 'sid'
       - 'satel_datetime'
       - 'era5_datetime'
+      - 'lon'
+      - 'lat'
       - 'satel_datetime_lon_lat'
       - 'smap_u_wind'
       - 'smap_v_wind'
