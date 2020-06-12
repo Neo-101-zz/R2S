@@ -459,10 +459,12 @@ class Regression(object):
                               # feval=focal_loss_eval
                              )
             y_pred = model.predict(self.X_test)
+            # eval_name, eval_result, is_higher_better = \
+            #     custom_asymmetric_valid(y_pred, self.lgb_eval,
+            #                             best['slope'],
+            #                             best['min_alpha'])
             eval_name, eval_result, is_higher_better = \
-                custom_asymmetric_valid(y_pred, self.lgb_eval,
-                                        best['slope'],
-                                        best['min_alpha'])
+                custom_asymmetric_valid(y_pred, self.lgb_eval)
             print((f"""---------------\n"""
                    f"""With focal loss\n"""
                    f"""---------------"""))
