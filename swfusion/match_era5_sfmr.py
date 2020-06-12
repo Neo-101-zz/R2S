@@ -40,7 +40,7 @@ class matchManager(object):
         self.extract()
 
     def load_match(self):
-        Match = utils.create_match_table(self, 'sfmr', 'era5')
+        Match = utils.create_match_table(self, ['sfmr', 'era5'])
         match_list = []
         for i in range(len(self.match_data_sources)):
             df_row = self.match_data_sources.iloc[i]
@@ -111,7 +111,7 @@ class matchManager(object):
         if not hours:
             return
 
-        Match = utils.create_match_table(self, 'sfmr', 'era5')
+        Match = utils.create_match_table(self, ['sfmr', 'era5'])
         hit_dt = []
         match_dt = []
         for h in range(hours):
@@ -239,7 +239,7 @@ class matchManager(object):
     def extract_with_not_all_hours_hit(self, tc, next_tc, hours,
                                        spatial_temporal_info, 
                                        hour_info_pt_idx):
-        Match = utils.create_match_table(self, 'sfmr', 'era5')
+        Match = utils.create_match_table(self, ['sfmr', 'era5'])
 
         for h in range(hours):
             interped_tc = utils.interp_tc(self, h, tc, next_tc)

@@ -31,8 +31,7 @@ from geopy import distance
 import seaborn as sns
 import smogn
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.utils import shuffle
+from sklearn.metrics import mean_squared_error
 
 from amsr2_daily import AMSR2daily
 from ascat_daily import ASCATDaily
@@ -2164,6 +2163,15 @@ def get_xyz_matrix_of_smap_windspd_or_diff_mins(target,
                                                       pt_time)
                     delta = abs(pt_dt - tc_dt)
                     # Temporal window is one hour
+                    # XXX: if write as `delta.seconds > 1800`,
+                    # datetime.datetime(year, month, day, hour, 30)
+                    # will be rounded into next hour, making a little
+                    # repetition because that datetime will be used
+                    # when iterate next hour too.
+                    # FIXME: But if change following line to
+                    # `delta.seconds > 1800`, something wrong will
+                    # happen, e.g. SFMR, SMAP and SMAP prediction do
+                    # not match any more even they do match
                     if delta.seconds > 1800:
                         continue
 
@@ -2699,19 +2707,18 @@ def fill_era5_masked_and_not_masked_ocean_data(masked, data, new_data,
 
 
 def load_model(the_class, model_dir, suffix='.pickle.dat'):
-    if hasattr(the_class, 'model_tag'):
+    if hasattr(the_class, 'tag'):
         model_files = [f for f in os.listdir(model_dir)
                        if (f.endswith(suffix)
-                           and the_class.model_tag in f)]
+                           and the_class.tag in f)]
+        if not len(model_files):
+            the_class.logger.error((
+                f"""Model not found in {model_dir} """
+                f"""with tag "{the_class.tag}"""))
     else:
         model_files = [f for f in os.listdir(model_dir)
                        if f.endswith(suffix)]
-    if not len(model_files):
-        if hasattr(the_class, 'model_tag'):
-            the_class.logger.error((
-                f"""Model not found in {model_dir} """
-                f"""with tag "{the_class.model_tag}"""))
-        else:
+        if not len(model_files):
             the_class.logger.error((
                 f"""Model not found in {model_dir} """))
         breakpoint()
@@ -2723,7 +2730,7 @@ def load_model(the_class, model_dir, suffix='.pickle.dat'):
         # Find best model
         for file in model_files:
             mse = float(
-                file.split(f'_{the_class.model_tag}')[0].split(
+                file.split(f'_{the_class.tag}')[0].split(
                     'mse_')[1])
             if mse < min_mse:
                 min_mse = mse
@@ -3345,11 +3352,12 @@ def interp_satel_era5_diff_mins_matrix(diff_mins):
 
 
 def validate_with_sfmr(the_class, tgt_name, tc, sfmr_pts, tgt_lons,
-                       tgt_lats, tgt_windspd, tgt_mesh, tgt_diff_mins):
+                       tgt_lats, tgt_windspd, tgt_mesh, tgt_diff_mins,
+                       tag=None):
     """'tgt' is the abbreviation for word 'target'.
 
     """
-    Validation = create_sfmr_validation_table(the_class, tgt_name)
+    Validation = create_sfmr_validation_table(the_class, tgt_name, tag)
     num_sfmr_tracks = len(sfmr_pts)
     num_tgt_lats, num_tgt_lons = tgt_windspd.shape
 
@@ -4062,173 +4070,175 @@ def extract_era5_pressure_levels(the_class, tgt_name, tc,
 
 def add_era5_single_levels(the_class, era5_file_path, tc_dt, tgt_name,
                            tgt_part, area):
-    tgt_from_rss = False
-    rss_tgt_name = None
-    if tgt_name in the_class.CONFIG['satel_data_sources']['rss']:
-        tgt_from_rss = True
-        rss_tgt_name = 'satel'
-        hourtime_row_mapper = get_hourtime_row_mapper(tgt_part,
-                                                      rss_tgt_name)
-    else:
-        hourtime_row_mapper = get_hourtime_row_mapper(tgt_part,
-                                                      tgt_name)
-    north, west, south, east = area
+    try:
+        tgt_from_rss = False
+        rss_tgt_name = None
+        if tgt_name in the_class.CONFIG['satel_data_sources']['rss']:
+            tgt_from_rss = True
+            rss_tgt_name = 'satel'
+            hourtime_row_mapper = get_hourtime_row_mapper(tgt_part,
+                                                          rss_tgt_name)
+        else:
+            hourtime_row_mapper = get_hourtime_row_mapper(tgt_part,
+                                                          tgt_name)
+        north, west, south, east = area
 
-    grbs = pygrib.open(era5_file_path)
-    grbs.close()
-    count = 0
+        count = 0
 
-    grbidx = pygrib.index(era5_file_path, 'dataTime')
-    indices_of_rows_to_delete = set()
+        grbidx = pygrib.index(era5_file_path, 'dataTime')
+        indices_of_rows_to_delete = set()
 
-    # For every hour, update corresponding rows with grbs
-    for hourtime in range(0, 2400, 100):
-        if not len(hourtime_row_mapper[hourtime]):
-            continue
-        grb_time = datetime.time(int(hourtime/100), 0, 0)
+        # For every hour, update corresponding rows with grbs
+        for hourtime in range(0, 2400, 100):
+            if not len(hourtime_row_mapper[hourtime]):
+                continue
+            grb_time = datetime.time(int(hourtime/100), 0, 0)
 
-        selected_grbs = grbidx.select(dataTime=hourtime)
+            selected_grbs = grbidx.select(dataTime=hourtime)
 
-        for grb in selected_grbs:
-            # Generate name which is the same with table column
-            name = process_grib_message_name(grb.name)
-            grb_spa_resolu = grb.jDirectionIncrementInDegrees
-            # data() method of pygrib is time-consuming
-            # So apply it to global area then update all
-            # smap part with grb of specific hourtime,
-            # which using data() method as less as possible
-            data, lats, lons = grb.data(south, north, west, east)
-            data = np.flip(data, 0)
-            lats = np.flip(lats, 0)
-            lons = np.flip(lons, 0)
+            for grb in selected_grbs:
+                # Generate name which is the same with table column
+                name = process_grib_message_name(grb.name)
+                grb_spa_resolu = grb.jDirectionIncrementInDegrees
+                # data() method of pygrib is time-consuming
+                # So apply it to global area then update all
+                # smap part with grb of specific hourtime,
+                # which using data() method as less as possible
+                data, lats, lons = grb.data(south, north, west, east)
+                data = np.flip(data, 0)
+                lats = np.flip(lats, 0)
+                lons = np.flip(lons, 0)
 
-            masked_data = False
-            # MUST check masked array like this, because if an array
-            # is numpy.ma.core.MaskedArray, it is numpy.ndarray too.
-            # So only directly check whether an array is instance
-            # of numpy.ma.core.MaskedArray is safe.
-            if isinstance(data, np.ma.core.MaskedArray):
-                masked_data = True
+                masked_data = False
+                # MUST check masked array like this, because if an array
+                # is numpy.ma.core.MaskedArray, it is numpy.ndarray too.
+                # So only directly check whether an array is instance
+                # of numpy.ma.core.MaskedArray is safe.
+                if isinstance(data, np.ma.core.MaskedArray):
+                    masked_data = True
 
-            # Update all rows which matching this hourtime
-            for row_idx in hourtime_row_mapper[hourtime]:
-                count += 1
-                # print((f"""\r{name}: {count}/{total}"""), end='')
-                row = tgt_part[row_idx]
+                # Update all rows which matching this hourtime
+                for row_idx in hourtime_row_mapper[hourtime]:
+                    count += 1
+                    # print((f"""\r{name}: {count}/{total}"""), end='')
+                    row = tgt_part[row_idx]
 
-                row.era5_datetime = datetime.datetime.combine(
-                    tc_dt.date(), grb_time)
+                    row.era5_datetime = datetime.datetime.combine(
+                        tc_dt.date(), grb_time)
 
-                if tgt_from_rss:
-                    tgt_datetime = getattr(row,
-                                           f'{rss_tgt_name}_datetime')
-                else:
-                    tgt_datetime = getattr(row,
-                                           f'{tgt_name}_datetime')
-
-                tgt_minute = (tgt_datetime.hour * 60
-                              + tgt_datetime.minute)
-                grb_minute = int(hourtime/100) * 60
-
-                if tgt_from_rss:
-                    setattr(row, f'{rss_tgt_name}_era5_diff_mins',
-                            tgt_minute - grb_minute)
-                else:
-                    setattr(row, f'{tgt_name}_era5_diff_mins',
-                            tgt_minute - grb_minute)
-
-                try:
                     if tgt_from_rss:
-                        latlons, latlon_indices = \
-                                get_era5_corners_of_rss_cell(
-                                    row.lat, row.lon, lats, lons,
-                                    grb_spa_resolu)
+                        tgt_datetime = getattr(row,
+                                               f'{rss_tgt_name}_datetime')
                     else:
-                        latlons, latlon_indices = \
-                                get_era5_corners_of_cell(
-                                    row.lat, row.lon, lats, lons)
-                except Exception as msg:
-                    breakpoint()
-                    exit(msg)
-                lat1, lat2, lon1, lon2 = latlons
-                lat1_idx, lat2_idx, lon1_idx, lon2_idx = \
-                    latlon_indices
+                        tgt_datetime = getattr(row,
+                                               f'{tgt_name}_datetime')
 
-                # Check out whether there is masked cell in square
-                if masked_data:
+                    tgt_minute = (tgt_datetime.hour * 60
+                                  + tgt_datetime.minute)
+                    grb_minute = int(hourtime/100) * 60
+
+                    if tgt_from_rss:
+                        setattr(row, f'{rss_tgt_name}_era5_diff_mins',
+                                tgt_minute - grb_minute)
+                    else:
+                        setattr(row, f'{tgt_name}_era5_diff_mins',
+                                tgt_minute - grb_minute)
+
+                    try:
+                        if tgt_from_rss:
+                            latlons, latlon_indices = \
+                                    get_era5_corners_of_rss_cell(
+                                        row.lat, row.lon, lats, lons,
+                                        grb_spa_resolu)
+                        else:
+                            latlons, latlon_indices = \
+                                    get_era5_corners_of_cell(
+                                        row.lat, row.lon, lats, lons)
+                    except Exception as msg:
+                        breakpoint()
+                        exit(msg)
+                    lat1, lat2, lon1, lon2 = latlons
+                    lat1_idx, lat2_idx, lon1_idx, lon2_idx = \
+                        latlon_indices
+
                     skip_row = False
-                    for tmp_lat_idx in [lat1_idx, lat2_idx]:
-                        for tmp_lon_idx in [lon1_idx, lon2_idx]:
-                            if data.mask[tmp_lat_idx][tmp_lon_idx]:
-                                skip_row = True
-                                indices_of_rows_to_delete.add(
-                                    row_idx)
+                    # Check out whether there is masked cell in square
+                    if masked_data:
+                        for tmp_lat_idx in [lat1_idx, lat2_idx]:
+                            for tmp_lon_idx in [lon1_idx, lon2_idx]:
+                                if data.mask[tmp_lat_idx][tmp_lon_idx]:
+                                    skip_row = True
+                                    indices_of_rows_to_delete.add(
+                                        row_idx)
                     if skip_row:
                         continue
 
-                square_data = data[lat1_idx:lat2_idx+1,
-                                   lon1_idx:lon2_idx+1]
-                square_lats = lats[lat1_idx:lat2_idx+1,
-                                   lon1_idx:lon2_idx+1]
-                square_lons = lons[lat1_idx:lat2_idx+1,
-                                   lon1_idx:lon2_idx+1]
+                    square_data = data[lat1_idx:lat2_idx+1,
+                                       lon1_idx:lon2_idx+1]
+                    square_lats = lats[lat1_idx:lat2_idx+1,
+                                       lon1_idx:lon2_idx+1]
+                    square_lons = lons[lat1_idx:lat2_idx+1,
+                                       lon1_idx:lon2_idx+1]
 
-                # ERA5 atmospheric variable
-                if tgt_from_rss and grb_spa_resolu == 0.25:
-                    value = float(square_data.mean())
-                # ERA5 oceanic variable
-                else:
-                    value = value_of_pt_in_era5_square(
-                        square_data, square_lats, square_lons,
-                        row.lat, row.lon)
-                    if value is None:
-                        # the_class.logger.warning((
-                        #     f"""[{name}] Not a square consists of """
-                        #     f"""four ERA5 grid points"""))
-                        breakpoint()
-                        continue
+                    # ERA5 atmospheric variable
+                    if tgt_from_rss and grb_spa_resolu == 0.25:
+                        value = float(square_data.mean())
+                    # ERA5 oceanic variable
+                    else:
+                        value = value_of_pt_in_era5_square(
+                            square_data, square_lats, square_lons,
+                            row.lat, row.lon)
+                        if value is None:
+                            # the_class.logger.warning((
+                            #     f"""[{name}] Not a square consists of """
+                            #     f"""four ERA5 grid points"""))
+                            breakpoint()
+                            continue
 
-                setattr(row, name, value)
+                    setattr(row, name, value)
 
-                # if (tc_dt == datetime.datetime(2015, 5, 7, 23, 0, 0)
-                #     and (name == '2_metre_temperature'
-                #          or name == 'mean_direction_of_total_swell')
-                #     and row.x == -11 and row.y == -8):
-                #     breakpoint()
+                    # if (tc_dt == datetime.datetime(2015, 5, 7, 23, 0, 0)
+                    #     and (name == '2_metre_temperature'
+                    #          or name == 'mean_direction_of_total_swell')
+                    #     and row.x == -11 and row.y == -8):
+                    #     breakpoint()
 
-            delete_last_lines()
-            # print(f'{name}: Done')
+                delete_last_lines()
+                # print(f'{name}: Done')
 
-    grbidx.close()
+        grbidx.close()
 
-    # Move rows of tgt_part which should not deleted to a new
-    # list to accomplish filtering rows with masked data
-    new_tgt_part = []
-    for idx, row in enumerate(tgt_part):
-        if idx not in indices_of_rows_to_delete:
-            new_tgt_part.append(row)
+        # Move rows of tgt_part which should not deleted to a new
+        # list to accomplish filtering rows with masked data
+        new_tgt_part = []
+        for idx, row in enumerate(tgt_part):
+            if idx not in indices_of_rows_to_delete:
+                new_tgt_part.append(row)
 
-    pres_lvls = []
-    pres_lvls_candidates = the_class.CONFIG['era5']['pres_lvls']
+        pres_lvls = []
+        pres_lvls_candidates = the_class.CONFIG['era5']['pres_lvls']
 
-    for row in new_tgt_part:
-        nearest_pres_lvl, nearest_pres_lvl_idx = \
-                get_nearest_element_and_index(
-                    pres_lvls_candidates,
-                    row.mean_sea_level_pressure / 100)
+        for row in new_tgt_part:
+            nearest_pres_lvl, nearest_pres_lvl_idx = \
+                    get_nearest_element_and_index(
+                        pres_lvls_candidates,
+                        row.mean_sea_level_pressure / 100)
 
-        windspd, winddir = compose_wind(
-            row.neutral_wind_at_10_m_u_component,
-            row.neutral_wind_at_10_m_v_component,
-            'o')
-        row.era5_10m_neutral_equivalent_windspd = windspd
-        row.era5_10m_neutral_equivalent_winddir = winddir
+            windspd, winddir = compose_wind(
+                row.neutral_wind_at_10_m_u_component,
+                row.neutral_wind_at_10_m_v_component,
+                'o')
+            row.era5_10m_neutral_equivalent_windspd = windspd
+            row.era5_10m_neutral_equivalent_winddir = winddir
 
-        if tgt_name == 'smap' and row.smap_windspd is not None:
-            row.smap_u_wind, row.smap_v_wind = decompose_wind(
-                row.smap_windspd, winddir, 'o')
+            if tgt_name == 'smap' and row.smap_windspd is not None:
+                row.smap_u_wind, row.smap_v_wind = decompose_wind(
+                    row.smap_windspd, winddir, 'o')
 
-        pres_lvls.append(nearest_pres_lvl)
+            pres_lvls.append(nearest_pres_lvl)
+    except Exception as msg:
+        breakpoint()
+        sys.exit(msg)
 
     return new_tgt_part, pres_lvls
 
@@ -4247,8 +4257,6 @@ def add_era5_pressure_levels(the_class, era5_file_path, tc_dt,
                                                       tgt_name)
     north, west, south, east = area
 
-    grbs = pygrib.open(era5_file_path)
-    grbs.close()
     count = 0
 
     grbidx = pygrib.index(era5_file_path, 'dataTime')
@@ -4343,17 +4351,17 @@ def add_era5_pressure_levels(the_class, era5_file_path, tc_dt,
                 lat1_idx, lat2_idx, lon1_idx, lon2_idx = \
                     latlon_indices
 
+                skip_row = False
                 # Check out whether there is masked cell in square
                 if masked_data:
-                    skip_row = False
                     for tmp_lat_idx in [lat1_idx, lat2_idx]:
                         for tmp_lon_idx in [lon1_idx, lon2_idx]:
                             if data.mask[tmp_lat_idx][tmp_lon_idx]:
                                 skip_row = True
                                 indices_of_rows_to_delete.add(
                                     row_idx)
-                    if skip_row:
-                        continue
+                if skip_row:
+                    continue
 
                 square_data = data[lat1_idx:lat2_idx+1,
                                    lon1_idx:lon2_idx+1]
@@ -4426,24 +4434,23 @@ def value_of_pt_in_era5_square(data, lats, lons, pt_lat, pt_lon):
     return float(value)
 
 
-def gen_match_tablenname(the_class, src_1, src_2):
-    return f'match_of_{src_1}_and_{src_2}_{the_class.basin}'
+def gen_match_tablenname(the_class, sources):
+    table_name = f'match_of_{sources[0]}'
+    for name in sources[1:]:
+        table_name += f'_and_{name}'
+    table_name += f'_{the_class.basin}'
+
+    return table_name
 
 
-def create_match_table(the_class, src_1, src_2):
-    src_hit = False
-    for name in the_class.CONFIG['compare_and_validate_targets']:
-        if name in [src_1, src_2]:
-            src_hit = True
-            if src_2 != name:
-                src_1 = src_2
-                src_2 = name
-    if not src_hit:
-        the_class.logger.error(
-            'Sources of match have not been considered')
-        exit()
+def create_match_table(the_class, sources):
+    for name in sources[1:]:
+        if name not in the_class.CONFIG['compare_and_validate_targets']:
+            the_class.logger.error((f"""Source {name} has not been """
+                                    f"""considered"""))
+            sys.exit(1)
 
-    table_name = gen_match_tablenname(the_class, src_1, src_2)
+    table_name = gen_match_tablenname(the_class, sources)
 
     class Match(object):
         pass
@@ -4477,9 +4484,10 @@ def gen_validation_tablename(the_class, base_name, tgt_name):
     return f'{tgt_name}_validation_by_{base_name}_{the_class.basin}'
 
 
-def create_sfmr_validation_table(the_class, tgt_name):
+def create_sfmr_validation_table(the_class, tgt_name, tag=None):
     table_name = gen_validation_tablename(the_class, 'sfmr', tgt_name)
-    table_name = f'{table_name}_{the_class.model_tag}'
+    if tag is not None:
+        table_name = f'{table_name}_{tag}'
 
     class Validation(object):
         pass
@@ -4619,6 +4627,8 @@ def jointplot_kernel_dist_of_imbalance_windspd(dir, y_test,
         g.plot_joint(plt.scatter, c='g', s=30, linewidth=1,
                      marker="+")
         g.ax_joint.plot([0, 70], [0, 70], 'r-', linewidth=2)
+        plt.xlabel('SMAPW (m/s)')
+        plt.ylabel('SSMAPW (m/s)')
         plt.savefig((f'{dir}kde_of_y_test_y_pred.png'))
         plt.close()
     except Exception as msg:
@@ -4627,6 +4637,64 @@ def jointplot_kernel_dist_of_imbalance_windspd(dir, y_test,
 
 
 def box_plot_windspd(dir, y_test, y_pred):
+    # Classify tropical cyclone wind according to wind speed
+    split_values = [0, 15, 25, 35, 45, 999]
+
+    try:
+        if not (type(y_pred) is dict):
+            df = pd.DataFrame({'y_test': y_test, 'y_pred': y_pred})
+            df['y_bias'] = df['y_pred'] - df['y_test']
+            df['windspd_range'] = ''
+        else:
+            df_list = []
+            for key in y_pred.keys():
+                df_tmp = pd.DataFrame({'y_test': y_test,
+                                       'y_pred': y_pred[key],
+                                       'name': [key] * len(y_test)
+                                      })
+                df_list.append(df_tmp)
+
+            df = pd.concat(df_list).reset_index(drop=True)
+            df['y_bias'] = df['y_pred'] - df['y_test']
+            df['windspd_range'] = ''
+
+        sorted_order = []
+        for idx, val in enumerate(split_values):
+            if idx == len(split_values) - 1:
+                break
+            left = val
+            right = split_values[idx + 1]
+            indices = df.loc[(df['y_test'] >= left)
+                             & (df['y_test'] < right)].index
+            if idx + 1 < len(split_values) - 1:
+                label = f'{left} - {right}'
+            else:
+                label = f'> {left}'
+            df.loc[indices, ['windspd_range']] = label
+            sorted_order.append(label)
+
+        plt.figure(figsize=(7, 7))
+        sns.set_style("whitegrid")
+        # sns.boxplot(x='windspd_range', y='y_bias', data=df,
+        #             order=sorted_order)
+        if not (type(y_pred) is dict):
+            sns.catplot(x="windspd_range", y="y_bias", kind="violin",
+                        data=df, order=sorted_order)
+        else:
+            sns.catplot(x="windspd_range", y="y_bias", kind="violin",
+                        hue='name', data=df, order=sorted_order)
+        sns.despine(top=False, bottom=False, left=False, right=False)
+        plt.xlabel('Wind speed range (m/s)')
+        plt.ylabel('SSMAPW - SMAPW (m/s)')
+        plt.savefig((f'{dir}bias_box_plot.png'), dpi=300)
+        plt.close()
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+    return
+
+
+def box_plot_windspd_old(dir, y_test, y_pred):
     # Classify tropical cyclone wind according to wind speed
     split_values = [0, 15, 25, 35, 45, 999]
 
@@ -4643,20 +4711,28 @@ def box_plot_windspd(dir, y_test, y_pred):
             right = split_values[idx + 1]
             indices = df.loc[(df['y_test'] >= left)
                              & (df['y_test'] < right)].index
-            label = f'{left} - {right}'
+            if idx + 1 < len(split_values) - 1:
+                label = f'{left} - {right}'
+            else:
+                label = f'> {left}'
             df.loc[indices, ['windspd_range']] = label
             sorted_order.append(label)
 
-        sns.set()
-        sns.boxplot(x='windspd_range', y='y_bias', data=df,
-                    order=sorted_order)
-        plt.savefig((f'{dir}bias_box_plot.png'))
+        plt.figure(figsize=(7, 7))
+        sns.set_style("whitegrid")
+        # sns.boxplot(x='windspd_range', y='y_bias', data=df,
+        #             order=sorted_order)
+        sns.catplot(x="windspd_range", y="y_bias", kind="violin",
+                    data=df, order=sorted_order)
+        sns.despine(top=False, bottom=False, left=False, right=False)
+        plt.xlabel('Wind speed range (m/s)')
+        plt.ylabel('SSMAPW - SMAPW (m/s)')
+        plt.savefig((f'{dir}bias_box_plot.png'), dpi=300)
         plt.close()
     except Exception as msg:
         breakpoint()
         exit(msg)
     return
-
 
 def undersample(df, tgt_colname):
     try:
@@ -4691,8 +4767,17 @@ def undersample(df, tgt_colname):
     return undersampled_df
 
 
-def get_combined_data(the_class, sample):
-    train, test = get_train_test(the_class, sample)
+def get_combined_data(the_class):
+    if (not the_class.smogn_final
+            and not the_class.smogn_hyperopt):
+        train, test = get_original_train_test(the_class)
+    elif the_class.smogn_final:
+        train, test = get_train_test_with_final_smogn_params(the_class)
+    elif the_class.smogn_hyperopt:
+        # train, test = hyperopt_smogn_params(the_class)
+        the_class.error('Have not considered this smogn_hyperopt')
+        sys.exit(1)
+
     if train is None or test is None:
         return None, None, None, None
 
@@ -4704,66 +4789,24 @@ def get_combined_data(the_class, sample):
     return X_train, y_train, X_test, y_test
 
 
-def get_train_test(the_class, sample):
-    df = None
-    all_basins = the_class.CONFIG['ibtracs']['urls'].keys()
-    if the_class.center:
-        center_clause = (f"""WHERE x >= -8 and x <= 8 """
-                         f"""and y >= -8 and y <= 8""")
-    else:
-        center_clause = ''
-    if the_class.borrow:
-        borrow_clause = 'and smap_windspd > 40'
-    else:
-        borrow_clause = ''
-
-    if the_class.basin == 'all':
-        for basin in all_basins:
-            if basin == 'sa':
-                continue
-            table_name = f'tc_smap_era5_{basin}'
-            tmp_df = pd.read_sql(
-                f'SELECT * FROM {table_name} {center_clause}',
-                the_class.engine)
-            if df is None:
-                df = tmp_df
-            else:
-                df = df.append(tmp_df)
-    else:
-        table_name = f'tc_smap_era5_{the_class.basin}'
-        df = pd.read_sql(
-            f'SELECT * FROM {table_name} {center_clause}',
-            the_class.engine)
-        if the_class.borrow:
-            for basin in all_basins:
-                if basin == 'sa' or basin == the_class.basin:
-                    continue
-                table_name = f'tc_smap_era5_{basin}'
-                tmp_df = pd.read_sql(
-                    (f"""SELECT * FROM {table_name} """
-                     f"""{center_clause} {borrow_clause}"""),
-                    the_class.engine)
-                if df is None:
-                    df = tmp_df
-                else:
-                    df = df.append(tmp_df)
+def get_df_of_era5_smap(the_class):
+    table_name = f'tc_smap_era5_{the_class.basin}'
+    df = pd.read_sql(
+        f'SELECT * FROM {table_name}',
+        the_class.engine)
 
     df.drop(the_class.CONFIG['regression']['useless_columns'][
         'smap_era5'], axis=1, inplace=True)
 
-    if sample:
-        df = shuffle(df)
-        rows, cols = df.shape
-        cut_rows = int(rows * 0.3)
-        df = df[:cut_rows]
+    return df
 
+
+def plot_df_hist(the_class, df, fig_dir, group_size):
     cols = list(df.columns)
     cols_num = len(df.columns)
-    group_size = 1
     groups_num = math.ceil(cols_num / group_size)
-    fig_dir = the_class.CONFIG['result']['dirs']['fig'][
-        'hist_of_regression_features']['original']
     os.makedirs(fig_dir, exist_ok=True)
+
     for i in range(groups_num):
         try:
             start = i * group_size
@@ -4774,163 +4817,6 @@ def get_train_test(the_class, sample):
         except Exception as msg:
             breakpoint()
             exit(msg)
-
-    if 'normalization' in the_class.instructions:
-        # Normalization
-        normalized_columns = df.columns.drop(the_class.y_name)
-        scaler = MinMaxScaler()
-        df[normalized_columns] = scaler.fit_transform(
-            df[normalized_columns])
-
-        fig_dir = the_class.CONFIG['result']['dirs']['fig'][
-            'hist_of_regression_features'][
-                'after_normalization']
-        os.makedirs(fig_dir, exist_ok=True)
-        for i in range(groups_num):
-            try:
-                start = i * group_size
-                end = min(cols_num, (i + 1) * group_size)
-                save_features_histogram(the_class, df,
-                                        cols[start:end], fig_dir)
-            except Exception as msg:
-                breakpoint()
-                exit(msg)
-
-    smogn_suffix = ''
-    lgb_model_dir = ('/Users/lujingze/Programming/SWFusion/'
-                     'regression/tc/lightgbm/model/')
-
-    if the_class.smogn:
-        # smogn_dir = (f"""/Users/lujingze/Programming/SWFusion/"""
-        #              f"""regression/tc/lightgbm/smogn/only_na/""")
-        # smogn_params_name = (f"""k_7_pert_0.02_smap_extreme_0.9"""
-        #                      f"""_manual_50""")
-        # the_class.smogn_setting_dir = (f"""{smogn_dir}"""
-        #                                f"""{smogn_params_name}/""")
-        # os.makedirs(the_class.smogn_setting_dir, exist_ok=True)
-
-        # specify phi relevance values
-        rg_mtrx = [
-            [5, 0, 0],  # over-sample ("minority")
-            [20, 0, 0],  # under-sample ("majority")
-            [35, 0, 0],  # under-sample
-            [50, 1, 0],  # under-sample
-        ]
-
-        for part in rg_mtrx:
-            if part[1] == 1:
-                smogn_suffix += f'_{part[0]}'
-
-    train_path = f'{lgb_model_dir}train'
-    test_path = f'{lgb_model_dir}test'
-    if the_class.smogn:
-        train_path += f'_smogn{smogn_suffix}'
-        test_path += f'_smogn{smogn_suffix}'
-    train_path += '.pkl'
-    test_path += '.pkl'
-
-    if the_class.load:
-        with open(train_path, 'rb') as f:
-            train = pickle.load(f)
-        with open(test_path, 'rb') as f:
-            test = pickle.load(f)
-
-        return train, test
-
-    if the_class.plot_dist:
-        df_smogn_path = f'{lgb_model_dir}df_smogn.pkl'
-        with open(df_smogn_path, 'rb') as f:
-            df_smogn = pickle.load(f)
-        # plot y distribution
-        sns.kdeplot(df['smap_windspd'], label='Original')
-        sns.kdeplot(df_smogn['smap_windspd'], label='Modified')
-        # add labels of x and y axis
-        plt.xlabel('SMAP wind speed (m/s)')
-        plt.ylabel('Probability')
-        # plt.savefig((f"""{the_class.smogn_setting_dir}"""
-        #              f"""dist_of_trainset_comparison.png"""))
-        plt.savefig((f"""{lgb_model_dir}"""
-                     f"""comparison_of_dist.png"""))
-        plt.close()
-
-        sys.exit(1)
-
-    if the_class.smogn:
-        # conduct smogn
-        df_smogn = smogn.smoter(
-
-            # main arguments
-            data=df,                 # pandas dataframe
-            y='smap_windspd',        # string ('header name')
-            k=7,                     # positive integer (k < n)
-            pert=0.02,               # real number (0 < R < 1)
-            samp_method='extreme',   # string ('balance' or 'extreme')
-            drop_na_col=True,        # boolean (True or False)
-            drop_na_row=True,        # boolean (True or False)
-            replace=False,           # boolean (True or False)
-
-            # phi relevance arguments
-            rel_thres=0.9,          # real number (0 < R < 1)
-            rel_method='manual',     # string ('auto' or 'manual')
-            # rel_xtrm_type='both',  # unused (rel_method='manual')
-            # rel_coef=1.50,         # unused (rel_method='manual')
-            rel_ctrl_pts_rg=rg_mtrx  # 2d array (format: [x, y])
-        )
-        # dimensions - original data
-        print(df.shape)
-        # dimensions - modified data
-        print(df_smogn.shape)
-
-        # plot y distribution
-        sns.kdeplot(df['smap_windspd'], label='Original')
-        sns.kdeplot(df_smogn['smap_windspd'], label='Modified')
-        # add labels of x and y axis
-        plt.xlabel('SMAP wind speed (m/s)')
-        plt.ylabel('Probability')
-        # plt.savefig((f"""{the_class.smogn_setting_dir}"""
-        #              f"""dist_of_trainset_comparison.png"""))
-        plt.savefig((f"""{lgb_model_dir}"""
-                     f"""comparison_of_dist.png"""))
-        plt.close()
-
-        # save SMOGNed df
-        # df_smogn.to_pickle((f"""{the_class.smogn_setting_dir}"""
-        #                        f"""df_smogn.pkl"""))
-        df_smogn.to_pickle((f"""{lgb_model_dir}df_smogn"""
-                            f"""{smogn_suffix}.pkl"""))
-
-        df = df_smogn
-
-    try:
-        y_full = df[the_class.y_name]
-        indices_to_delete = []
-        bins = np.linspace(0, y_full.max(), int(y_full.max() / 5))
-        y_binned = np.digitize(y_full, bins)
-
-        unique, counts = np.unique(y_binned, return_counts=True)
-        for idx, val in enumerate(counts):
-            if val < 2:
-                indices_to_delete.append(idx)
-        bins = np.delete(bins, indices_to_delete)
-        y_binned = np.digitize(y_full, bins)
-
-        train, test = train_test_split(df, test_size=0.2,
-                                       stratify=y_binned)
-    except Exception as msg:
-        breakpoint()
-        exit(msg)
-
-    print(f'Dataset shape: {df.shape}')
-    print(f'Train set shape: {train.shape}')
-    print(f'Test set shape: {test.shape}')
-
-    train.reset_index(drop=True, inplace=True)
-    test.reset_index(drop=True, inplace=True)
-
-    train.to_pickle(train_path)
-    test.to_pickle(test_path)
-
-    return train, test
 
 
 def save_features_histogram(the_class, df, columns, fig_dir):
@@ -4952,6 +4838,567 @@ def save_features_histogram(the_class, df, columns, fig_dir):
     fig_name = f'{fig_name}.png'
     plt.savefig(f'{fig_dir}{fig_name}')
     plt.close(fig)
+
+
+def smogn_hyperparameter_space(the_class):
+    space = dict(
+        k=hp.quniform('k', 3, 12, 1),
+        pert=hp.uniform('pert', 0.01, 0.2),
+        samp_method='extreme',
+        drop_na_col=True,        # boolean (True or False)
+        drop_na_row=True,        # boolean (True or False)
+        replace=False,           # boolean (True or False)
+        rel_thres=hp.uniform('rel_thres', 0.50, 0.99),
+        rel_method='auto',     # string ('auto' or 'manual')
+        rel_xtrm_type='high',
+        rel_coef=hp.uniform('rel_coef', 1.50, 10.00)
+        # rel_ctrl_pts_rg=[
+        #     [5, 0, 0],
+        #     [20, 0, 0],
+        #     [hp.quniform('largest_major', 21, 49, 2), 0, 0],
+        #     [50, 1, 0],
+        # ],
+    )
+
+    return space
+
+
+def hyperopt_smogn_params(the_class):
+    param_space = smogn_hyperparameter_space()
+    objective = get_objective(self.lgb_train)
+    objective.i = 0
+    trials = Trials()
+    best = fmin(fn=objective,
+                space=param_space,
+                algo=tpe.suggest,
+                max_evals=maxevals,
+                trials=trials)
+
+
+def hyperopt_smogn_params_old(the_class):
+    smogn_dir = (f"""/Users/lujingze/Programming/SWFusion/"""
+                 f"""regression/tc/lightgbm/smogn/"""
+                 f"""only_{the_class.basin}/""")
+
+    # specify phi relevance values
+    rg_mtrx = [
+        [5, 0, 0],  # over-sample ("minority")
+        [20, 0, 0],  # under-sample ("majority")
+        [35, 0, 0],  # under-sample
+        [50, 1, 0],  # under-sample
+    ]
+
+    smogn_params = dict(
+        # main arguments
+        data=df,                 # pandas dataframe
+        y='smap_windspd',        # string ('header name')
+        k=7,                     # positive integer (k < n)
+        pert=0.02,               # real number (0 < R < 1)
+        samp_method='extreme',   # string ('balance' or 'extreme')
+        drop_na_col=True,        # boolean (True or False)
+        drop_na_row=True,        # boolean (True or False)
+        replace=False,           # boolean (True or False)
+
+        # phi relevance arguments
+        rel_thres=0.9,          # real number (0 < R < 1)
+        rel_method='manual',     # string ('auto' or 'manual')
+        # rel_xtrm_type='both',  # unused (rel_method='manual')
+        # rel_coef=1.50,         # unused (rel_method='manual')
+        rel_ctrl_pts_rg=rg_mtrx  # 2d array (format: [x, y])
+    )
+
+    for part in rg_mtrx:
+        if part[1] == 1:
+            smogn_suffix += f'_{part[0]}'
+
+    smogn_params_name = (f"""k_{smogn_params["k"]}"""
+                         f"""_pert_{smogn_params["pert"]}"""
+                         f"""_samp_{smogn_params["samp_method"]}"""
+                         f"""_{smogn_params["rel_thres"]}"""
+                         f"""_{smogn_params["rel_method"]}"""
+                         f"""{smogn_suffix}""")
+    the_class.smogn_setting_dir = (f"""{smogn_dir}"""
+                                   f"""{smogn_params_name}/""")
+    os.makedirs(the_class.smogn_setting_dir, exist_ok=True)
+
+    save_dir = the_class.smogn_setting_dir
+
+    train_path = f'{save_dir}train'
+    test_path = f'{save_dir}test'
+    if the_class.smogn and not the_class.smogn_hyperopt:
+        train_path += f'_smogn{smogn_suffix}'
+        test_path += f'_smogn{smogn_suffix}'
+    elif the_class.smogn:
+        train_path += '_smogn'
+        test_path = f'{smogn_dir}test'
+    else:
+        the_class.error(('Have not considered the situation that '
+                         'not using SMOGN'))
+        sys.exit(1)
+    train_path += '.pkl'
+    test_path += '.pkl'
+
+    df_smogn = smogn.smoter(**smogn_params)
+    """
+    df_smogn = smogn.smoter(
+
+        # main arguments
+        data=df,                 # pandas dataframe
+        y='smap_windspd',        # string ('header name')
+        k=7,                     # positive integer (k < n)
+        pert=0.02,               # real number (0 < R < 1)
+        samp_method='extreme',   # string ('balance' or 'extreme')
+        drop_na_col=True,        # boolean (True or False)
+        drop_na_row=True,        # boolean (True or False)
+        replace=False,           # boolean (True or False)
+
+        # phi relevance arguments
+        rel_thres=0.9,          # real number (0 < R < 1)
+        rel_method='manual',     # string ('auto' or 'manual')
+        # rel_xtrm_type='both',  # unused (rel_method='manual')
+        # rel_coef=1.50,         # unused (rel_method='manual')
+        rel_ctrl_pts_rg=rg_mtrx  # 2d array (format: [x, y])
+    )
+    """
+    # dimensions - original data
+    print(df.shape)
+    # dimensions - modified data
+    print(df_smogn.shape)
+
+    sns.set_style("whitegrid")
+    # plot y distribution
+    sns.kdeplot(df['smap_windspd'], label='Original')
+    sns.kdeplot(df_smogn['smap_windspd'], label='Modified')
+    # add labels of x and y axis
+    plt.xlabel('SMAP wind speed (m/s)')
+    plt.ylabel('Probability')
+    # plt.savefig((f"""{the_class.smogn_setting_dir}"""
+    #              f"""dist_of_trainset_comparison.png"""))
+    plt.savefig((f"""{save_dir}"""
+                 f"""comparison_of_dist.png"""),
+                dpi=300)
+    plt.close()
+
+    print(f'Dataset shape: {df.shape}')
+    print(f'Train set shape: {train.shape}')
+    print(f'Test set shape: {test.shape}')
+
+    train.reset_index(drop=True, inplace=True)
+    test.reset_index(drop=True, inplace=True)
+
+    train.to_pickle(train_path)
+    test.to_pickle(test_path)
+
+    return train, test
+
+def get_train_test_with_final_smogn_params(the_class):
+    df = get_df_of_era5_smap(the_class)
+    if the_class.load:
+        return load_train_test_with_final_smogn_params(the_class, df)
+    else:
+        ori_dataset_path = the_class.CONFIG['regression']['dirs']['tc'][
+            'dataset']['original']
+        train_path = ori_dataset_path['train']
+        test_path = ori_dataset_path['test']
+
+        with open(train_path, 'rb') as f:
+            train = pickle.load(f)
+        with open(test_path, 'rb') as f:
+            test = pickle.load(f)
+
+        smogn_final_params = the_class.CONFIG['smogn']['final_params']
+        smogn_final_params['data'] = train
+        smogn_final_params['y'] = the_class.y_name
+        train_smogn = smogn.smoter(**smogn_final_params)
+
+        print(f'train shape: {train.shape}')
+        print(f'train_smogn shape: {train_smogn.shape}')
+        print(f'test shape: {test.shape}')
+
+        train_smogn_path = the_class.CONFIG['regression'][
+            'dirs']['tc']['dataset']['smogn_final'][
+                'smogn_on_train']['train']
+
+        train_smogn.to_pickle(train_smogn_path)
+
+        return train_smogn, test
+
+
+def load_train_test_with_final_smogn_params(the_class, df):
+    dataset_dir = the_class.CONFIG['regression']['dirs']['tc'][
+            'dataset']
+    smogn_final_dir = dataset_dir['smogn_final']
+    original_dir = dataset_dir['original']
+
+    if the_class.smogn_target == 'all':
+        smogn_final_on_all_dir = smogn_final_dir['smogn_on_all_data']
+        df_smogn_path = smogn_final_on_all_dir['dataframe_smogn']
+        train_smogn_path = smogn_final_on_all_dir['train']
+        test_smogn_path = smogn_final_on_all_dir['test']
+        distribution_comparison_path = smogn_final_on_all_dir[
+            'distribution_comparison']
+
+        try:
+            with open(df_smogn_path, 'rb') as f:
+                df_smogn = pickle.load(f)
+            with open(train_smogn_path, 'rb') as f:
+                train_smogn = pickle.load(f)
+            with open(test_smogn_path, 'rb') as f:
+                test_smogn = pickle.load(f)
+
+            sns.kdeplot(df['smap_windspd'], label='Original')
+            sns.kdeplot(df_smogn['smap_windspd'], label='Modified')
+            plt.xlabel('SMAP wind speed (m/s)')
+            plt.ylabel('Probability')
+            plt.savefig(distribution_comparison_path)
+            plt.close()
+        except Exception as msg:
+            breakpoint()
+            sys.exit(msg)
+
+        return train_smogn, test_smogn
+
+    elif the_class.smogn_target == 'train':
+        smogn_final_on_train_dir = smogn_final_dir['smogn_on_train']
+        train_path = original_dir['train']
+        test_path = original_dir['test']
+        train_smogn_path = smogn_final_on_train_dir['train']
+        distribution_comparison_path = smogn_final_on_train_dir[
+            'distribution_comparison']
+
+        try:
+            with open(train_path, 'rb') as f:
+                train = pickle.load(f)
+            with open(test_path, 'rb') as f:
+                test = pickle.load(f)
+            with open(train_smogn_path, 'rb') as f:
+                train_smogn = pickle.load(f)
+
+            sns.kdeplot(train['smap_windspd'], label='Original')
+            sns.kdeplot(train_smogn['smap_windspd'], label='Modified')
+            plt.xlabel('SMAP wind speed (m/s)')
+            plt.ylabel('Probability')
+            plt.savefig(distribution_comparison_path)
+            plt.close()
+        except Exception as msg:
+            breakpoint()
+            sys.exit(msg)
+
+        return train_smogn, test
+
+    else:
+        the_class.logger.error(('Params error: Check `smogn_target`, '
+                                'Should be `all` or `train`'))
+        sys.exit(1)
+
+
+def get_train_test(the_class):
+    try:
+        df = get_df_of_era5_smap(the_class)
+        fig_dir = the_class.CONFIG['result']['dirs']['fig'][
+            'hist_of_regression_features']['original']
+        plot_df_hist(the_class, df, fig_dir, 1)
+    except Exception as msg:
+        breakpoint()
+        sys.exit(msg)
+
+    # Load original dataset
+    if (not the_class.smogn_final
+        and not the_class.smogn_hyperopt
+        and the_class.load):
+        original_dataset_dir = the_class.CONFIG['regression']['dirs'][
+            'tc']['dataset']['original']
+        with open(original_dataset_dir['train'], 'rb') as f:
+            train = pickle.load(f)
+        with open(original_dataset_dir['test'], 'rb') as f:
+            test = pickle.load(f)
+
+        print(f'train: {train.shape}')
+        print(f'test: {test.shape}')
+
+        return train, test
+
+    if not the_class.smogn_final:
+        the_class.error(('Have not considered this situation: '
+                         'not loading dataset when not using '
+                         'final SMOGN configuration'))
+        sys.exit(1)
+    else:
+        train, test = load_train_test_with_final_smogn_params(
+            the_class, df)
+
+        print(f'train: {train.shape}')
+        print(f'test: {test.shape}')
+
+        return train, test
+
+
+def get_original_train_test(the_class):
+    ori_dataset_path = the_class.CONFIG['regression']['dirs']['tc'][
+        'dataset']['original']
+    train_path = ori_dataset_path['train']
+    test_path = ori_dataset_path['test']
+    if the_class.load:
+        with open(train_path, 'rb') as f:
+            train = pickle.load(f)
+        with open(test_path, 'rb') as f:
+            test = pickle.load(f)
+    else:
+        try:
+            df = get_df_of_era5_smap(the_class)
+
+            y_full = df[the_class.y_name]
+            indices_to_delete = []
+            bins = np.linspace(0, y_full.max(), int(y_full.max() / 5))
+            y_binned = np.digitize(y_full, bins)
+
+            unique, counts = np.unique(y_binned, return_counts=True)
+            for idx, val in enumerate(counts):
+                if val < 2:
+                    indices_to_delete.append(idx)
+            bins = np.delete(bins, indices_to_delete)
+            y_binned = np.digitize(y_full, bins)
+
+            train, test = train_test_split(df, test_size=0.2,
+                                           stratify=y_binned)
+            train.reset_index(drop=True, inplace=True)
+            test.reset_index(drop=True, inplace=True)
+
+            train.to_pickle(train_path)
+            test.to_pickle(test_path)
+            breakpoint()
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
+
+    print(f'Train set shape: {train.shape}')
+    print(f'Test set shape: {test.shape}')
+
+    return train, test
+
+
+def get_train_test_old(the_class):
+    table_name = f'tc_smap_era5_{the_class.basin}'
+    df = pd.read_sql(
+        f'SELECT * FROM {table_name}',
+        the_class.engine)
+
+    df.drop(the_class.CONFIG['regression']['useless_columns'][
+        'smap_era5'], axis=1, inplace=True)
+
+    cols = list(df.columns)
+    cols_num = len(df.columns)
+    group_size = 1
+    groups_num = math.ceil(cols_num / group_size)
+    fig_dir = the_class.CONFIG['result']['dirs']['fig'][
+        'hist_of_regression_features']['original']
+    os.makedirs(fig_dir, exist_ok=True)
+    for i in range(groups_num):
+        try:
+            start = i * group_size
+            end = min(cols_num, (i + 1) * group_size)
+            cols_to_draw = cols[start:end]
+            save_features_histogram(the_class, df, cols_to_draw,
+                                    fig_dir)
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
+
+    smogn_suffix = ''
+    lgb_model_dir = ('/Users/lujingze/Programming/SWFusion/'
+                     'regression/tc/lightgbm/model/')
+
+    if the_class.smogn:
+        smogn_dir = (f"""/Users/lujingze/Programming/SWFusion/"""
+                     f"""regression/tc/lightgbm/smogn/"""
+                     f"""only_{the_class.basin}/""")
+
+        # specify phi relevance values
+        rg_mtrx = [
+            [5, 0, 0],  # over-sample ("minority")
+            [20, 0, 0],  # under-sample ("majority")
+            [35, 0, 0],  # under-sample
+            [50, 1, 0],  # under-sample
+        ]
+
+        smogn_params = dict(
+            # main arguments
+            data=df,                 # pandas dataframe
+            y='smap_windspd',        # string ('header name')
+            k=7,                     # positive integer (k < n)
+            pert=0.02,               # real number (0 < R < 1)
+            samp_method='extreme',   # string ('balance' or 'extreme')
+            drop_na_col=True,        # boolean (True or False)
+            drop_na_row=True,        # boolean (True or False)
+            replace=False,           # boolean (True or False)
+
+            # phi relevance arguments
+            rel_thres=0.9,          # real number (0 < R < 1)
+            rel_method='manual',     # string ('auto' or 'manual')
+            # rel_xtrm_type='both',  # unused (rel_method='manual')
+            # rel_coef=1.50,         # unused (rel_method='manual')
+            rel_ctrl_pts_rg=rg_mtrx  # 2d array (format: [x, y])
+        )
+
+        for part in rg_mtrx:
+            if part[1] == 1:
+                smogn_suffix += f'_{part[0]}'
+
+        smogn_params_name = (f"""k_{smogn_params["k"]}"""
+                             f"""_pert_{smogn_params["pert"]}"""
+                             f"""_samp_{smogn_params["samp_method"]}"""
+                             f"""_{smogn_params["rel_thres"]}"""
+                             f"""_{smogn_params["rel_method"]}"""
+                             f"""{smogn_suffix}""")
+        the_class.smogn_setting_dir = (f"""{smogn_dir}"""
+                                       f"""{smogn_params_name}/""")
+        os.makedirs(the_class.smogn_setting_dir, exist_ok=True)
+
+    if the_class.smogn_hyperopt:
+        save_dir = the_class.smogn_setting_dir
+    else:
+        save_dir = lgb_model_dir
+
+    train_path = f'{save_dir}train'
+    test_path = f'{save_dir}test'
+    if the_class.smogn and not the_class.smogn_hyperopt:
+        train_path += f'_smogn{smogn_suffix}'
+        test_path += f'_smogn{smogn_suffix}'
+    elif the_class.smogn:
+        train_path += '_smogn'
+        test_path = f'{smogn_dir}test'
+    else:
+        the_class.error(('Have not considered the situation that '
+                         'not using SMOGN'))
+        sys.exit(1)
+    train_path += '.pkl'
+    test_path += '.pkl'
+
+    if the_class.load:
+        with open(train_path, 'rb') as f:
+            train = pickle.load(f)
+        with open(test_path, 'rb') as f:
+            test = pickle.load(f)
+
+        print(f'Dataset shape: {df.shape}')
+        print(f'Train set shape: {train.shape}')
+        print(f'Test set shape: {test.shape}')
+
+        return train, test
+
+    if the_class.plot_dist:
+        if not the_class.smogn:
+            the_class.error(('Must use SMOGN before plotting '
+                             'distribution change'))
+            sys.exit(1)
+        if the_class.smogn_hyperopt:
+            df_smogn_path = f'{lgb_model_dir}df_smogn.pkl'
+            with open(df_smogn_path, 'rb') as f:
+                df_smogn = pickle.load(f)
+            # plot y distribution
+            sns.kdeplot(df['smap_windspd'], label='Original')
+            sns.kdeplot(df_smogn['smap_windspd'], label='Modified')
+        else:
+            df_smogn_path = f'{lgb_model_dir}df_smogn.pkl'
+            with open(df_smogn_path, 'rb') as f:
+                df_smogn = pickle.load(f)
+            # plot y distribution
+            sns.kdeplot(df['smap_windspd'], label='Original')
+            sns.kdeplot(df_smogn['smap_windspd'], label='Modified')
+        # add labels of x and y axis
+        plt.xlabel('SMAP wind speed (m/s)')
+        plt.ylabel('Probability')
+        # plt.savefig((f"""{the_class.smogn_setting_dir}"""
+        #              f"""dist_of_trainset_comparison.png"""))
+        plt.savefig((f"""{save_dir}"""
+                     f"""comparison_of_dist.png"""))
+        plt.close()
+
+        sys.exit(1)
+
+    if the_class.smogn:
+        # conduct smogn
+        df_smogn = smogn.smoter(**smogn_params)
+        """
+        df_smogn = smogn.smoter(
+
+            # main arguments
+            data=df,                 # pandas dataframe
+            y='smap_windspd',        # string ('header name')
+            k=7,                     # positive integer (k < n)
+            pert=0.02,               # real number (0 < R < 1)
+            samp_method='extreme',   # string ('balance' or 'extreme')
+            drop_na_col=True,        # boolean (True or False)
+            drop_na_row=True,        # boolean (True or False)
+            replace=False,           # boolean (True or False)
+
+            # phi relevance arguments
+            rel_thres=0.9,          # real number (0 < R < 1)
+            rel_method='manual',     # string ('auto' or 'manual')
+            # rel_xtrm_type='both',  # unused (rel_method='manual')
+            # rel_coef=1.50,         # unused (rel_method='manual')
+            rel_ctrl_pts_rg=rg_mtrx  # 2d array (format: [x, y])
+        )
+        """
+        # dimensions - original data
+        print(df.shape)
+        # dimensions - modified data
+        print(df_smogn.shape)
+
+        sns.set_style("whitegrid")
+        # plot y distribution
+        sns.kdeplot(df['smap_windspd'], label='Original')
+        sns.kdeplot(df_smogn['smap_windspd'], label='Modified')
+        # add labels of x and y axis
+        plt.xlabel('SMAP wind speed (m/s)')
+        plt.ylabel('Probability')
+        # plt.savefig((f"""{the_class.smogn_setting_dir}"""
+        #              f"""dist_of_trainset_comparison.png"""))
+        plt.savefig((f"""{save_dir}"""
+                     f"""comparison_of_dist.png"""),
+                    dpi=300)
+        plt.close()
+
+        # save SMOGNed df
+        # df_smogn.to_pickle((f"""{the_class.smogn_setting_dir}"""
+        #                        f"""df_smogn.pkl"""))
+        if not the_class.smogn_hyperopt:
+            df_smogn.to_pickle((f"""{save_dir}df_smogn"""
+                                f"""{smogn_suffix}.pkl"""))
+
+        df = df_smogn
+
+    try:
+        y_full = df[the_class.y_name]
+        indices_to_delete = []
+        bins = np.linspace(0, y_full.max(), int(y_full.max() / 5))
+        y_binned = np.digitize(y_full, bins)
+
+        unique, counts = np.unique(y_binned, return_counts=True)
+        for idx, val in enumerate(counts):
+            if val < 2:
+                indices_to_delete.append(idx)
+        bins = np.delete(bins, indices_to_delete)
+        y_binned = np.digitize(y_full, bins)
+
+        train, test = train_test_split(df, test_size=0.2,
+                                       stratify=y_binned)
+        breakpoint()
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+    print(f'Dataset shape: {df.shape}')
+    print(f'Train set shape: {train.shape}')
+    print(f'Test set shape: {test.shape}')
+
+    train.reset_index(drop=True, inplace=True)
+    test.reset_index(drop=True, inplace=True)
+
+    train.to_pickle(train_path)
+    test.to_pickle(test_path)
+
+    return train, test
 
 
 def show_correlation_heatmap(data):
@@ -4986,3 +5433,261 @@ def show_diff_count(the_class, diff_count):
     except Exception as msg:
         breakpoint()
         sys.exit(msg)
+
+
+def match_exists_during_tc_interval(the_class, hours, tc, next_tc,
+                                    Match):
+    def custom_return(success, hit_dt=None, match_dt=None,
+                      spatial_temporal_info=None,
+                      hour_info_pt_idx=None):
+        return {'success': success, 'hit_dt': hit_dt,
+                'match_dt': match_dt,
+                'spatial_temporal_info': spatial_temporal_info,
+                'hour_info_pt_idx': hour_info_pt_idx}
+
+    hit_dt = []
+    match_dt = []
+    for h in range(hours):
+        interped_tc = interp_tc(the_class, h, tc, next_tc)
+
+        # Check whether the match record of sources near
+        # this TC exists
+        same_sid_dt_query = the_class.session.query(Match).filter(
+            Match.date_time == interped_tc.date_time,
+            Match.tc_sid == interped_tc.sid)
+        same_sid_dt_count = same_sid_dt_query.count()
+
+        if not same_sid_dt_count:
+            continue
+        elif same_sid_dt_count == 1:
+            hit_dt.append(interped_tc.date_time)
+            if same_sid_dt_query[0].match:
+                match_dt.append(interped_tc.date_time)
+        else:
+            the_class.logger.error((f"""Strange: two or more """
+                                    f"""comparison has same sid """
+                                    f"""and datetime"""))
+            breakpoint()
+            exit()
+
+    hit_count = len(hit_dt)
+    match_count = len(match_dt)
+    if hit_count == hours and not match_count:
+        print((f"""[Skip] All internal hours of TC """
+               f"""{tc.name} between {tc.date_time} """
+               f"""and {next_tc.date_time}"""))
+        return custom_return(False)
+
+    # Check existence of SFMR between two IBTrACS records
+    existence, spatial_temporal_info = sfmr_exists(the_class,
+                                                   tc, next_tc)
+    if not existence:
+        # First executed here between particular two TCs
+        if hit_count < hours:
+            # update match of data sources
+            update_no_match_between_tcs(the_class, Match, hours,
+                                        tc, next_tc)
+
+        print((f"""[Not exist] SFMR of TC {tc.name} between """
+               f"""{tc.date_time} and {next_tc.date_time}"""))
+        return custom_return(False)
+
+    # Round SMFR record to different hours
+    # hour_info_pt_idx:
+    #   {
+    #       hour_datetime_1: {
+    #           sfmr_brief_info_idx_1: [pt_idx_1, pt_idx_2, ...],
+    #           sfmr_brief_info_idx_2: [pt_idx_1, pt_idx_2, ...],
+    #           ...
+    #       }
+    #       hour_datetime_2: {
+    #           ...
+    #       }
+    #       ...
+    #   }
+    hour_info_pt_idx = sfmr_rounded_hours(the_class, tc, next_tc,
+                                          spatial_temporal_info)
+    if not len(hour_info_pt_idx):
+        # First executed here between particular two TCs
+        if hit_count < hours:
+            # update match of data sources
+            update_no_match_between_tcs(the_class, Match, hours,
+                                        tc, next_tc)
+
+        print((f"""[Fail rounding to hour] SFMR of TC {tc.name} """
+               f"""between {tc.date_time} and """
+               f"""{next_tc.date_time}"""))
+        return custom_return(False)
+
+    return custom_return(True, hit_dt, match_dt, spatial_temporal_info,
+                         hour_info_pt_idx)
+
+
+def get_2d_compare_table_name(the_class, src_1, src_2):
+    table_name = f'comparison_2d_{src_1}_{src_2}_{the_class.basin}'
+
+    return table_name
+
+
+def create_2d_compare_table(the_class, src_1, src_2):
+    table_name = get_2d_compare_table_name(the_class, src_1, src_2)
+
+    class Comparison(object):
+        pass
+
+    if the_class.engine.dialect.has_table(the_class.engine,
+                                          table_name):
+        metadata = MetaData(bind=the_class.engine, reflect=True)
+        t = metadata.tables[table_name]
+        mapper(Comparison, t)
+
+        return Comparison
+
+    cols = get_basic_satel_era5_columns(tc_info=True)
+
+    cols = []
+    cols.append(Column('key', Integer, primary_key=True))
+    cols.append(Column('tc_sid', String(13), nullable=False))
+    cols.append(Column('tc_datetime', DateTime, nullable=False))
+    cols.append(Column(f'{src_1}_datetime', DateTime, nullable=False))
+    cols.append(Column(f'{src_2}_datetime', DateTime, nullable=False))
+    cols.append(Column('x', Integer, nullable=False))
+    cols.append(Column('y', Integer, nullable=False))
+    cols.append(Column('lon', Float, nullable=False))
+    cols.append(Column('lat', Float, nullable=False))
+    cols.append(Column(f'{src_1}_windspd', Float, nullable=False))
+    cols.append(Column(f'{src_2}_windspd', Float, nullable=False))
+    cols.append(Column(f'{src_2}_minus_{src_1}_windspd', Float,
+                       nullable=False))
+    cols.append(Column('tc_datetime_lon_lat', String(50),
+                       nullable=False, unique=True))
+
+    metadata = MetaData(bind=the_class.engine)
+    t = Table(table_name, metadata, *cols)
+    metadata.create_all()
+    mapper(Comparison, t)
+
+    the_class.session.commit()
+
+    return Comparison
+
+
+def compare_2d_sources(the_class, tc, lons, lats, windspd, mesh,
+                       diff_mins, src_1, src_2):
+    CompareTable = create_2d_compare_table(the_class, src_1, src_2)
+
+    lons_num = dict()
+    lats_num = dict()
+    srcs = [src_1, src_2]
+    for src in srcs:
+        if mesh[src]:
+            lons_num[src] = lons[src].shape[1]
+            lats_num[src] = lats[src].shape[0]
+        else:
+            lons_num[src] = len(lons[src])
+            lats_num[src] = len(lats[src])
+
+    if (lons_num[src_1] != lons_num[src_2]
+        or lats_num[src_1] != lats_num[src_2]):
+        the_class.logger.error(('Two sources\' lons and lats shape'
+                                'are not same'))
+        print(f'lons_num: {lons_num}')
+        print(f'lats_num: {lats_num}')
+        sys.exit(1)
+
+    half_edge_intervals = int(the_class.CONFIG['regression'][
+        'edge_in_degree'] / 2 / the_class.CONFIG['rss'][
+            'spatial_resolution'])
+
+    all_rows = []
+    for y in range(lats_num[src_1]):
+        for x in range(lons_num[src_1]):
+            if windspd[src_1][y][x] < 0 or windspd[src_2][y][x] < 0:
+                continue
+
+            row = CompareTable()
+            row.tc_sid = tc.sid
+            row.tc_datetime = tc.date_time
+
+            for src in srcs:
+                setattr(row, f'{src}_datetime',
+                        (tc.date_time + datetime.timedelta(
+                            seconds=60*int(diff_mins[src][y][x]))))
+
+            if mesh[src_1]:
+                pt_lat = lats[src_1][y][x]
+                pt_lon = lons[src_1][y][x]
+            else:
+                pt_lat = lats[src_1][y]
+                pt_lon = lons[src_1][x]
+
+            row.x = x - half_edge_intervals
+            row.y = y - half_edge_intervals
+            row.lon = pt_lon
+            row.lat = pt_lat
+
+            for src in srcs:
+                setattr(row, f'{src}_windspd', windspd[src][y][x])
+            setattr(row, f'{src_2}_minus_{src_1}_windspd',
+                    (getattr(row, f'{src_2}_windspd')
+                     - getattr(row, f'{src_1}_windspd')))
+
+            row.tc_datetime_lon_lat = (f"""{row.tc_datetime}"""
+                                       f"""_{row.lon}_{row.lat}""")
+            all_rows.append(row)
+
+    bulk_insert_avoid_duplicate_unique(
+        all_rows, the_class.CONFIG['database']['batch_size']['insert'],
+        CompareTable, ['tc_datetime_lon_lat'], the_class.session,
+        check_self=True)
+
+def statistic_of_bias(y_test, y_pred):
+    try:
+        names = y_pred.keys()
+        bias_list = []
+        df_list = []
+        bias_col_name = 'windspd_bias'
+        for key in y_pred.keys():
+            df_tmp = pd.DataFrame({'y_test': y_test,
+                                   'y_pred': y_pred[key],
+                                   'name': [key] * len(y_test)
+                                  })
+            df_tmp[bias_col_name] = df_tmp['y_pred'] - df_tmp['y_test']
+            bias_list.append(df_tmp)
+
+        windspd_split = [15, 25, 35, 45]
+        for idx, val in enumerate(windspd_split):
+            left = val
+            if idx == len(windspd_split) - 1:
+                right = 999
+                interval_str = f'>{left}'
+            else:
+                right = windspd_split[idx + 1]
+                interval_str = f'{left}-{right}'
+            print(interval_str)
+            print('=' * len(interval_str))
+            print()
+
+            for name, df in zip(names, bias_list):
+                print(name)
+                print('-' * len(name))
+                df_part = df.loc[(df['y_test'] >= left)
+                                 & (df['y_test'] < right)]
+                windspd_bias = df_part[bias_col_name]
+
+                print(f'Count: {len(df_part)}')
+                print(f'Max bias: {windspd_bias.max()}')
+                print(f'Min bias: {windspd_bias.min()}')
+                print(f'Mean bias: {windspd_bias.mean()}')
+                print(f'Median bias: {windspd_bias.median()}')
+                print((f"""Mean absolute bias: """
+                       f"""{windspd_bias.abs().mean()}"""))
+
+                truth = df_part['y_test']
+                observation = df_part['y_pred']
+                mse = mean_squared_error(truth, observation)
+                print(f'RMSE: {math.sqrt(mse)}')
+                print('\n\n')
+    except Exception as msg:
+        breakpoint()
+        exit(msg)

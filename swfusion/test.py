@@ -1,34 +1,42 @@
-import datetime
-import os
 import pickle
+import os
 
-import pandas as pd
+import smogn
 
-with open('../compare_info_na_sfmr_smap.txt', 'r') as f:
-    infos = list(f)
+test_path = ('/Users/lujingze/Programming/SWFusion/regression/'
+             'tc/dataset/original/test.pkl')
+with open(test_path, 'rb') as f:
+    test = pickle.load(f)
 
-tc_names = []
-tc_dts = []
-match = []
-for info in infos:
-    tc_name = info.split(' TC ')[1].split(' on ')[0].replace(' ', '')
-    dt_str = info.split(' on ')[1].strip()
-    dt = datetime.datetime.strptime(dt_str, '%Y-%m-%d %H:%M:%S')
+# specify phi relevance values
+rg_mtrx = [
+    [5, 0, 0],  # over-sample ("minority")
+    [20, 0, 0],  # under-sample ("majority")
+    [35, 0, 0],  # under-sample
+    [50, 1, 0],  # under-sample
+]
 
-    tc_names.append(tc_name)
-    tc_dts.append(dt)
+smogn_params = dict(
+    # main arguments
+    data=test,                 # pandas dataframe
+    y='smap_windspd',        # string ('header name')
+    k=7,                     # positive integer (k < n)
+    pert=0.02,               # real number (0 < R < 1)
+    samp_method='extreme',   # string ('balance' or 'extreme')
+    drop_na_col=True,        # boolean (True or False)
+    drop_na_row=True,        # boolean (True or False)
+    replace=False,           # boolean (True or False)
 
-    if info.startswith('Comparing'):
-        match.append(True)
-    elif info.startswith('Skiping'):
-        match.append(False)
+    # phi relevance arguments
+    rel_thres=0.9,          # real number (0 < R < 1)
+    rel_method='manual',     # string ('auto' or 'manual')
+    # rel_xtrm_type='both',  # unused (rel_method='manual')
+    # rel_coef=1.50,         # unused (rel_method='manual')
+    rel_ctrl_pts_rg=rg_mtrx  # 2d array (format: [x, y])
+)
 
-hit_dict = {'TC_name': tc_names,
-            'datetime': tc_dts,
-            'match': match,
-           }
-hit_df = pd.DataFrame(hit_dict)
-
-dir = '../statistic/match_of_data_sources/sfmr_vs_smap/na/'
-os.makedirs(dir, exist_ok=True)
-hit_df.to_pickle(f'{dir}na_match_sfmr_vs_smap.pkl')
+test_smogn = smogn.smoter(**smogn_params)
+out_path = ('/Users/lujingze/Programming/SWFusion/regression/tc/'
+            'dataset/comparison_smogn/test_smogn.pkl')
+with open(out_path, 'wb') as f:
+    pickle.dump(test_smogn, f)

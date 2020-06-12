@@ -42,8 +42,8 @@ unixOptions = 'p:r:eg:c:siv:k'
 gnuOptions = ['period=', 'region=', 'basin=', 'match_smap', 'reg=',
               'compare=', 'sfmr', 'ibtracs', 'validate=', 'check',
               'sta_ibtracs', 'sta_era5_smap=', 'smart_compare',
-              'merra2', 'match_sfmr', 'combine', 'model_tag=',
-              'classify=']
+              'merra2', 'match_sfmr', 'combine', 'tag=',
+              'classify=', 'smogn_target=', 'draw_sfmr=']
 
 def work_flow():
     """The work flow of blending several TC OSW.
@@ -78,10 +78,12 @@ def work_flow():
     do_match_smap = False
     do_regression = False
     reg_instructions = None
+    smogn_target = None
     do_classify = False
     classify_instruction = None
-    model_tag = None
+    tag = None
     do_compare = False
+    draw_sfmr = False
     do_sfmr = False
     sfmr_instructions = None
     do_ibtracs = False
@@ -120,14 +122,25 @@ def work_flow():
         elif current_argument in ('-g', '--reg'):
             do_regression = True
             reg_instructions = current_value.split(',')
+        elif current_argument in ('--smogn_target'):
+            smogn_target = current_value.split(',')[0]
         elif current_argument in ('--classify'):
             do_classify = True
             classify_instructions = current_value.split(',')
-        elif current_argument in ('--model_tag'):
-            model_tag = current_value.split(',')[0]
+        elif current_argument in ('--tag'):
+            tag = current_value.split(',')[0]
         elif current_argument in ('-c', '--compare'):
             do_compare = True
             compare_instructions = current_value.split(',')
+        elif current_argument in ('--draw_sfmr'):
+            head = current_value.split(',')[0]
+            if head == 'True':
+                draw_sfmr = True
+            elif head == 'False':
+                draw_sfmr = False
+            else:
+                logger.error('draw_sfmr must be "True" or "False"')
+                sys.exit(1)
         elif current_argument in ('-s', '--sfmr'):
             do_sfmr = True
         elif current_argument in ('-i', '--ibtracs'):
@@ -207,26 +220,27 @@ def work_flow():
                                        validate_instructions)
         if do_match_smap:
             match_era5_smap.matchManager(
-                CONFIG, period, region, basin, passwd, False)
+                CONFIG, period, region, basin, passwd, False, work=True)
         if do_classify:
             classify.Classifier(
                 CONFIG, period, train_test_split_dt, region, basin,
                 passwd, False, classify_instructions)
         if do_regression:
-            # if model_tag is None:
+            # if tag is None:
             #     logger.error('No model tag')
             #     exit()
             regression.Regression(
                 CONFIG, period, train_test_split_dt, region, basin,
-                passwd, False, reg_instructions, model_tag)
+                passwd, False, reg_instructions, smogn_target, tag)
         if do_compare:
             # if ('smap_prediction' in compare_instructions
-            #         and model_tag is None):
+            #         and tag is None):
             #     logger.error('No model tag')
             #     exit()
             compare_tc.TCComparer(CONFIG, period, region, basin,
                                   passwd, False, compare_instructions,
-                                  model_tag)
+                                  draw_sfmr)
+                                  # tag)
         # ccmp_ = ccmp.CCMPManager(CONFIG, period, region, passwd,
         #                          work_mode='fetch_and_compare')
         # era5_ = era5.ERA5Manager(CONFIG, period, region, passwd,

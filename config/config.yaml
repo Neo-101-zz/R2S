@@ -57,14 +57,14 @@ grid:
     y: '../data/grid/y.pkl'
 plot:
   data_sources_title:
-    smap: 'SMAP Wind'
-    smap_prediction: 'Simulated SMAP Wind'
-    era5: 'ERA5 Wind'
+    smap: 'SMAPW'
+    smap_prediction: 'SSMAPW'
+    era5: 'ERA5RW'
   axis_label_mapper:
-    dis_minutes: 'T(SSSW)-T(SFMRW) (min)'
-    dis_kms: 'D(SSSW, SFMRW) (km)'
-    windspd_bias: 'W(SSSW)-W(SFMRW) (m/s)'
-    sfmr_windspd: 'W(SFMRW) (m/s)'
+    dis_minutes: 'T(SSMAPW)-T(RSFMRW) (min)'
+    dis_kms: 'D(SSMAPW, RSFMRW) (km)'
+    windspd_bias: 'W(SSMAPW)-W(RSFMRW) (m/s)'
+    sfmr_windspd: 'W(RSFMRW) (m/s)'
   scatter_count:
     interval: 3
   zorders:
@@ -683,11 +683,44 @@ workflow:
         End datetime is too late. Must not be later than
       time_flow_backward: |-
         Start datetime is later than end datetime.
+smogn:
+  final_params:
+    k: 7
+    pert: 0.02
+    samp_method: 'extreme'
+    drop_na_col: True
+    drop_na_row: True
+    replace: False
+    rel_thres: 0.9
+    rel_method: 'manual'
+    rel_ctrl_pts_rg:
+      - [5, 0, 0]
+      - [20, 0, 0]
+      - [35, 0, 0]
+      - [50, 1, 0]
 regression:
   edge_in_degree: 4
   dirs:
     scs: '../regression/scs/'
     tc:
+      dataset:
+        original:
+          self: '../regression/tc/dataset/original/'
+          train: '../regression/tc/dataset/original/train.pkl'
+          test: '../regression/tc/dataset/original/test.pkl'
+        smogn_hyperopt: '../regression/tc/dataset/smogn_hyperopt/'
+        smogn_final:
+          self: '../regression/tc/dataset/smogn_final/'
+          smogn_on_all_data:
+            self: '../regression/tc/dataset/smogn_final/smogn_on_all_data'
+            dataframe_smogn: '../regression/tc/dataset/smogn_final/smogn_on_all_data/df_smogn_on_all_data.pkl'
+            train: '../regression/tc/dataset/smogn_final/smogn_on_all_data/train_smogn_on_all_data.pkl'
+            test: '../regression/tc/dataset/smogn_final/smogn_on_all_data/test_smogn_on_all_data.pkl'
+            distribution_comparison: '../regression/tc/dataset/smogn_final/smogn_on_all_data/comparison_of_distribution_smogn_on_all_data.png'
+          smogn_on_train:
+            self: '../regression/tc/dataset/smogn_final/smogn_on_train/'
+            train: '../regression/tc/dataset/smogn_final/smogn_on_train/train_smogn_on_train.pkl'
+            distribution_comparison: '../regression/tc/dataset/smogn_final/smogn_on_train/comparison_of_distribution_smogn_on_train.png'
       neural_network:
         model_summary: '../regression/tc/neural_network/model_summary/'
         checkpoint: '../regression/tc/neural_network/checkpoint/'

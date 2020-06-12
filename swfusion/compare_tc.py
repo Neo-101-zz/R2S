@@ -24,13 +24,14 @@ import ccmp
 import era5
 import satel_scs
 import utils
+import match_era5_smap
 
 Base = declarative_base()
 
 class TCComparer(object):
 
     def __init__(self, CONFIG, period, region, basin, passwd,
-                 save_disk, compare_instructions, model_tag):
+                 save_disk, compare_instructions, draw_sfmr):
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
@@ -40,7 +41,7 @@ class TCComparer(object):
         self.session = None
         self.compare_instructions = list(set(compare_instructions))
         self.basin = basin
-        self.model_tag = model_tag
+        self.draw_sfmr = draw_sfmr
 
         self.logger = logging.getLogger(__name__)
         utils.setup_database(self, Base)
@@ -73,8 +74,8 @@ class TCComparer(object):
         self.lons['smap'] = [
             x * self.spa_resolu['smap'] + 0.125 for x in range(1440)]
 
-        self.source_candidates = ['smap', 'era5', 'sfmr', 'ibtracs',
-                                  'smap_prediction', 'merra2']
+        self.source_candidates = ['smap_prediction', 'smap', 'era5',
+                                  'sfmr', 'ibtracs', 'merra2']
         self.sources = []
         for part in self.compare_instructions:
             if part in self.source_candidates:
@@ -100,23 +101,24 @@ class TCComparer(object):
             self.sources[0] = 'sfmr'
             self.sources[des_idx] = tmp
 
-        if 'sfmr' in self.sources and self.sources.index('sfmr') != 0:
-            self.logger.error((f"""Must put 'sfmr' in the head of """
-                               f"""'sources' list"""))
-            exit()
+        # `smap` should before `smap_prediction` to filter cases
+        # where they did not synchronously exists because the cases
+        # where SMAP overlapped SFMR around TC is less frequent than
+        # that  of SMAP prediction
+        if set(['sfmr', 'smap', 'smap_prediction']).issubset(
+                set(self.sources)):
+            smap_index = self.sources.index('smap')
+            smap_pred_index = self.sources.index('smap_prediction')
+            if smap_index > smap_pred_index:
+                self.sources[smap_index], self.sources[smap_pred_index]\
+                    = self.sources[smap_pred_index], self.sources[
+                        smap_index]
 
-        if 'sfmr' in self.sources:
-            if len(self.sources) != 2:
-                self.logger.error((
-                    f"""Must input 2 sources """
-                    f"""when including SFMR"""))
-                exit()
-        else:
-            if len(self.sources) < 1:
-                self.logger.error((
-                    f"""At least must input 1 sources """
-                    f"""when not including SFMR"""))
-                exit()
+        if 'sfmr' in self.sources and len(self.sources) < 2:
+            self.logger.error((
+                f"""At least must input 1 sources """
+                f"""when not including SFMR"""))
+            exit()
 
         self.sources_titles = self.CONFIG['plot'][
             'data_sources_title']
@@ -162,31 +164,6 @@ class TCComparer(object):
             self.basin]
         IBTrACS = utils.get_class_by_tablename(self.engine,
                                                table_name)
-        if ('smap' in self.sources
-            and 'smap_prediction' in self.sources):
-            # There are matched SMAP data that covers the center of TC
-            # We want to use them to compare with SMAP prediction
-            # So we need to get corrseponding TC's sid and datetime
-            years = [y for y in range(self.period[0].year,
-                                      self.period[1].year + 1)]
-            cover_center_sid = []
-            cover_center_hour = []
-            for y in years:
-                table_name = utils.gen_tc_satel_era5_tablename(
-                    'smap', self.basin)
-                MatchTable = utils.get_class_by_tablename(self.engine,
-                                                          table_name)
-                if MatchTable is None:
-                    continue
-                # Query for sid and datetime of TCs of which centers
-                # are covered by SMAP
-                cover_center_query = self.session.query(
-                    MatchTable).filter(MatchTable.x == 0,
-                                       MatchTable.y == 0)
-                for row in cover_center_query:
-                    cover_center_sid.append(row.sid)
-                    cover_center_hour.append(row.era5_datetime)
-
         tc_query = self.session.query(IBTrACS).filter(
             IBTrACS.date_time >= self.period[0],
             IBTrACS.date_time <= self.period[1]
@@ -195,48 +172,8 @@ class TCComparer(object):
 
         # Filter TCs during period
         for idx, tc in enumerate(tc_query):
-            # if 'sfmr' in self.sources:
-            #     if tc.wind < 64:
-            #         continue
-            if ('smap' in self.sources
-                and 'smap_prediction' in self.sources):
-                # 
-                if tc.sid not in cover_center_sid:
-                    continue
-                sid_index = cover_center_sid.index(tc.sid)
-                interp_dt = cover_center_hour[sid_index]
-                # When IBTrACS datetime does not equal to the datetime
-                # of interpolated TC of which center covered by SMAP
-                if tc.date_time != interp_dt:
-                    if idx == total - 1:
-                        break
-                    next_tc = tc_query[idx + 1]
-                    # This TC and next TC are not the same
-                    if tc.sid != next_tc.sid:
-                        continue
-                    # Datetime of interpolated TC not between this TC
-                    # and next TC
-                    if not (tc.date_time < interp_dt
-                            and next_tc.date_time > interp_dt):
-                        continue
-                    # Interpolate a new TC record
-                    hour_shift = int(
-                        (interp_dt - tc.date_time).seconds / 3600)
-                    interped_tc = utils.interp_tc(self, hour_shift,
-                                                  tc, next_tc)
-                    del tc
-                    tc = interped_tc
-
-            # if tc.wind < 64:
-            #     continue
-            # if tc.lat < 10 or tc.lat > 20:
-            #     continue
-            # if tc.lon < 110 or tc.lon > 120:
-            #     continue
-            # if tc.r34_ne is None:
-            #     continue
-            converted_lon = utils.longitude_converter(
-                tc.lon, '360', '-180')
+            converted_lon = utils.longitude_converter(tc.lon,
+                                                      '360', '-180')
             if bool(globe.is_land(tc.lat, converted_lon)):
                 continue
             # Draw windspd from different sources
@@ -248,15 +185,10 @@ class TCComparer(object):
                         success = self.compare_with_sfmr(tc, next_tc)
 
             elif 'ibtracs' in self.sources:
-                if (tc.wind is not None
-                    and tc.pres is not None
-                    and not tc.date_time.minute
-                    and not tc.date_time.second):
-                    #
+                if (tc.wind is not None and tc.pres is not None
+                        and not tc.date_time.minute
+                        and not tc.date_time.second):
                     success = self.compare_with_ibtracs(tc)
-
-            else:
-                success, need_exit = self.compare_with_one_tc_record(tc)
                 if success:
                     print((f"""Comparing {self.sources_str} with """
                            f"""IBTrACS record of TC {tc.name} on """
@@ -266,6 +198,9 @@ class TCComparer(object):
                            f"""{self.sources_str} with """
                            f"""IBTrACS record of TC {tc.name} """
                            f"""on {tc.date_time}"""))
+            else:
+                success, need_exit = \
+                    self.compare_betweem_two_tc_records(tc, next_tc)
 
         print('Done')
 
@@ -355,12 +290,62 @@ class TCComparer(object):
         if not hours:
             return False
 
-        Match = utils.create_match_table(self, 'sfmr', self.sources[1])
+        if len(self.sources) > 2:
+            # Exploit match tables of SFMR and another source which
+            # have been created before to quickly check whether
+            # the match of SFMR and at least two other sources exists
+            for src in self.sources[1:]:
+                MatchOneSrc = utils.create_match_table(
+                    self, ['sfmr', src])
+                result = utils.match_exists_during_tc_interval(
+                    self, hours, tc, next_tc, MatchOneSrc)
+                if not result['success']:
+                    return False
+
+        Match = utils.create_match_table(self, self.sources)
+        result = utils.match_exists_during_tc_interval(
+            self, hours, tc, next_tc, Match)
+        if not result['success']:
+            return False
+
+        if len(result['hit_dt']) == hours:
+            # In this condition, `match count` is larger than zero.  
+            # Just compare the datetimes when `match` value is True
+            # and no need to update `match_data_sources`
+            success = self.compare_with_sfmr_all_records_hit(
+                tc, next_tc, hours, result['match_dt'],
+                result['spatial_temporal_info'],
+                result['hour_info_pt_idx'])
+        else:
+            # First executed here between particular two TCs.  
+            # For each hour, compare SFMR wind speed with wind speed
+            # from other sources and have to update `match_data_sources`
+            success = self.compare_with_sfmr_not_all_records_hit(
+                tc, next_tc, hours, result['spatial_temporal_info'], 
+                result['hour_info_pt_idx'])
+
+        return success
+
+    def compare_with_sfmr_old(self, tc, next_tc):
+        # Temporal shift
+        delta = next_tc.date_time - tc.date_time
+        # Skip interpolating between two TC recors if two neighbouring
+        # records of TC are far away in time
+        if delta.days:
+            return False
+        hours = int(delta.seconds / 3600)
+        # Time interval between two TCs are less than one hour
+        if not hours:
+            return False
+
+        Match = utils.create_match_table(self, self.sources)
         hit_dt = []
         match_dt = []
         for h in range(hours):
             interped_tc = utils.interp_tc(self, h, tc, next_tc)
 
+            # Check whether the match record of sources near
+            # this TC exists
             same_sid_dt_query = self.session.query(Match).filter(
                 Match.date_time == interped_tc.date_time,
                 Match.tc_sid == interped_tc.sid)
@@ -405,8 +390,8 @@ class TCComparer(object):
         # hour_info_pt_idx:
         #   {
         #       hour_datetime_1: {
-        #           info_idx_1: [pt_idx_1, pt_idx_2, ...],
-        #           info_idx_2: [pt_idx_1, pt_idx_2, ...],
+        #           sfmr_brief_info_idx_1: [pt_idx_1, pt_idx_2, ...],
+        #           sfmr_brief_info_idx_2: [pt_idx_1, pt_idx_2, ...],
         #           ...
         #       }
         #       hour_datetime_2: {
@@ -448,7 +433,7 @@ class TCComparer(object):
     def compare_with_sfmr_not_all_records_hit(self, tc, next_tc, hours,
                                               spatial_temporal_info,
                                               hour_info_pt_idx):
-        Match = utils.create_match_table(self, 'sfmr', self.sources[1])
+        Match = utils.create_match_table(self, self.sources)
 
         for h in range(hours):
             interped_tc = utils.interp_tc(self, h, tc, next_tc)
@@ -509,18 +494,19 @@ class TCComparer(object):
 
     def compare_with_sfmr_around_interped_tc(
         self, sfmr_brief_info, one_hour_info_pt_idx, interped_tc):
-        # Reference function `compare_with_one_tc_record`
+        # Reference function `compare_betweem_two_tc_records`
         # Because we need to overlay
         # SFMR tracks and averaged SFMR wind speed
         # onto other sources' wind speed map, the inputted subplots
         # number should minus one (SFMR source)
         subplots_row, subplots_col, fig_size = \
-                utils.get_subplots_row_col_and_fig_size(
-                    len(self.sources) - 1)
+            utils.get_subplots_row_col_and_fig_size(
+                len(self.sources) - 1)
         if subplots_row * subplots_col > 1:
             text_subplots_serial_number = True
         else:
             text_subplots_serial_number = False
+
         fig, axs = plt.subplots(subplots_row, subplots_col,
                                 figsize=fig_size, sharey=True)
         if len(self.sources) > 2:
@@ -574,11 +560,12 @@ class TCComparer(object):
                             mesh[src], diff_mins[src] = \
                             self.get_sources_xyz_matrix(
                                 src, interped_tc, smap_lons,
-                                smap_lats, sfmr_brief_info,
-                                one_hour_info_pt_idx)
+                                smap_lats)
                     if not success:
                         return False
-                    if src == 'smap':
+                    if ((src == 'smap_prediction'
+                         and 'smap' in self.sources)
+                        or src == 'smap'):
                         # Not all points of area has this feature
                         # Make sure it is interpolated properly
                         diff_mins[src] = utils.\
@@ -591,6 +578,14 @@ class TCComparer(object):
                     breakpoint()
                     exit(msg)
 
+        if 'smap' in self.sources and 'smap_prediction' in self.sources:
+            tag = 'aligned_with_smap'
+            # Compare 2D wind field of SMAP and SMAP prediction
+            utils.compare_2d_sources(self, interped_tc, lons, lats,
+                                     windspd, mesh, diff_mins, 'smap',
+                                     'smap_prediction')
+        else:
+            tag = None
         # To quantificationally validate simulated SMAP wind,
         # we need to extract SMAP points matching SFMR points
         for src in self.sources:
@@ -599,14 +594,19 @@ class TCComparer(object):
             utils.validate_with_sfmr(
                 self, src, interped_tc, sfmr_pts,
                 lons[src], lats[src], windspd[src], mesh[src],
-                diff_mins[src])
+                diff_mins[src], tag)
 
         index = 0
         tc_dt = interped_tc.date_time
+        if (('smap_prediction' in self.sources
+             and 'smap' in self.sources)
+                or 'smap' in self.sources):
+            accurate_dt = tc_dt + datetime.timedelta(
+                seconds=60*diff_mins['smap'].mean())
+        else:
+            accurate_dt = tc_dt
         subplot_title_suffix = (
-            f"""{tc_dt.strftime('%H%M UTC %d')} """
-            f"""{calendar.month_name[tc_dt.month]} """
-            f"""{tc_dt.year} {interped_tc.name}"""
+            f"""{accurate_dt.strftime('%H%M UTC %d %b %Y')} """
         )
         # Draw windspd
         for src in self.sources:
@@ -619,23 +619,30 @@ class TCComparer(object):
                                    lons[src], lats[src], windspd[src],
                                    max_windspd, mesh[src], custom=True,
                                    region=draw_region)
-                utils.draw_sfmr_windspd_and_track(
-                    self, fig, ax, interped_tc.date_time, sfmr_tracks,
-                    sfmr_pts, max_windspd)
-                # if text_subplots_serial_number:
-                #     ax.text(-0.1, 1.025,
-                #             f'({string.ascii_lowercase[index]})',
-                #             transform=ax.transAxes, fontsize=16,
-                #             fontweight='bold', va='top', ha='right')
-                ax.title.set_text((f"""{self.sources_titles[src]}"""
-                                   f""" {subplot_title_suffix}"""))
-                ax.title.set_size(10)
+                if self.draw_sfmr:
+                    utils.draw_sfmr_windspd_and_track(
+                        self, fig, ax, interped_tc.date_time,
+                        sfmr_tracks, sfmr_pts, max_windspd)
+                if text_subplots_serial_number:
+                    ax.text(-0.125, 1.025,
+                            f'({string.ascii_lowercase[index]})',
+                            transform=ax.transAxes, fontsize=16,
+                            fontweight='bold', va='top', ha='right')
+                # ax.title.set_text((f"""{interped_tc.name} """
+                #                    f"""{self.sources_titles[src]} """
+                #                    f"""{subplot_title_suffix}"""))
+                # ax.title.set_size(13)
+                ax.set_title((f"""{interped_tc.name} """
+                              f"""{self.sources_titles[src]} """
+                              f"""{subplot_title_suffix}"""),
+                             size=15)
                 index += 1
             except Exception as msg:
                 breakpoint()
                 exit(msg)
 
         fig.subplots_adjust(wspace=0.4)
+        fig.tight_layout()
 
         dt_str = interped_tc.date_time.strftime('%Y_%m%d_%H%M')
         fig_dir = self.CONFIG['result']['dirs']['fig']['root']
@@ -915,17 +922,18 @@ class TCComparer(object):
 
         return interped_tc
 
-    def compare_with_one_tc_record(self, tc):
-        """
+    def compare_betweem_two_tc_records(self, tc, next_tc):
+        # Temporal shift
+        delta = next_tc.date_time - tc.date_time
+        # Skip interpolating between two TC recors if two neighbouring
+        # records of TC are far away in time
+        if delta.days:
+            return False
+        hours = int(delta.seconds / 3600)
+        # Time interval between two TCs are less than one hour
+        if not hours:
+            return False
 
-        Returns
-        -------
-        success: bool
-            Success comparing or not.
-        need_exit: bool
-            Whether exception occurs and need exit.
-
-        """
         subplots_row, subplots_col, fig_size = \
                 utils.get_subplots_row_col_and_fig_size(len(
                     self.sources))
@@ -1033,8 +1041,7 @@ class TCComparer(object):
         return True, False
 
     def get_sources_xyz_matrix(self, src, tc, smap_lons=None,
-                               smap_lats=None, pt_lons=None,
-                               pt_lats=None, pt_dts=None):
+                               smap_lats=None):
         if src == 'ccmp':
             return self.get_ccmp_xyz_matrix(tc)
         elif src == 'era5':
@@ -1042,20 +1049,15 @@ class TCComparer(object):
         elif src == 'smap':
             return self.get_smap_xyz_matrix(tc, smap_lons, smap_lats)
         elif src == 'smap_prediction':
-            if ('smap' in self.sources or 'era5' in self.sources
-                    or 'sfmr' in self.sources):
-                return self.get_smap_prediction_pts_or_xyz_matrix(
-                    'matrix', tc, smap_lons, smap_lats, pt_lons,
-                    pt_lats, pt_dts)
-            # elif 'sfmr' in self.sources:
-            #     return self.get_smap_prediction_pts_or_xyz_matrix(
-            #         'points', tc, smap_lons, smap_lats, pt_lons, pt_lats,
-            #         pt_dts)
+            return self.get_smap_prediction_xyz_matrix(
+                tc, smap_lons, smap_lats)
 
-    def get_smap_prediction_pts_or_xyz_matrix(self, output, tc,
-                                              smap_lons, smap_lats,
-                                              pt_lons, pt_lats,
-                                              pt_dts):
+    def get_smap_prediction_xyz_matrix(self, tc, smap_lons, smap_lats):
+        return self.get_smap_prediction_xyz_matrix_step_1(
+            tc, smap_lons, smap_lats)
+
+    def get_smap_prediction_xyz_matrix_step_1(self, tc, smap_lons,
+                                              smap_lats):
         """
 
         """
@@ -1092,96 +1094,20 @@ class TCComparer(object):
             # North, West, South, East,
             area = [max(smap_lats), min(smap_lons),
                     min(smap_lats), max(smap_lons)]
-            if output == 'matrix':
-                return self.get_smap_prediction_xyz_matrix(
-                    tc, smap_lons, smap_lats, col_names,
-                    smap_file_path, area)
-            elif output == 'points':
-                return self.get_smap_prediction_points(
-                    tc, smap_lons, smap_lats, pt_lons, pt_lats, pt_dts,
-                    col_names, area)
+
+            return self.get_smap_prediction_xyz_matrix_step_2(
+                tc, smap_lons, smap_lats, col_names,
+                smap_file_path, area)
         except Exception as msg:
             self.logger.error((
-                f"""function get_smap_prediction_pts_or_xyz_matrix: """
-                f"""{msg}"""))
+                f"""function get_smap_prediction_xyz_matrix_step_1:"""
+                f""" {msg}"""))
             breakpoint()
             return False, 'exit', None, None, None, None
 
-    def get_smap_prediction_points(self, tc, smap_lons, smap_lats,
-                                   pt_lons, pt_lats, pt_dts, col_names,
-                                   area):
-        try:
-            if 'smap' in self.sources:
-                self.logger.error((
-                    f"""Need not to extract points when """
-                    f"""comparing with SMAP"""))
-                exit()
-            elif 'sfmr' in self.sources:
-                # Temporarily not modify diff_mins with SFMR data time
-                env_data = self.get_env_data_of_points_with_coordinates(
-                    tc, col_names, smap_lons, smap_lats, pt_lons,
-                    pt_lats, pt_dts)
-        except Exception as msg:
-            breakpoint()
-            exit(msg)
-
-        # Get single levels vars of ERA5 around TC
-        env_data, pres_lvls = self.add_era5_single_levels_data(
-            env_data, col_names, tc, area)
-        if env_data == 'exit':
-            return False, 'exit', None, None, None, None
-
-        # Get pressure levels vars of ERA5 around TC
-        env_data = self.add_era5_pressure_levels_data(
-            env_data, col_names, tc, area, pres_lvls)
-        if env_data == 'exit':
-            return False, 'exit', None, None, None, None
-
-        # Predict SMAP windspd
-        env_df = pd.DataFrame(env_data, columns=col_names,
-                              dtype=np.float64)
-        # Get original lon and lat before normalization
-        # DO NOT use to_numpy() method, because it is a pointer to
-        # DataFrame column, which changes with pointed column
-        try:
-            smap_windspd_xyz_matrix_dict = {
-                'lon': list(env_df['lon']),
-                'lat': list(env_df['lat']),
-            }
-        except Exception as msg:
-            breakpoint()
-            exit()
-        # Normalize data if the best model is trained after
-        # normalization
-        if 'normalization' in self.compare_instructions:
-            scaler = MinMaxScaler()
-            env_df[env_df.columns] = scaler.fit_transform(
-                env_df[env_df.columns])
-
-        model_dir = self.CONFIG['regression']['dirs']['tc']\
-                ['lightgbm']['model']
-        best_model = utils.load_best_model(model_dir, self.basin)
-
-        try:
-            smap_windspd_xyz_matrix_dict['windspd'] = list(
-                best_model.predict(env_df))
-        except Exception as msg:
-            breakpoint()
-            exit()
-
-        smap_windspd_xyz_matrix_df = pd.DataFrame(
-            smap_windspd_xyz_matrix_dict, dtype=np.float64)
-        # Pad SMAP windspd prediction around TC to all region
-        smap_windspd = self.padding_tc_windspd_prediction(
-            smap_windspd_xyz_matrix_df, smap_lons, smap_lats)
-
-        # Return data
-        return (True, smap_lons, smap_lats, smap_windspd,
-                utils.if_mesh(smap_lons), None)
-
-    def get_smap_prediction_xyz_matrix(self, tc, smap_lons,
-                                       smap_lats, col_names,
-                                       smap_file_path, area):
+    def get_smap_prediction_xyz_matrix_step_2(self, tc, smap_lons,
+                                              smap_lats, col_names,
+                                              smap_file_path, area):
 
         suffix = f'_{tc.sid}_{tc.date_time.strftime("%Y%m%d%H")}'
         SMAPERA5 = utils.create_smap_era5_table(self, tc.date_time,
@@ -1196,18 +1122,27 @@ class TCComparer(object):
             smap_file_path = satel_manager.download('smap',
                                                     tc.date_time)
 
-            env_data = self.get_env_data_of_matrix_with_coordinates(
-                tc, col_names, smap_lons, smap_lats, SMAPERA5,
-                smap_file_path)
+            env_data, diff_mins = \
+                self.get_env_data_of_matrix_with_coordinates(
+                    tc, col_names, smap_lons, smap_lats, SMAPERA5,
+                    smap_file_path)
+
+            match_manager = match_era5_smap.matchManager(
+                self.CONFIG, self.period, self.region, self.basin,
+                self.db_root_passwd, False, work=False)
+
+            smap_data, hourtimes, smap_area = match_manager.\
+                get_smap_part(SMAPERA5, tc, smap_file_path)
         # Just set the temporal shift from era5 to zero
         else:
-            env_data = self.get_env_data_of_matrix_with_coordinates(
-                tc, col_names, smap_lons, smap_lats, SMAPERA5)
+            env_data, diff_mins = \
+                self.get_env_data_of_matrix_with_coordinates(
+                    tc, col_names, smap_lons, smap_lats, SMAPERA5)
+            hourtimes = [tc.date_time.hour]
 
         if env_data is None:
             return False, None, None, None, None, None
 
-        hourtimes = [tc.date_time.hour]
         diff = 0.5
         north = max(smap_lats)
         south = min(smap_lats)
@@ -1224,6 +1159,9 @@ class TCComparer(object):
                 # increase west and south a little
                 else:
                     area[idx] = val + 0.125
+            else:
+                self.logger.error(('Coordinates of SMAP are not '
+                                    f'multiple of 0.125'))
         area[1] = (area[1] + 360) % 360
         area[3] = (area[3] + 360) % 360
 
@@ -1347,95 +1285,10 @@ class TCComparer(object):
 
         # Return data
         return (True, smap_lons, smap_lats, smap_windspd,
-                utils.if_mesh(smap_lons), None)
+                utils.if_mesh(smap_lons), diff_mins)
 
-    def get_smap_prediction_xyz_matrix_old(self, tc, smap_lons,
-                                           smap_lats, col_names,
-                                           smap_file_path, area):
-        # Need set the temporal shift from era5 as same as original
-        # SMAP
-        if 'smap' in self.sources:
-            satel_manager = satel_scs.SCSSatelManager(
-                self.CONFIG, self.period, self.region,
-                self.db_root_passwd, save_disk=self.save_disk,
-                work=False)
-            smap_file_path = satel_manager.download('smap',
-                                                    tc.date_time)
-
-            env_data = self.get_env_data_of_matrix_with_coordinates_old(
-                tc, col_names, smap_lons, smap_lats, smap_file_path)
-        # Just set the temporal shift from era5 to zero
-        else:
-            env_data = self.get_env_data_of_matrix_with_coordinates_old(
-                tc, col_names, smap_lons, smap_lats)
-
-        if env_data is None:
-            return False, None, None, None, None, None
-
-        # Get single levels vars of ERA5 around TC
-        env_data, pres_lvls = self.add_era5_single_levels_data(
-            env_data, col_names, tc, area)
-        if env_data == 'exit':
-            return False, 'exit', None, None, None, None
-
-        # Get pressure levels vars of ERA5 around TC
-        env_data = self.add_era5_pressure_levels_data(
-            env_data, col_names, tc, area, pres_lvls)
-        if env_data == 'exit':
-            return False, 'exit', None, None, None, None
-
-        # Predict SMAP windspd
-        env_df = pd.DataFrame(env_data, columns=col_names,
-                              dtype=np.float64)
-        # Get original lon and lat.  It is possible that lon and lat
-        # are not in `col_names`.  So we should extract them
-        # specifically.
-        try:
-            env_lons = []
-            env_lats = []
-            for i in range(len(env_data)):
-                env_lons.append(env_data[i]['lon'])
-                env_lats.append(env_data[i]['lat'])
-
-            smap_windspd_xyz_matrix_dict = {
-                'lon': env_lons,
-                'lat': env_lats,
-            }
-        except Exception as msg:
-            breakpoint()
-            exit(msg)
-        # Normalize data if the best model is trained after
-        # normalization
-        if 'normalization' in self.compare_instructions:
-            scaler = MinMaxScaler()
-            env_df[env_df.columns] = scaler.fit_transform(
-                env_df[env_df.columns])
-
-        try:
-            # model_dir = self.CONFIG['regression']['dirs']['tc']\
-            #         ['lightgbm']['model']
-            model_dir = ('/Users/lujingze/Programming/SWFusion/'
-                         'regression/tc/lightgbm/model/'
-                         'na_0.894616_fl_center_smogn/')
-            # best_model = utils.load_best_model(model_dir, self.basin)
-            model = utils.load_model_from_bunch(model_dir, '.pkl',
-                                                'model')
-            smap_windspd_xyz_matrix_dict['windspd'] = list(
-                model.predict(env_df))
-            smap_windspd_xyz_matrix_df = pd.DataFrame(
-                smap_windspd_xyz_matrix_dict, dtype=np.float64)
-            # Pad SMAP windspd prediction around TC to all region
-            smap_windspd = self.padding_tc_windspd_prediction(
-                smap_windspd_xyz_matrix_df, smap_lons, smap_lats)
-        except Exception as msg:
-            breakpoint()
-            exit(msg)
-
-        # Return data
-        return (True, smap_lons, smap_lats, smap_windspd,
-                utils.if_mesh(smap_lons), None)
-
-    def padding_tc_windspd_prediction(self, smap_windspd_xyz_matrix_df,
+    def padding_tc_windspd_prediction(self,
+                                      smap_windspd_xyz_matrix_df,
                                       smap_lons, smap_lats):
         df = smap_windspd_xyz_matrix_df
         windspd = np.full(shape=(len(smap_lats), len(smap_lons)),
@@ -1453,33 +1306,6 @@ class TCComparer(object):
                 exit(msg)
 
         return windspd
-
-    def get_env_data_of_points_with_coordinates(
-        self, tc, col_names, smap_lons, smap_lats, pt_lons, pt_lats,
-        pt_dts):
-        """
-
-        """
-        env_data = []
-        pts_num = len(pt_dts)
-
-        for i in range(pts_num):
-            row = dict()
-            for name in col_names:
-                row[name] = None
-
-                row['lon'], lon_idx = \
-                        utils.get_nearest_element_and_index(smap_lons,
-                                                            pt_lons[i])
-                row['lat'], lat_idx = \
-                        utils.get_nearest_element_and_index(smap_lats,
-                                                            pt_lats[i])
-                row['x'] = lon_idx - self.half_reg_edge_grid_intervals
-                row['y'] = lat_idx - self.half_reg_edge_grid_intervals
-                diff_mins = pt_dts[i] 
-                row['satel_era5_diff_mins'] = diff_mins[y][x]
-
-        return env_data
 
     def get_env_data_of_matrix_with_coordinates(self, tc,
                                                 col_names,
@@ -1524,7 +1350,7 @@ class TCComparer(object):
                 row.era5_datetime = tc.date_time
                 row.satel_datetime = (
                     row.era5_datetime + datetime.timedelta(
-                        seconds=row.satel_era5_diff_mins*60))
+                        seconds=int(row.satel_era5_diff_mins)*60))
                 row.x = x - self.half_reg_edge_grid_intervals
                 row.y = y - self.half_reg_edge_grid_intervals
                 # Simulate SMAP lon and lat
@@ -1537,56 +1363,7 @@ class TCComparer(object):
 
                 env_data.append(row)
 
-        return env_data
-
-    def get_env_data_of_matrix_with_coordinates_old(self, tc,
-                                                    col_names,
-                                                    smap_lons,
-                                                    smap_lats,
-                                                    file_path=None):
-        """
-
-        """
-        env_data = []
-        lats_num = len(smap_lats)
-        lons_num = len(smap_lons)
-
-        draw_region = [min(smap_lats), max(smap_lats),
-                       min(smap_lons), max(smap_lons)]
-        # Need set the temporal shift from era5 as same as original
-        # SMAP
-        if 'smap' in self.sources:
-            smap_lons, smap_lats, diff_mins = \
-                    utils.get_xyz_matrix_of_smap_windspd_or_diff_mins(
-                        'diff_mins', file_path, tc.date_time,
-                        draw_region)
-            if diff_mins is None:
-                breakpoint()
-                return None
-            # Not all points of area has this feature
-            # Make sure it is interpolated properly
-            diff_mins = utils.interp_satel_era5_diff_mins_matrix(
-                diff_mins)
-        # Just set the temporal shift from era5 to zero
-        else:
-            diff_mins = np.zeros(shape=(lats_num, lons_num),
-                                 dtype=float)
-
-        for y in range(lats_num):
-            for x in range(lons_num):
-                row = dict()
-                for name in col_names:
-                    row[name] = None
-
-                row['x'] = x - self.half_reg_edge_grid_intervals
-                row['y'] = y - self.half_reg_edge_grid_intervals
-                row['lon'] = smap_lons[x]
-                row['lat'] = smap_lats[y]
-                row['satel_era5_diff_mins'] = diff_mins[y][x]
-
-                env_data.append(row)
-
-        return env_data
+        return env_data, diff_mins
 
     def get_smap_lonlat(self, tc):
         success, lat1, lat2, lon1, lon2 = \

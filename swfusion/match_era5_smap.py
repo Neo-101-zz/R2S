@@ -20,7 +20,8 @@ Base = declarative_base()
 
 class matchManager(object):
 
-    def __init__(self, CONFIG, period, region, basin, passwd, save_disk):
+    def __init__(self, CONFIG, period, region, basin, passwd, save_disk,
+                 work):
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
@@ -74,7 +75,8 @@ class matchManager(object):
 
         self.sources = ['era5', 'smap']
 
-        self.extract()
+        if work:
+            self.extract()
 
     def extract(self):
         # Get IBTrACS table
@@ -115,7 +117,7 @@ class matchManager(object):
                 exit(msg)
 
     def info_after_extracting_detail(self, tc, success, update_match):
-        Match = utils.create_match_table(self, 'smap', 'era5')
+        Match = utils.create_match_table(self, ['smap', 'era5'])
 
         if update_match:
             if success:
@@ -162,7 +164,7 @@ class matchManager(object):
             self.extract_detail(tc)
             return
 
-        Match = utils.create_match_table(self, 'smap', 'era5')
+        Match = utils.create_match_table(self, ['smap', 'era5'])
         hit_dt = []
         match_dt = []
         for h in range(hours):
@@ -411,6 +413,15 @@ class matchManager(object):
                             tc.date_time.date(), time_)
                         # MUST use abs() method
                         delta = abs(pixel_dt - tc.date_time)
+                        # XXX: if write as `delta.seconds > 1800`,
+                        # datetime.datetime(year, month, day, hour, 30)
+                        # will be rounded into next hour, making a little
+                        # repetition because that datetime will be used
+                        # when iterate next hour too.
+                        # FIXME: But if change following line to
+                        # `delta.seconds > 1800`, something wrong will
+                        # happen, e.g. SFMR, SMAP and SMAP prediction do
+                        # not match any more even they do match
                         if delta.days or delta.seconds > 1800:
                             continue
 
@@ -518,4 +529,3 @@ class matchManager(object):
         area[3] = (area[3] + 360) % 360
 
         return data, list(hourtimes), area
-

@@ -1,0 +1,36 @@
+name: SWFusion
+channels:
+  - defaults
+dependencies:
+  - python=3.7
+  - yaml
+  - pyyaml
+  - requests
+  - beautifulsoup4
+  - progressbar2
+  - numpy
+  - pandas
+  - netcdf4
+  - matplotlib
+  - lxml
+  - mysql
+  - mysql-connector-python
+  - sqlalchemy
+  - coloredlogs
+  - geopy
+  - seaborn
+  - cdsapi
+  - pygrib
+  - pyshp
+  - scikit-learn
+  - keras
+  - xgboost
+  - basemap-data-hires
+  - basemap
+  - pymysql
+  - mysqlclient
+  - lightgbm
+  - hyperopt
+  - statsmodels
+prefix: /Users/lujingze/anaconda3/envs/SWFusion
+

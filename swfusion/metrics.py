@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def custom_asymmetric_train(y_pred, train_data, slope, min_alpha):
+def custom_asymmetric_train(y_pred, train_data, slope=10, min_alpha=0):
     try:
         y_true = train_data.label
         residual = (y_true - y_pred).astype("float")
@@ -16,7 +16,7 @@ def custom_asymmetric_train(y_pred, train_data, slope, min_alpha):
     return grad, hess
 
 
-def custom_asymmetric_valid(y_pred, train_data, slope, min_alpha):
+def custom_asymmetric_valid(y_pred, train_data, slope=10, min_alpha=0):
     try:
         y_true = train_data.label
         residual = (y_true - y_pred).astype("float")

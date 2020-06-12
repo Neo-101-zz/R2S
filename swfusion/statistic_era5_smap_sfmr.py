@@ -1,5 +1,7 @@
 import logging
 import math
+import string
+import sys
 
 from sqlalchemy.ext.declarative import declarative_base
 import pandas as pd
@@ -8,6 +10,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from scipy import stats
 from sklearn.metrics import r2_score
+import numpy as np
 
 import utils
 
@@ -55,6 +58,7 @@ class Statisticer(object):
         # self.show_hist_of_matchup()
         # breakpoint()
         self.compare_two_sources()
+        # self.show_2d_diff_between_sources()
 
     def show_hist_of_matchup(self):
         # df = pd.read_sql('SELECT * FROM tc_sfmr_era5_na',
@@ -65,12 +69,87 @@ class Statisticer(object):
         all_basins = self.CONFIG['ibtracs']['urls'].keys()
         for basin in all_basins:
             table_name = f'tc_smap_era5_{basin}'
-            if (utils.get_class_by_tablename(self.engine, table_name)
+            if (utils.get_class_by_table_name(self.engine, table_name)
                     is not None):
                 df = pd.read_sql(f'SELECT * FROM {table_name}',
                                  self.engine)
                 df.hist(column=['smap_windspd'], figsize=(12, 10))
                 plt.show()
+
+    def show_2d_diff_between_sources(self):
+        try:
+            if ('smap_prediction' in self.sources
+                    and 'smap' in self.sources):
+                src_1 = 'smap'
+                src_2 = 'smap_prediction'
+            else:
+                self.logger.error(('Have not considered this '
+                                   'combination of sources'))
+                sys.exit(1)
+
+            CompareTable = utils.create_2d_compare_table(
+                self, src_1, src_2)
+            table_name = utils.get_2d_compare_table_name(
+                self, src_1, src_2)
+            # Get max and min of x and y
+            df = pd.read_sql(f'SELECT * FROM {table_name}', self.engine)
+            x_min = df['x'].min()
+            x_max = df['x'].max()
+            y_min = df['y'].min()
+            y_max = df['y'].max()
+            x_length = int(x_max - x_min) + 1
+            y_length = int(y_max - y_min) + 1
+
+            degree = u'\N{DEGREE SIGN}'
+            xticklabels = [f'{int(0.25*(x+x_min))}{degree}'
+                           if not x%4 else ''
+                           for x in range(x_length)]
+            yticklabels = [f'{int(0.25*(y+y_min))}{degree}'
+                           if not y%4 else ''
+                           for y in range(y_length)]
+
+            count_matrix = np.zeros(shape=(y_length, x_length))
+            mean_bias_matrix = np.zeros(shape=(y_length, x_length))
+            rmse_matrix = np.zeros(shape=(y_length, x_length))
+
+            for y in range(y_length):
+                for x in range(x_length):
+                    pixel_df = df.loc[(df['y'] == y_min + y)
+                                      & (df['x'] == x_min + x)]
+                    count_matrix[y][x] = len(pixel_df)
+                    mean_bias_matrix[y][x] = pixel_df[
+                        f'{src_2}_minus_{src_1}_windspd'].mean()
+                    rmse_matrix[y][x] = np.sqrt(
+                        mean_squared_error(pixel_df[f'{src_1}_windspd'],
+                                           pixel_df[f'{src_2}_windspd']))
+
+            fig, axes = plt.subplots(1, 3, figsize=(22, 4))
+
+            sns.heatmap(count_matrix, ax=axes[0], square=True, fmt='g')
+            sns.heatmap(mean_bias_matrix, ax=axes[1], square=True,
+                        fmt='g')
+            sns.heatmap(rmse_matrix, ax=axes[2], square=True, fmt='g')
+
+            subplot_titles = ['Count', 'Mean bias (m/s)', 'RMSE (m/s)']
+            for index, ax in enumerate(axes):
+                ax.invert_yaxis()
+                ax.text(-0.1, 1.025,
+                        f'({string.ascii_lowercase[index]})',
+                        transform=ax.transAxes, fontsize=16,
+                        fontweight='bold', va='top', ha='right')
+                ax.set_title(subplot_titles[index], size=15)
+
+                ax.set_xticklabels(xticklabels)
+                ax.set_yticklabels(yticklabels, rotation=0)
+
+            fig.tight_layout()
+            # plt.xlabel('x')
+            # plt.ylabel('y')
+            # ax.legend(title=None, loc='upper left', labels=labels)
+            plt.show()
+        except Exception as msg:
+            breakpoint()
+            sys.exit(msg)
 
     def compare_two_sources(self):
         bias = dict()
@@ -78,10 +157,12 @@ class Statisticer(object):
         sfmr_dt_name = 'sfmr_datetime'
 
         for src in self.sources:
-            tablename = utils.gen_validation_tablename(self, 'sfmr',
-                                                       src)
+            table_name = utils.gen_validation_tablename(self, 'sfmr', src)
+            if src == 'smap_prediction' and 'smap' in self.sources:
+                table_name = ('smap_prediction_validation_by_sfmr'
+                             '_na_aligned_with_smap')
             df = pd.read_sql(
-                (f"""SELECT * FROM {tablename} """
+                (f"""SELECT * FROM {table_name} """
                  f"""where sfmr_datetime > "{self.period_str[0]}" """
                  f"""and sfmr_datetime < "{self.period_str[1]}" """),
                 self.engine)
@@ -95,6 +176,8 @@ class Statisticer(object):
         for ts in sfmr_dt_intersection:
             tmp.add(ts.to_datetime64())
         sfmr_dt_intersection = tmp
+        print((f"""Length of sfmr_dt_intersection: """
+               f"""{len(sfmr_dt_intersection)}"""))
 
         for src in self.sources:
             drop_row_indices = []
@@ -115,6 +198,9 @@ class Statisticer(object):
                                f"""{self.src_2}({len_src2})"""))
             breakpoint()
             exit(1)
+        print(f'Length of {self.src_1}: {len_src1}')
+        print(f'Length of {self.src_2}: {len_src2}')
+
 
         bias_list = [bias[src] for src in self.sources]
         bias_list = self.unify_df_colnames(bias_list)
@@ -122,8 +208,8 @@ class Statisticer(object):
         self.show_simple_statistic(bias_list)
         self.show_detailed_statistic(bias_list)
         self.plot_scatter_regression(bias_list)
-        val_dir = self.CONFIG['results']['dirs']['fig'][
-            'validation_by_sfmr']
+        # val_dir = self.CONFIG['results']['dirs']['fig'][
+        #     'validation_by_sfmr']
         # utils.box_plot_windspd(val_dir
 
     def unify_df_colnames(self, bias_list):
@@ -166,8 +252,8 @@ class Statisticer(object):
                     df_part['tgt_windspd'])
             r2[src] = r2_score(df_part['tgt_windspd'],
                                linefitline(src, df_part['tgt_windspd']))
-            equation_str[src] = (f"""y={slope[src]:.1f}x"""
-                                 f"""{interpect[src]:+.1f}""")
+            equation_str[src] = (f"""y={slope[src]:.2f}x"""
+                                 f"""{interpect[src]:+.2f}""")
 
         print(f'R2: {r2}')
 

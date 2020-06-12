@@ -111,7 +111,7 @@ class Regression(object):
 
     def __init__(self, CONFIG, train_period, train_test_split_dt,
                  region, basin, passwd, save_disk, instructions,
-                 model_tag):
+                 smogn_target, tag):
         self.logger = logging.getLogger(__name__)
         self.CONFIG = CONFIG
         self.train_period = train_period
@@ -123,7 +123,8 @@ class Regression(object):
         self.save_disk = save_disk
         self.basin = basin
         self.instructions = instructions
-        self.model_tag = model_tag
+        self.smogn_target = smogn_target
+        self.tag = tag
 
         self.smap_columns = ['x', 'y', 'lon', 'lat', 'windspd']
         # self.era5_columns = self.CONFIG['era5']['all_vars']
@@ -148,7 +149,8 @@ class Regression(object):
 
         self.predict_table_name_prefix = 'predicted_smap_tc'
 
-        self.compare_zorders = self.CONFIG['plot']['zorders']['compare']
+        self.compare_zorders = self.CONFIG['plot']['zorders'][
+            'compare']
 
         self.wind_radii = self.CONFIG['wind_radii']
 
@@ -158,7 +160,17 @@ class Regression(object):
 
         self.set_variables()
 
-        self.read_smap_era5(False)
+        self.read_smap_era5()
+        self.show_dataset_shape()
+
+        # with open(('/Users/lujingze/Programming/SWFusion/regression/'
+        #            'tc/dataset/comparison_smogn/test_smogn.pkl'),
+        #           'rb') as f:
+        #     test = pickle.load(f)
+        # self.y_test = getattr(test, self.y_name).reset_index(drop=True)
+        # self.X_test = test.drop([self.y_name], axis=1).reset_index()
+        # self.show_dataset_shape()
+
         if 'dt' in self.instructions:
             self.decision_tree()
         if 'xgb' in self.instructions:
@@ -166,12 +178,24 @@ class Regression(object):
             self.xgb_regressor()
             # self.xgb_importance()
         if 'lgb' in self.instructions:
-            # self.optimize_lgb(maxevals=60)
-            self.lgb_best_regressor()
-            # self.lgb_default_regressor()
-            # self.lgb_hyperoptimization()
+            if 'optimize' in self.instructions:
+                self.optimize_lgb(maxevals=60)
+            elif 'compare_best' in self.instructions:
+                self.compare_lgb_best_regressor()
+            elif 'best' in self.instructions:
+                self.lgb_best_regressor()
+            elif 'default' in self.instructions:
+                self.lgb_default_regressor()
+            else:
+                self.logger.error('Nothing happen')
         if 'dnn' in self.instructions:
             self.deep_neural_network()
+
+    def show_dataset_shape(self):
+        print(f'X_train shape: {self.X_train.shape}')
+        print(f'y_train shape: {self.y_train.shape}')
+        print(f'X_test shape: {self.X_test.shape}')
+        print(f'y_test shape: {self.y_test.shape}')
 
     def set_variables(self):
         if 'plot_dist' in self.instructions:
@@ -179,10 +203,15 @@ class Regression(object):
         else:
             self.plot_dist = False
 
-        if 'smogn' in self.instructions:
-            self.smogn = True
+        if 'smogn_hyperopt' in self.instructions:
+            self.smogn_hyperopt = True
         else:
-            self.smogn = False
+            self.smogn_hyperopt = False
+
+        if 'smogn_final' in self.instructions:
+            self.smogn_final = True
+        else:
+            self.smogn_final = False
 
         if 'save' in self.instructions:
             self.save = True
@@ -198,16 +227,6 @@ class Regression(object):
             self.with_focal_loss = True
         else:
             self.with_focal_loss = False
-
-        if 'center' in self.instructions:
-            self.center = True
-        else:
-            self.center = False
-
-        if 'borrow' in self.instructions:
-            self.borrow = True
-        else:
-            self.borrow = False
 
     def evaluation_df_visualition(self):
         reg_tc_dir = self.CONFIG['regression']['dirs']['tc']
@@ -367,68 +386,6 @@ class Regression(object):
 
         return score
 
-    def lgb_best_regressor_old(self):
-        self.logger.info((f"""Regress by lightgbm regressor"""))
-
-        # Hyper parameters verified after hyperoptimization
-
-        # No SMOGN
-        # best_params = {
-        #     'boosting_type': 'gbdt',
-        #     'num_leaves': 255,
-        #     'max_depth': -1,
-        #     'learning_rate': 0.1,
-        #     'n_estimators': 2524,
-        #     'subsample': 0.874140028391694,
-        #     'colsample_bytree': 0.8732644854988912,
-        #     'n_jobs': -1,
-        # }
-
-        # With SMOGN
-        best_params = {
-            'boosting_type': 'gbdt',
-            'num_leaves': 511,
-            'max_depth': -1,
-            'learning_rate': 0.1,
-            'n_estimators': 1877,
-            'subsample': 0.937375580029069,
-            'colsample_bytree': 0.6484142866996947,
-            'n_jobs': -1,
-        }
-
-        est = lgb.LGBMRegressor()
-        # Set params
-        est.set_params(**best_params)
-
-        # Fit
-        est.fit(self.X_train, self.y_train)
-        # Predict
-        y_pred = est.predict(self.X_test)
-
-        y_test = self.y_test.to_numpy()
-        self.smogn_setting_dir = (
-            f"""{self.smogn_setting_dir[:-2]}_hyperoptimized/""")
-        os.makedirs(self.smogn_setting_dir, exist_ok=True)
-        utils.jointplot_kernel_dist_of_imbalance_windspd(
-            self.smogn_setting_dir, y_test, y_pred)
-        utils.box_plot_windspd(self.smogn_setting_dir, y_test, y_pred)
-
-        mse = mean_squared_error(y_test, y_pred)
-        print("MSE SCORE ON TEST DATA: {}".format(mse))
-        print("RMSE SCORE ON TEST DATA: {}".format(math.sqrt(mse)))
-
-        if hasattr(self, 'smogn_setting_dir'):
-            pickle.dump(est, open((
-                f"""{self.smogn_setting_dir}"""
-                f"""{self.basin}_mse_{mse}_{self.model_tag}"""
-                f""".pickle.dat"""), 'wb'))
-        else:
-            # save model to file
-            pickle.dump(est, open((
-                f"""{self.model_dir["lgb"]}"""
-                f"""{self.basin}_mse_{mse}_{self.model_tag}"""
-                f""".pickle.dat"""), 'wb'))
-
     def lgb_default_regressor(self):
         self.logger.info((f"""Default lightgbm regressor"""))
         # Initilize instance of estimator
@@ -440,25 +397,32 @@ class Regression(object):
         y_pred = est.predict(self.X_test)
 
         y_test = self.y_test.to_numpy()
+
+        if self.smogn:
+            if self.smogn_hyperopt:
+                default_dir = self.smogn_setting_dir
+            else:
+                default_dir = (f"""{self.model_dir["lgb"]}"""
+                               f"""default_regressor/""")
+        else:
+            self.error(('Have not considered the situation that '
+                        'not using SMOGN'))
+            exit(1)
+
+        os.makedirs(default_dir, exist_ok=True)
         # utils.distplot_imbalance_windspd(y_test, y_pred)
         utils.jointplot_kernel_dist_of_imbalance_windspd(
-            self.smogn_setting_dir, y_test, y_pred)
-        utils.box_plot_windspd(self.smogn_setting_dir, y_test, y_pred)
+            default_dir, y_test, y_pred)
+        utils.box_plot_windspd(default_dir, y_test, y_pred)
         mse = mean_squared_error(y_test, y_pred)
         print("MSE SCORE ON TEST DATA: {}".format(mse))
         print("RMSE SCORE ON TEST DATA: {}".format(math.sqrt(mse)))
 
-        if hasattr(self, 'smogn_setting_dir'):
-            pickle.dump(est, open((
-                f"""{self.smogn_setting_dir}"""
-                f"""{self.basin}_mse_{mse}_{self.model_tag}"""
-                f""".pickle.dat"""), 'wb'))
-        else:
-            # save model to file
-            pickle.dump(est, open((
-                f"""{self.model_dir["lgb"]}"""
-                f"""{self.basin}_mse_{mse}_{self.model_tag}"""
-                f""".pickle.dat"""), 'wb'))
+        # save model to file
+        pickle.dump(est, open((
+            f"""{default_dir}"""
+            f"""{self.basin}_mse_{mse}_{self.tag}"""
+            f""".pickle.dat"""), 'wb'))
 
     def optimize_lgb(self, maxevals=200):
         self.lgb_train = lgb.Dataset(self.X_train, self.y_train,
@@ -484,8 +448,9 @@ class Regression(object):
         best['verbose'] = -1
 
         if self.with_focal_loss:
-            focal_loss_obj = lambda x, y: custom_asymmetric_train(
-                x, y, best['slope'], best['min_alpha'])
+            focal_loss_obj = lambda x, y: custom_asymmetric_train(x, y)
+            # focal_loss_obj = lambda x, y: custom_asymmetric_train(
+            #     x, y, best['slope'], best['min_alpha'])
             # focal_loss_eval = lambda x, y: custom_asymmetric_valid(
             #     x, y, best['slope'], best['min_alpha'])
 
@@ -523,11 +488,18 @@ class Regression(object):
                 'with_focal_loss': '_fl',
                 'center': '_center',
                 'smogn': '_smogn',
+                'smogn_final': '_smogn_final',
+                'smogn_hyperopt': '_smogn_hyperopt',
                 'borrow': '_borrow',
             }
-            for idx, (key, val) in enumerate(out_name_suffix.items()):
-                if getattr(self, key) is True:
-                    out_fname += val
+            try:
+                for idx, (key, val) in enumerate(
+                        out_name_suffix.items()):
+                    if hasattr(self, key) and getattr(self, key) is True:
+                        out_fname += val
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
             out_dir = f'{self.model_dir["lgb"]}{out_fname}/'
             os.makedirs(out_dir, exist_ok=True)
             out_fname += '.pkl'
@@ -538,12 +510,34 @@ class Regression(object):
         self.best = best
         self.model = model
 
+    def compare_lgb_best_regressor(self):
+        y_test_pred_paths = {
+            'FL': '/Users/lujingze/Programming/SWFusion/regression/tc/lightgbm/model/na_3.050352_fl_smogn_final/test_pred.pkl',
+            'MSE': '/Users/lujingze/Programming/SWFusion/regression/tc/lightgbm/model/na_2.114560/test_pred.pkl'
+        }
+        y_test_pred = dict()
+        name_comparison = ''
+        for idx, (key, val) in enumerate(y_test_pred_paths.items()):
+            out_root_dir = val.split(f'{self.basin}_')[0]
+            name = val.split('model/')[1].split('/test')[0]
+            name_comparison += f'_vs_{name}'
+            with open(val, 'rb') as f:
+                y_test_pred[key] = pickle.load(f)
+        name_comparison = name_comparison[4:]
+        out_dir = f'{out_root_dir}{name_comparison}/'
+        os.makedirs(out_dir, exist_ok=True)
+
+        y_test = self.y_test.to_numpy()
+        utils.box_plot_windspd(out_dir, y_test, y_test_pred)
+        utils.statistic_of_bias(y_test, y_test_pred)
+
     def lgb_best_regressor(self):
         out_dir = ('/Users/lujingze/Programming/SWFusion/regression/'
                    'tc/lightgbm/model/'
-                   'na_0.891876_fl_smogn_50_slope_0.05/')
+                   'na_3.104058_fl_smogn_final/')
         save_file = [f for f in os.listdir(out_dir)
-                     if f.endswith('.pkl')]
+                     if f.endswith('.pkl')
+                     and f.startswith(f'{self.basin}')]
         if len(save_file) != 1:
             self.logger.error('Count of Bunch is not ONE')
             exit(1)
@@ -562,6 +556,9 @@ class Regression(object):
             out_dir, y_test, y_pred)
         utils.box_plot_windspd(out_dir, y_test, y_pred)
 
+        with open(f'{out_dir}test_pred.pkl', 'wb') as f:
+            pickle.dump(y_pred, f)
+
     def get_objective(self, train):
 
         def objective(params):
@@ -577,10 +574,12 @@ class Regression(object):
             params['seed'] = 1
 
             if self.with_focal_loss:
-                focal_loss_obj = lambda x, y: custom_asymmetric_train(
-                    x, y, params['slope'], params['min_alpha'])
-                focal_loss_eval = lambda x, y: custom_asymmetric_valid(
-                    x, y, params['slope'], params['min_alpha'])
+                focal_loss_obj = lambda x, y: custom_asymmetric_train(x, y)
+                focal_loss_eval = lambda x, y: custom_asymmetric_valid(x, y)
+                # focal_loss_obj = lambda x, y: custom_asymmetric_train(
+                #     x, y, params['slope'], params['min_alpha'])
+                # focal_loss_eval = lambda x, y: custom_asymmetric_valid(
+                #     x, y, params['slope'], params['min_alpha'])
 
                 cv_result = lgb.cv(
                     params,
@@ -627,9 +626,9 @@ class Regression(object):
             'reg_alpha': hp.uniform('reg_alpha', 0.01, 0.1),
             'reg_lambda': hp.uniform('reg_lambda', 0.01, 0.1),
         }
-        if self.with_focal_loss:
-            space['slope'] = hp.uniform('slope', 0.05, 1.)
-            space['min_alpha'] = hp.uniform('min_alpha', 1., 2.)
+        # if self.with_focal_loss:
+        #     space['slope'] = hp.uniform('slope', 0.05, 1.)
+        #     space['min_alpha'] = hp.uniform('min_alpha', 1., 2.)
 
         return space
 
@@ -1062,15 +1061,15 @@ class Regression(object):
 
         yaml_string = self.NN_model.to_yaml()
         # model = model_from_yaml(yaml_string)
-        model_summary_dir = self.CONFIG['regression']['dirs']['tc']\
-                ['neural_network']['model_summary']
+        model_summary_dir = self.CONFIG['regression']['dirs']['tc'][
+            'neural_network']['model_summary']
         os.makedirs(model_summary_dir, exist_ok=True)
         model_summary_path = f'{model_summary_dir}model.yml'
         with open(model_summary_path, 'w') as outfile:
             yaml.dump(yaml_string, outfile, default_flow_style=False)
 
-        checkpoint_root_dir = self.CONFIG['regression']['dirs']\
-                ['tc']['neural_network']['checkpoint']
+        checkpoint_root_dir = self.CONFIG['regression']['dirs'][
+            'tc']['neural_network']['checkpoint']
 
         self.checkpoint_dir = (f"""{checkpoint_root_dir}""")
         # Remove old checkpoint files
@@ -1102,9 +1101,10 @@ class Regression(object):
             embeddings_freq=0, embeddings_layer_names=None,
             embeddings_metadata=None, embeddings_data=None,
             update_freq='epoch')
-        self.callbacks_list = [checkpoint_callback, tensorboard_callback]
+        self.callbacks_list = [checkpoint_callback,
+                               tensorboard_callback]
 
-    def read_smap_era5(self, sample):
+    def read_smap_era5(self):
         self.logger.info((f"""Reading SMAP-ERA5 data"""))
         self.X_train, self.y_train, self.X_test, self.y_test = \
-            utils.get_combined_data(self, sample)
+            utils.get_combined_data(self)
