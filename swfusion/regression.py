@@ -536,7 +536,7 @@ class Regression(object):
     def lgb_best_regressor(self):
         out_dir = ('/Users/lujingze/Programming/SWFusion/regression/'
                    'tc/lightgbm/model/'
-                   'na_3.104058_fl_smogn_final/')
+                   'na_107.015567_fl_smogn_final/')
         save_file = [f for f in os.listdir(out_dir)
                      if f.endswith('.pkl')
                      and f.startswith(f'{self.basin}')]
