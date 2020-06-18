@@ -250,12 +250,11 @@ class Statisticer(object):
                 p_value[src], std_err[src] = stats.linregress(
                     df_part['sfmr_windspd'],
                     df_part['tgt_windspd'])
-            r2[src] = r2_score(df_part['tgt_windspd'],
-                               linefitline(src, df_part['tgt_windspd']))
+            # r2[src] = r2_score(df_part['tgt_windspd'],
+            #                    linefitline(src, df_part['tgt_windspd']))
             equation_str[src] = (f"""y={slope[src]:.2f}x"""
                                  f"""{interpect[src]:+.2f}""")
 
-        print(f'R2: {r2}')
 
         pal = dict()
         labels = []
@@ -264,7 +263,7 @@ class Statisticer(object):
             pal[src] = colors[idx]
             labels.append((f"""{self.src_plot_names[idx]}: """
                            f"""{equation_str[src]} """
-                           f"""(Corr Coeff: {r2[src]:.3f})"""))
+                           f"""(Corr Coeff: {r_value[src]:.3f})"""))
 
         plt.rcParams['figure.figsize'] = (50.0, 30.0)
 

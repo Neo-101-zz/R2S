@@ -14,6 +14,7 @@ from sqlalchemy.ext.declarative import declarative_base
 import pandas as pd
 import pygrib
 import numpy as np
+import numpy.ma as ma
 import matplotlib.pyplot as plt
 from scipy import interpolate
 from sklearn.preprocessing import MinMaxScaler
@@ -31,7 +32,7 @@ Base = declarative_base()
 class TCComparer(object):
 
     def __init__(self, CONFIG, period, region, basin, passwd,
-                 save_disk, compare_instructions, draw_sfmr):
+                 save_disk, compare_instructions, draw_sfmr, work=True):
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
@@ -144,7 +145,8 @@ class TCComparer(object):
 
         utils.reset_signal_handler()
 
-        self.compare_sources()
+        if work:
+            self.compare_sources()
 
     def gen_sources_str(self):
         sources_str = ''
@@ -608,6 +610,40 @@ class TCComparer(object):
         subplot_title_suffix = (
             f"""{accurate_dt.strftime('%H%M UTC %d %b %Y')} """
         )
+        smap_prediction_outliers = [
+            utils.Outlier(tc_sid='2017171N24271',
+                          tc_datetime=datetime.datetime(
+                              2017, 6, 21, 12, 0, 0),
+                          x=2,
+                          y=8),
+            utils.Outlier(tc_sid='2017171N24271',
+                          tc_datetime=datetime.datetime(
+                              2017, 6, 21, 12, 0, 0),
+                          x=-6,
+                          y=6),
+            utils.Outlier(tc_sid='2017171N24271',
+                          tc_datetime=datetime.datetime(
+                              2017, 6, 21, 12, 0, 0),
+                          x=-5,
+                          y=6)
+        ]
+        outlier_exists = []
+        for outlier in smap_prediction_outliers:
+            if (outlier.tc_sid == interped_tc.sid
+                and outlier.tc_datetime == \
+                    interped_tc.date_time):
+                outlier_exists.append(True)
+            else:
+                outlier_exists.append(False)
+        if ('smap_prediction' not in self.sources
+                or True not in outlier_exists):
+            smap_prediction_outliers = None
+        else:
+            tmp = copy.copy(smap_prediction_outliers)
+            smap_prediction_outliers = []
+            for hit, outlier in zip(outlier_exists, tmp):
+                if hit:
+                    smap_prediction_outliers.append(outlier)
         # Draw windspd
         for src in self.sources:
             try:
@@ -615,18 +651,20 @@ class TCComparer(object):
                     continue
                 ax = axs_list[index]
 
+                fontsize = 20
                 utils.draw_windspd(self, fig, ax, interped_tc.date_time,
                                    lons[src], lats[src], windspd[src],
                                    max_windspd, mesh[src], custom=True,
-                                   region=draw_region)
+                                   region=draw_region,
+                                   outliers=smap_prediction_outliers)
                 if self.draw_sfmr:
                     utils.draw_sfmr_windspd_and_track(
                         self, fig, ax, interped_tc.date_time,
                         sfmr_tracks, sfmr_pts, max_windspd)
                 if text_subplots_serial_number:
-                    ax.text(-0.125, 1.025,
-                            f'({string.ascii_lowercase[index]})',
-                            transform=ax.transAxes, fontsize=16,
+                    ax.text(0.1, 0.95,
+                            f'{string.ascii_lowercase[index]})',
+                            transform=ax.transAxes, fontsize=20,
                             fontweight='bold', va='top', ha='right')
                 # ax.title.set_text((f"""{interped_tc.name} """
                 #                    f"""{self.sources_titles[src]} """
@@ -641,8 +679,7 @@ class TCComparer(object):
                 breakpoint()
                 exit(msg)
 
-        fig.subplots_adjust(wspace=0.4)
-        fig.tight_layout()
+        fig.tight_layout(pad=0.1)
 
         dt_str = interped_tc.date_time.strftime('%Y_%m%d_%H%M')
         fig_dir = self.CONFIG['result']['dirs']['fig']['root']
@@ -1269,8 +1306,8 @@ class TCComparer(object):
                          'regression/tc/lightgbm/model/'
                          'na_0.891876_fl_smogn_50_slope_0.05/')
             # best_model = utils.load_best_model(model_dir, self.basin)
-            model = utils.load_model_from_bunch(model_dir, '.pkl',
-                                                'model')
+            model = utils.load_model_from_bunch(model_dir, self.basin,
+                                                '.pkl', 'model')
             y_pred = model.predict(env_df)
             smap_windspd_xyz_matrix_dict['windspd'] = list(y_pred)
 
@@ -1305,6 +1342,7 @@ class TCComparer(object):
                 breakpoint()
                 exit(msg)
 
+        windspd = ma.masked_values(windspd, -1)
         return windspd
 
     def get_env_data_of_matrix_with_coordinates(self, tc,

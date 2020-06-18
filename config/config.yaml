@@ -77,7 +77,8 @@ plot:
       wedge: 9
       sfmr_track: 9
       sfmr_point: 10
-      grid: 11
+      outlier: 11
+      grid: 12
     scs_basemap:
       coastlines: 4
       mapboundary: 0
@@ -603,6 +604,7 @@ result:
   dirs:
     fig:
       root: '../fig/'
+      simulation: '../fig/simulation/'
       validation_by_sfmr: '../fig/validation_by_sfmr/'
       hist_of_regression_features:
         original: '../fig/hist_of_regression_features/original/'
@@ -698,6 +700,12 @@ smogn:
       - [20, 0, 0]
       - [35, 0, 0]
       - [50, 1, 0]
+classify:
+  dirs:
+    lightgbm:
+      evaluation: '../classify/tc/lightgbm/evaluation/'
+      model: '../classify/tc/lightgbm/model/'
+      importance: '../classify/tc/lightgbm/importance/'
 regression:
   edge_in_degree: 4
   dirs:
@@ -707,7 +715,9 @@ regression:
         original:
           self: '../regression/tc/dataset/original/'
           train: '../regression/tc/dataset/original/train.pkl'
+          train_splitted: '../regression/tc/dataset/original/train_splitted.pkl'
           test: '../regression/tc/dataset/original/test.pkl'
+          valid: '../regression/tc/dataset/original/valid.pkl'
         smogn_hyperopt: '../regression/tc/dataset/smogn_hyperopt/'
         smogn_final:
           self: '../regression/tc/dataset/smogn_final/'
@@ -721,6 +731,10 @@ regression:
             self: '../regression/tc/dataset/smogn_final/smogn_on_train/'
             train: '../regression/tc/dataset/smogn_final/smogn_on_train/train_smogn_on_train.pkl'
             distribution_comparison: '../regression/tc/dataset/smogn_final/smogn_on_train/comparison_of_distribution_smogn_on_train.png'
+          smogn_on_train_splitted:
+            self: '../regression/tc/dataset/smogn_final/smogn_on_train_splitted/'
+            train: '../regression/tc/dataset/smogn_final/smogn_on_train_splitted/train_splitted_smogn.pkl'
+            distribution_comparison: '../regression/tc/dataset/smogn_final/smogn_on_train_splitted/comparison_of_distribution_smogn_on_train_splitted.png'
       neural_network:
         model_summary: '../regression/tc/neural_network/model_summary/'
         checkpoint: '../regression/tc/neural_network/checkpoint/'

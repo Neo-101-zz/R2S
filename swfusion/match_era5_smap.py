@@ -399,6 +399,11 @@ class matchManager(object):
 
                 for i in range(passes_num):
                     try:
+                        if (tc.date_time == datetime.datetime(
+                            2017, 6, 21, 12, 0, 0)
+                            and x - self.half_edge_grid_intervals == 2
+                            and y - self.half_edge_grid_intervals == 8):
+                            breakpoint()
                         if (minute[y][x][i] == minute_missing
                             or wind[y][x][i] == wind_missing):
                             continue
@@ -452,6 +457,7 @@ class matchManager(object):
                             f"""{row.satel_datetime}"""
                             f"""_{row.lon}_{row.lat}""")
                         row.smap_windspd = float(wind[y][x][i])
+
 
                         this_hourtime = utils.hour_rounder(
                             row.satel_datetime).hour

@@ -32,6 +32,11 @@ import seaborn as sns
 import smogn
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
+from sklearn.metrics import r2_score
+from scipy import stats
+import string
+from matplotlib.colors import LinearSegmentedColormap
+import webcolors
 
 from amsr2_daily import AMSR2daily
 from ascat_daily import ASCATDaily
@@ -44,6 +49,7 @@ logger = logging.getLogger(__name__)
 pbar = None
 format_custom_text = None
 current_file = None
+MASKED = np.ma.core.masked
 
 DEGREE_OF_ONE_NMILE = float(1)/60
 KM_OF_ONE_NMILE = 1.852
@@ -54,6 +60,14 @@ RADII_LEVELS = [34, 50, 64]
 # Python program to check if rectangles overlap
 class Point:
     def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+
+class Outlier:
+    def __init__(self, tc_sid, tc_datetime, x, y):
+        self.tc_sid = tc_sid
+        self.tc_datetime = tc_datetime
         self.x = x
         self.y = y
 
@@ -1892,8 +1906,42 @@ def gen_scs_era5_table_name(dt_cursor, hourtime):
     return table_name
 
 
-def draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
-                               wind_zorder, max_windspd, mesh):
+def windspd_colormap():
+    # colors_name = ['DarkBlue',          # 0.0
+    #                'Blue',              # 4.5
+    #                'DodgerBlue',        # 9.0
+    #                'Cyan',       # 13.5
+    #                'Green',  # 18.0
+    #                'LimeGreen',          # 22.5
+    #                'Gold',           # 27.0
+    #                'Orange',           # 31.5
+    #                'Tomato',        # 36.0
+    #                'Red',              # 40.5
+    #                'Violet'         # 45.0
+    #               ]
+    colors_name = ['DarkBlue',          # 0.0
+                   'DodgerBlue',        # 9.0
+                   'Cyan',       # 13.5
+                   'LimeGreen',          # 22.5
+                   'Yellow',           # 27.0
+                   'Orange',           # 31.5
+                   'Red',              # 40.5
+                   'Violet'         # 45.0
+                  ]
+    colors = []
+    for name in colors_name:
+        colors.append(webcolors.name_to_hex(name))
+
+    colors_num = len(colors)
+    nodes = [(1.0/(colors_num-1)) * x for x in range(colors_num)]
+    nodes[-1] = 1.0
+    windspd_cmap = LinearSegmentedColormap.from_list("windspd_cmap",
+                                                     list(zip(nodes, colors)))
+    return windspd_cmap
+
+
+def draw_windspd_with_contourf(the_class, fig, ax, lons, lats, windspd,
+                               max_windspd, mesh, outliers, fontsize=13):
     if not mesh:
         X, Y = np.meshgrid(lons, lats)
     else:
@@ -1901,30 +1949,51 @@ def draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
     Z = windspd
 
     # windspd_levels = [5*x for x in range(1, 15)]
-    windspd_levels = np.linspace(0, max_windspd, 30)
 
     # cs = ax.contour(X, Y, Z, levels=windspd_levels,
     #                 zorder=self.zorders['contour'], colors='k')
     # ax.clabel(cs, inline=1, colors='k', fontsize=10)
     try:
+        wind_zorder = the_class.zorders['contourf']
+        outlier_zorder = the_class.zorders['outlier']
+        bounds = []
+        for i in range(20):
+            bounds.append(i * 5)
+            if i * 5 < max_windspd and (i+1) * 5 > max_windspd:
+                clb_max = (i+1) * 5
+                bounds.append(clb_max)
+                break
+        windspd_levels = np.linspace(0, clb_max, int(1.5 * clb_max))
         cf = ax.contourf(X, Y, Z,
                          levels=windspd_levels,
                          zorder=wind_zorder,
-                         cmap=plt.cm.rainbow,
-                         vmin=0, vmax=max_windspd)
+                         cmap=windspd_colormap(),
+                         vmin=0, vmax=clb_max)
+        cf.set_clim([0, clb_max])
+
+        if outliers is not None:
+            half_edge = the_class.CONFIG['regression']['edge_in_degree'] / 2
+            offset = int(half_edge /
+                         the_class.CONFIG['spatial_resolution']['smap'])
+            for pt in outliers:
+                pt_x = X[pt.y+offset][pt.x+offset]
+                pt_y = Y[pt.y+offset][pt.x+offset]
+                ax.scatter(pt_x, pt_y, s=60, c='red',
+                           zorder=outlier_zorder)
     except Exception as msg:
         breakpoint()
         exit(msg)
 
     divider = make_axes_locatable(ax)
-    cax = divider.append_axes('right', size='5%', pad=0.05)
+    cax = divider.append_axes('bottom', size='5%', pad=0.3)
 
-    clb = fig.colorbar(cf, cax=cax, orientation='vertical',
-                       format='%.1f')
-    clb.ax.set_title('m/s')
+    clb = fig.colorbar(cf, cax=cax, orientation='horizontal',
+                       format='%d', ticks=bounds)
+    clb.ax.tick_params(labelsize=fontsize)
+    clb.set_label('(m/s)', size=fontsize)
 
 
-def draw_SCS_basemap(the_class, ax, custom, region):
+def draw_SCS_basemap(the_class, ax, custom, region, fontsize=13):
     if not custom:
         lat1 = the_class.lat1
         lat2 = the_class.lat2
@@ -1948,60 +2017,24 @@ def draw_SCS_basemap(the_class, ax, custom, region):
     meridians_interval = (lon2 - lon1) / 4
     parallels_interval = (lat2 - lat1) / 4
     map.drawmeridians(np.arange(lon1, lon2+0.01, meridians_interval),
-                      labels=[1, 0, 0, 1],  fmt='%.2f',
-                      zorder=the_class.zorders['grid'])
+                      labels=[1, 0, 0, 1],  fmt='%.1f',
+                      zorder=the_class.zorders['grid'],
+                      fontsize=fontsize)
     map.drawparallels(np.arange(lat1, lat2+0.01, parallels_interval),
-                      labels=[1, 0, 0, 1], fmt='%.2f',
-                      zorder=the_class.zorders['grid'])
+                      labels=[1, 0, 0, 1], fmt='%.1f',
+                      zorder=the_class.zorders['grid'],
+                      fontsize=fontsize)
 
     return map
 
 
-def draw_windspd_with_imshow(map, fig, ax, lons, lats, windspd,
-                             wind_zorder, max_windspd, mesh):
-    rows_num, cols_num = windspd.shape
-    for i in range(rows_num):
-        for j in range(cols_num):
-            if windspd[i][j] < 0:
-                windspd[i][j] = None
-
-    if not mesh:
-        X, Y = np.meshgrid(lons, lats)
-    else:
-        X, Y = lons, lats
-    Z = windspd
-
-    try:
-        image = map.imshow(Z, ax=ax, zorder=wind_zorder,
-                           cmap=plt.cm.rainbow,
-                           vmin=0, vmax=max_windspd,
-                           interpolation='none',
-                           extent=(X.min(), X.max(),
-                                   Y.min(), Y.max()))
-        # plt.colorbar()
-    except Exception as msg:
-        breakpoint()
-        exit(msg)
-
-    divider = make_axes_locatable(ax)
-    cax = divider.append_axes('right', size='5%', pad=0.05)
-
-    clb = fig.colorbar(image, cax=cax, orientation='vertical',
-                       format='%.1f')
-    clb.ax.set_title('m/s')
-
-
 def draw_windspd(the_class, fig, ax, dt, lons, lats, windspd,
-                 max_windspd, mesh, custom=False, region=None):
+                 max_windspd, mesh, custom=False, region=None,
+                 outliers=None):
     draw_SCS_basemap(the_class, ax, custom, region)
 
-    draw_windspd_with_contourf(fig, ax, lons, lats, windspd,
-                               the_class.zorders['contourf'],
-                               max_windspd, mesh)
-
-    # draw_windspd_with_imshow(map, fig, ax, lons, lats, windspd,
-    #                          the_class.zorders['contourf'],
-    #                            max_windspd, mesh)
+    draw_windspd_with_contourf(the_class, fig, ax, lons, lats, windspd,
+                               max_windspd, mesh, outliers)
 
 
 def get_latlon_and_index_in_grid(value, range, grid_lat_or_lon_list):
@@ -2374,9 +2407,38 @@ def get_subplots_row_col_and_fig_size(subplots_num):
         return 1, 2, (15, 7)
     elif subplots_num == 3 or subplots_num == 4:
         return 2, 2, (15, 15)
+    elif subplots_num == 5 or subplots_num == 6:
+        return 2, 3, (23, 15)
     else:
         logger.error('Too many subplots, should not more than 4.')
         exit()
+
+
+def get_smap_lonlat(the_class, tc):
+    smap_resolu = the_class.CONFIG['rss'][
+            'spatial_resolution']
+    smap_all_lats = [
+        y * smap_resolu - 89.875 for y in range(720)]
+    smap_all_lons = [
+        x * smap_resolu + 0.125 for x in range(1440)]
+    reg_edge = the_class.CONFIG['regression']['edge_in_degree']
+
+    success, lat1, lat2, lon1, lon2 = get_subset_range_of_grib(
+        tc.lat, tc.lon, smap_all_lats,
+        smap_all_lons, reg_edge)
+    if not success:
+        return False, None, None
+
+    smap_lons = [
+        x * smap_resolu + lon1 for x in range(
+            int((lon2-lon1) / smap_resolu) + 1)
+    ]
+    smap_lats = [
+        y * smap_resolu + lat1 for y in range(
+            int((lat2-lat1) / smap_resolu) + 1)
+    ]
+
+    return True, smap_lons, smap_lats
 
 
 def get_era5_corners_of_rss_cell(lat, lon, era5_lats_grid,
@@ -2746,9 +2808,9 @@ def load_model(the_class, model_dir, suffix='.pickle.dat'):
     return best_model
 
 
-def load_model_from_bunch(model_dir, suffix, model_attr_name):
+def load_model_from_bunch(model_dir, prefix, suffix, model_attr_name):
     fnames = [f for f in os.listdir(model_dir)
-              if f.endswith(suffix)]
+              if f.startswith(prefix) and f.endswith(suffix)]
     if len(fnames) != 1:
         logger.error('Wrong file count')
         breakpoint()
@@ -3301,10 +3363,16 @@ def draw_sfmr_windspd_and_track(the_class, fig, ax, tc_datetime,
             all_lats.append(tmp_lats)
             all_windspd.append(tmp_windspd)
 
+        clb_max = None
+        for i in range(20):
+            if i * 5 < max_windspd and (i+1) * 5 > max_windspd:
+                clb_max = (i+1) * 5
+                break
+
         for i in range(len(sfmr_pts)):
-            ax.scatter(all_lons[i], all_lats[i], s=60,
-                       c=all_windspd[i], cmap=plt.cm.rainbow,
-                       vmin=0, vmax=max_windspd,
+            ax.scatter(all_lons[i], all_lats[i], s=150,
+                       c=all_windspd[i], cmap=windspd_colormap(),
+                       vmin=0, vmax=clb_max,
                        zorder=the_class.zorders['sfmr_point'],
                        edgecolors='black')
     except Exception as msg:
@@ -4636,9 +4704,127 @@ def jointplot_kernel_dist_of_imbalance_windspd(dir, y_test,
         exit(msg)
 
 
-def box_plot_windspd(dir, y_test, y_pred):
+def scatter_plot_pred(dir, y_test, y_pred, figsize=(8, 8),
+                      fontsize=20, dpi=600):
     # Classify tropical cyclone wind according to wind speed
     split_values = [0, 15, 25, 35, 45, 999]
+
+    try:
+        df_list = []
+        axs_list = []
+        if not (type(y_pred) is dict):
+            plots_num = 1
+            df_list[0] = pd.DataFrame({'y_test': y_test, 'y_pred': y_pred})
+            # df['windspd_range'] = ''
+        else:
+            plots_num = len(y_pred.keys())
+
+                # df['windspd_range'] = ''
+            for key in y_pred.keys():
+                df_tmp = pd.DataFrame({'y_test': y_test,
+                                       'y_pred': y_pred[key],
+                                       'name': [key] * len(y_test)
+                                      })
+                df_list.append(df_tmp)
+
+            df = pd.concat(df_list).reset_index(drop=True)
+            df['y_bias'] = df['y_pred'] - df['y_test']
+            # df['windspd_range'] = ''
+
+        subplots_row, subplots_col, figsize = \
+            get_subplots_row_col_and_fig_size(plots_num)
+        fig, axs = plt.subplots(subplots_row, subplots_col,
+                                figsize=figsize, sharey=True)
+        if plots_num == 1:
+            axs_list = [axs]
+        else:
+            for idx, src in enumerate(y_pred.keys()):
+                if subplots_row == 1:
+                    col_idx = idx % subplots_col
+                    ax = axs[col_idx]
+                elif subplots_row > 1:
+                    row_idx = int(idx / subplots_col)
+                    col_idx = idx % subplots_col
+                    ax = axs[row_idx][col_idx]
+
+                axs_list.append(ax)
+
+        # sorted_order = []
+        # for idx, val in enumerate(split_values):
+        #     if idx == len(split_values) - 1:
+        #         break
+        #     left = val
+        #     right = split_values[idx + 1]
+        #     indices = df.loc[(df['y_test'] >= left)
+        #                      & (df['y_test'] < right)].index
+        #     if idx + 1 < len(split_values) - 1:
+        #         label = f'{left} - {right}'
+        #     else:
+        #         label = f'> {left}'
+        #     df.loc[indices, ['windspd_range']] = label
+        #     sorted_order.append(label)
+
+        sns.set_style("ticks")
+        if not (type(y_pred) is dict):
+            the_class.error('Not consider')
+            sys.exit(1)
+        else:
+            g = sns.FacetGrid(df, col='name', hue='name', aspect=1,
+                              palette=sns.color_palette("Set2"))
+            g = (g.map(sns.scatterplot, "y_test", "y_pred",
+                       size=30, linewidth=0.3, edgecolor='w')
+                 .set_titles('{col_name}')
+                 .set(xticks=[x * 10 for x in range(8)],
+                      yticks=[y * 10 for y in range(8)]))
+            g.set_axis_labels('SMAPW (m/s)', 'SSMAPW (m/s)')
+            axs = g.axes[0]
+            for i, ax in enumerate(axs):
+                ax.plot([0, 70], [0, 70], 'k--', linewidth=1.0)
+                df_part = df.loc[df['name'] == list(y_pred.keys())[i]]
+                mean_bias = df_part["y_bias"].mean()
+                rmse = math.sqrt(mean_squared_error(df_part['y_test'],
+                                                    df_part['y_pred']))
+                determ_coeff = r2_score(y_true=df_part['y_test'],
+                                        y_pred=df_part['y_pred'])
+                slope, interpect, r_value, p_value, std_err = \
+                    stats.linregress(df_part['y_test'],
+                                     df_part['y_pred'])
+                linear_fit = (
+                    f"""y={slope:.3f}x{interpect:+.3f}""")
+                statistic_str = {
+                    'mean_bias': f'Mean Bias: {mean_bias:.2f} m/s',
+                    'RMSE': f'RMSE: {rmse:.2f} m/s',
+                    'determ_coeff': f'R\u00b2: {determ_coeff:.3f}',
+                    'linear_fit': f'linear fit: {linear_fit}'
+                }
+                for idx, (key, val) in enumerate(statistic_str.items()):
+                    ax.text(0.05, 0.915-0.1*(idx), val, fontsize=7,
+                            transform=ax.transAxes)
+                ax.text(0.9, 0.1, f'{string.ascii_lowercase[i]})',
+                        fontsize=10, transform=ax.transAxes,
+                        fontweight='bold', va='bottom', ha='right')
+            # g.add_legend()
+        sns.despine(top=False, bottom=False, left=False, right=False)
+
+        # legend = ax.legend()
+        # label_text_1 = legend.texts[0]._text
+        # legend.texts[0].set_text(label_text_1)
+        # ax.legend(fontsize=fontsize)
+
+        plt.tight_layout()
+        plt.savefig((f'{dir}scatterplot.png'), dpi=dpi)
+        plt.close()
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+    return
+
+
+def box_plot_windspd(dir, y_test, y_pred, figsize=(8, 8),
+                     fontsize=20, dpi=600):
+    # Classify tropical cyclone wind according to wind speed
+    # split_values = [0, 15, 25, 35, 45, 999]
+    split_values = [0, 10, 20, 30, 40, 50, 60, 70, 999]
 
     try:
         if not (type(y_pred) is dict):
@@ -4673,20 +4859,34 @@ def box_plot_windspd(dir, y_test, y_pred):
             df.loc[indices, ['windspd_range']] = label
             sorted_order.append(label)
 
-        plt.figure(figsize=(7, 7))
-        sns.set_style("whitegrid")
+        plt.figure(figsize=figsize)
+        # sns.set_style("whitegrid")
+        sns.set_style("ticks")
         # sns.boxplot(x='windspd_range', y='y_bias', data=df,
         #             order=sorted_order)
         if not (type(y_pred) is dict):
-            sns.catplot(x="windspd_range", y="y_bias", kind="violin",
+            ax = sns.catplot(x="windspd_range", y="y_bias", kind="violin",
                         data=df, order=sorted_order)
         else:
-            sns.catplot(x="windspd_range", y="y_bias", kind="violin",
-                        hue='name', data=df, order=sorted_order)
+            # sns.catplot(x="windspd_range", y="y_bias", kind="violin",
+            #             hue='name', data=df, order=sorted_order)
+            ax = sns.violinplot(x="windspd_range", y="y_bias", hue='name',
+                                data=df, order=sorted_order, split=False,
+                                scale='width', inner='box',
+                                palette=sns.color_palette("Set2"))
         sns.despine(top=False, bottom=False, left=False, right=False)
-        plt.xlabel('Wind speed range (m/s)')
-        plt.ylabel('SSMAPW - SMAPW (m/s)')
-        plt.savefig((f'{dir}bias_box_plot.png'), dpi=300)
+
+        ax.set_xlabel('Wind speed range (m/s)', fontsize=fontsize)
+        ax.set_ylabel('SSMAPW - SMAPW (m/s)', fontsize=fontsize)
+        ax.tick_params(labelsize=fontsize)
+
+        legend = ax.legend()
+        label_text_1 = legend.texts[0]._text
+        legend.texts[0].set_text(label_text_1)
+        ax.legend(fontsize=fontsize)
+
+        plt.tight_layout()
+        plt.savefig((f'{dir}bias_box_plot.png'), dpi=dpi)
         plt.close()
     except Exception as msg:
         breakpoint()
@@ -4781,10 +4981,17 @@ def get_combined_data(the_class):
     if train is None or test is None:
         return None, None, None, None
 
+    if 'index' in train.columns:
+        train.drop(columns='index', inplace=True)
+    if 'index' in test.columns:
+        test.drop(columns='index', inplace=True)
+
     y_train = getattr(train, the_class.y_name).reset_index(drop=True)
     y_test = getattr(test, the_class.y_name).reset_index(drop=True)
-    X_train = train.drop([the_class.y_name], axis=1).reset_index()
-    X_test = test.drop([the_class.y_name], axis=1).reset_index()
+    X_train = train.drop([the_class.y_name], axis=1).reset_index(
+        drop=True)
+    X_test = test.drop([the_class.y_name], axis=1).reset_index(
+        drop=True)
 
     return X_train, y_train, X_test, y_test
 
@@ -5024,7 +5231,8 @@ def get_train_test_with_final_smogn_params(the_class):
         return train_smogn, test
 
 
-def load_train_test_with_final_smogn_params(the_class, df):
+def load_train_test_with_final_smogn_params(the_class, df, fontsize=15,
+                                            dpi=600):
     dataset_dir = the_class.CONFIG['regression']['dirs']['tc'][
             'dataset']
     smogn_final_dir = dataset_dir['smogn_final']
@@ -5048,9 +5256,12 @@ def load_train_test_with_final_smogn_params(the_class, df):
 
             sns.kdeplot(df['smap_windspd'], label='Original')
             sns.kdeplot(df_smogn['smap_windspd'], label='Modified')
-            plt.xlabel('SMAP wind speed (m/s)')
-            plt.ylabel('Probability')
-            plt.savefig(distribution_comparison_path)
+
+            plt.xlabel('SMAP wind speed (m/s)', fontsize=fontsize)
+            plt.ylabel('Probability', fontsize=fontsize)
+            plt.tick_params(labelsize=fontsize)
+            plt.legend(fontsize=fontsize)
+            plt.savefig(distribution_comparison_path, dpi=dpi)
             plt.close()
         except Exception as msg:
             breakpoint()
@@ -5086,9 +5297,39 @@ def load_train_test_with_final_smogn_params(the_class, df):
 
         return train_smogn, test
 
+    elif the_class.smogn_target == 'train_splitted':
+        smogn_final_on_train_splitted_dir = smogn_final_dir[
+            'smogn_on_train_splitted']
+        train_path = original_dir['train_splitted']
+        test_path = original_dir['valid']
+        train_smogn_path = smogn_final_on_train_splitted_dir['train']
+        distribution_comparison_path = smogn_final_on_train_splitted_dir[
+            'distribution_comparison']
+
+        try:
+            with open(train_path, 'rb') as f:
+                train = pickle.load(f)
+            with open(test_path, 'rb') as f:
+                test = pickle.load(f)
+            with open(train_smogn_path, 'rb') as f:
+                train_smogn = pickle.load(f)
+
+            sns.kdeplot(train['smap_windspd'], label='Original')
+            sns.kdeplot(train_smogn['smap_windspd'], label='Modified')
+            plt.xlabel('SMAP wind speed (m/s)')
+            plt.ylabel('Probability')
+            plt.savefig(distribution_comparison_path)
+            plt.close()
+        except Exception as msg:
+            breakpoint()
+            sys.exit(msg)
+
+        return train_smogn, test
+
     else:
         the_class.logger.error(('Params error: Check `smogn_target`, '
-                                'Should be `all` or `train`'))
+                                'Should be `all` or `train` or '
+                                '`train_splitted`'))
         sys.exit(1)
 
 
@@ -5138,11 +5379,19 @@ def get_original_train_test(the_class):
         'dataset']['original']
     train_path = ori_dataset_path['train']
     test_path = ori_dataset_path['test']
+    train_splitted_path = ori_dataset_path['train_splitted']
+    valid_path = ori_dataset_path['valid']
     if the_class.load:
-        with open(train_path, 'rb') as f:
-            train = pickle.load(f)
-        with open(test_path, 'rb') as f:
-            test = pickle.load(f)
+        if hasattr(the_class, 'valid') and getattr(the_class, 'valid'):
+            with open(train_splitted_path, 'rb') as f:
+                train = pickle.load(f)
+            with open(valid_path, 'rb') as f:
+                test = pickle.load(f)
+        else:
+            with open(train_path, 'rb') as f:
+                train = pickle.load(f)
+            with open(test_path, 'rb') as f:
+                test = pickle.load(f)
     else:
         try:
             df = get_df_of_era5_smap(the_class)
@@ -5166,7 +5415,6 @@ def get_original_train_test(the_class):
 
             train.to_pickle(train_path)
             test.to_pickle(test_path)
-            breakpoint()
         except Exception as msg:
             breakpoint()
             exit(msg)
@@ -5626,8 +5874,17 @@ def compare_2d_sources(the_class, tc, lons, lats, windspd, mesh,
             row.lon = pt_lon
             row.lat = pt_lat
 
+            skip_row = False
             for src in srcs:
-                setattr(row, f'{src}_windspd', windspd[src][y][x])
+                pt_windspd = windspd[src][y][x]
+                if pt_windspd is MASKED:
+                    skip_row = True
+                    break
+                else:
+                    setattr(row, f'{src}_windspd', windspd[src][y][x])
+
+            if skip_row:
+                continue
             setattr(row, f'{src_2}_minus_{src_1}_windspd',
                     (getattr(row, f'{src_2}_windspd')
                      - getattr(row, f'{src_1}_windspd')))
@@ -5691,3 +5948,41 @@ def statistic_of_bias(y_test, y_pred):
     except Exception as msg:
         breakpoint()
         exit(msg)
+
+
+def detect_outlier(out_dir, y_test, y_pred, X_test, threshold=10):
+    # Classify tropical cyclone wind according to wind speed
+    split_values = [0, 15, 25, 35, 45, 999]
+
+    try:
+        if not (type(y_pred) is dict):
+            sys.exit(1)
+        else:
+            if 'SG-FL' not in y_pred.keys():
+                sys.exit(1)
+            df = pd.DataFrame({'y_test': y_test,
+                               'y_pred': y_pred['SG-FL']
+                              })
+            df['y_bias'] = df['y_pred'] - df['y_test']
+
+            test_outlier = df.loc[df['y_bias'] > threshold]
+            outlier_indices = df.index[df['y_bias'] > threshold].tolist()
+            train_outlier = X_test.loc[outlier_indices]
+            train_outlier.to_pickle(
+                f'{out_dir}SG_FL_X_test_outliers.pkl')
+            test_outlier.to_pickle(f'{out_dir}SG_FL_y_test_outliers.pkl')
+    except Exception as msg:
+        breakpoint()
+        sys.exit(1)
+
+    return outlier_indices
+
+
+def where_outlier_in_distribution(out_dir, X_train, X_test,
+                                  test_outlier_indices):
+    pass
+
+
+def hightlight_outlier(the_class, fig, ax, outliers):
+    pass
+

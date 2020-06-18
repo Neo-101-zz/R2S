@@ -224,7 +224,7 @@ def work_flow():
         if do_classify:
             classify.Classifier(
                 CONFIG, period, train_test_split_dt, region, basin,
-                passwd, False, classify_instructions)
+                passwd, False, classify_instructions, smogn_target)
         if do_regression:
             # if tag is None:
             #     logger.error('No model tag')
