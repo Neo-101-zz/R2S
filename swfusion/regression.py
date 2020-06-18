@@ -619,7 +619,7 @@ class Regression(object):
             #     'regression/tc/lightgbm/model/'
             #     'na_valid_2068.120068_fl_smogn_final_thre_40_power_3_under_maxeval_100/'
             #     'test_pred.pkl'),
-            'SG-FL-THRE-50-POWER-3-UNDER': (
+            'SMOGN-TCL': (
                 '/Users/lujingze/Programming/SWFusion/'
                 'regression/tc/lightgbm/model/'
                 'na_valid_2557.909583_fl_smogn_final_thre_50_power_3_under_maxeval_100/'),
@@ -660,13 +660,18 @@ class Regression(object):
             with open(f'{val}{model_name[0]}', 'rb') as f:
                 regressor = pickle.load(f)
 
+            best_params_df = pd.DataFrame.from_dict(
+                regressor.best_params, orient='index',
+                columns=[key])
+            best_params_df.to_csv(f'{val}best_params.csv')
             y_test_pred[key] = regressor.model.predict(self.X_test)
 
             sum += y_test_pred[key]
 
-        y_test_pred['mean'] = sum / float(len(y_test_pred.keys()))
-        name_comparison += f'_vs_mean'
+        # y_test_pred['mean'] = sum / float(len(y_test_pred.keys()))
+        # name_comparison += f'_vs_mean'
 
+        """
         classifiers = []
         classifier_root_path = (
             '/Users/lujingze/Programming/SWFusion/classify/'
@@ -722,9 +727,11 @@ class Regression(object):
                 y_test_hybird_pred[i] = y_test_pred[
                     'MSE'][i]
 
-        name_comparison = name_comparison[4:]
         y_test_pred['HYBIRD'] = y_test_hybird_pred
         name_comparison += f'_vs_hybird'
+        """
+
+        name_comparison = name_comparison[4:]
         out_dir = f'{out_root_dir}{name_comparison}/'
         os.makedirs(out_dir, exist_ok=True)
 
