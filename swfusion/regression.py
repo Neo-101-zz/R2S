@@ -168,6 +168,39 @@ class Regression(object):
         self.read_smap_era5()
         self.show_dataset_shape()
 
+        self.gamma = 1
+        self.y_max_pmf_reciprocal = dict()
+        self.inversed_y_pmf_dict = dict()
+
+        with open(('/Users/lujingze/Programming/SWFusion/regression/'
+                   'tc/dataset/original/train_splitted.pkl'), 'rb') as f:
+            self.train_splitted = pickle.load(f)
+        self.y_train_splitted = getattr(self.train_splitted,
+                                        self.y_name).reset_index(drop=True)
+
+        for dataset_name in ['y_train_splitted', 'y_test']:
+            y = getattr(self, dataset_name)
+            y_binned_pmf = utils.bin_target_value(y, interval=1)
+            max_y_pmf = y_binned_pmf[0][1]
+            self.y_max_pmf_reciprocal[dataset_name] = (
+                1 / max_y_pmf)
+
+            self.inversed_y_pmf_dict[dataset_name] = \
+                self.set_inversed_y_pmf_dict(y_binned_pmf, max_y_pmf)
+
+        """
+        y_train_binned_pmf = utils.bin_target_value(
+            self.y_train, interval=1)
+        self.max_y_train_pmf = y_train_binned_pmf[0][1]
+        self.y_train_max_pmf_reciprocal = 1 / self.max_y_train_pmf
+
+        pmf_dict = dict()
+        for pair in y_train_binned_pmf:
+            pmf_dict[pair[0]] = pair[1]
+
+        self.set_inversed_y_train_pmf_dict(pmf_dict)
+        """
+
         self.lgb_train = lgb.Dataset(self.X_train, self.y_train,
                                      free_raw_data=False)
         self.lgb_eval = lgb.Dataset(self.X_test, self.y_test,
@@ -192,7 +225,7 @@ class Regression(object):
             self.voting_regressor()
         if 'lgb' in self.instructions:
             if 'optimize' in self.instructions:
-                self.optimize_lgb(maxevals=100)
+                self.optimize_lgb(maxevals=3)
             # elif 'ensemble' in self.instructions:
             #     self.ensemble_lgb_regressor()
             elif 'compare_best' in self.instructions:
@@ -206,47 +239,42 @@ class Regression(object):
         if 'dnn' in self.instructions:
             self.deep_neural_network()
 
+    def set_inversed_y_pmf_dict(self, y_binned_pmf, max_y_pmf, tolerant=0):
+        pmf_dict = dict()
+        for pair in y_binned_pmf:
+            pmf_dict[pair[0]] = pair[1]
+
+        inversed_pmf_dict = dict()
+        for idx, (key, val) in enumerate(pmf_dict.items()):
+            inversed_pmf_dict[key] = (max_y_pmf * (1+tolerant)
+                                      - val)
+
+        return inversed_pmf_dict
+
+    def get_inversed_y_train_pmf(self):
+        max_y_train_pmf_array = np.full(shape=self.y_train.shape,
+                                        fill_value=self.max_y_train_pmf)
+        inversed_y_train_pmf = max_y_train_pmf_array - self.y_train_pmf
+
+        return inversed_y_train_pmf
+
+    def get_y_train_pmf(self, pmf_dict):
+        y_train_pmf = np.zeros(shape=self.y_train.shape)
+
+        try:
+            for i in range(len(self.y_train)):
+                y_train_pmf[i] = pmf_dict[int(self.y_train[i])]
+        except Exception as msg:
+            breakpoint()
+            exit(msg)
+
+        return y_train_pmf
+
     def show_dataset_shape(self):
         print(f'X_train shape: {self.X_train.shape}')
         print(f'y_train shape: {self.y_train.shape}')
         print(f'X_test shape: {self.X_test.shape}')
         print(f'y_test shape: {self.y_test.shape}')
-
-    def set_variables(self):
-        if 'valid' in self.instructions:
-            self.valid = True
-        else:
-            self.valid = False
-
-        if 'plot_dist' in self.instructions:
-            self.plot_dist = True
-        else:
-            self.plot_dist = False
-
-        if 'smogn_hyperopt' in self.instructions:
-            self.smogn_hyperopt = True
-        else:
-            self.smogn_hyperopt = False
-
-        if 'smogn_final' in self.instructions:
-            self.smogn_final = True
-        else:
-            self.smogn_final = False
-
-        if 'save' in self.instructions:
-            self.save = True
-        else:
-            self.save = False
-
-        if 'load' in self.instructions:
-            self.load = True
-        else:
-            self.load = False
-
-        if 'focus' in self.instructions:
-            self.with_focal_loss = True
-        else:
-            self.with_focal_loss = False
 
     def voting_regressor(self):
         estimators_num = 10
@@ -464,7 +492,9 @@ class Regression(object):
         # utils.distplot_imbalance_windspd(y_test, y_pred)
         utils.jointplot_kernel_dist_of_imbalance_windspd(
             default_dir, y_test, y_pred)
-        utils.box_plot_windspd(default_dir, y_test, y_pred)
+        utils.box_plot_windspd(default_dir, y_test, y_pred,
+                               x_label='Wind speed range (m/s)',
+                               y_label='Bias of wind speed (m/s)')
         mse = mean_squared_error(y_test, y_pred)
         print("MSE SCORE ON TEST DATA: {}".format(mse))
         print("RMSE SCORE ON TEST DATA: {}".format(math.sqrt(mse)))
@@ -494,25 +524,27 @@ class Regression(object):
         best['verbose'] = -1
 
         if self.with_focal_loss:
-            focal_loss_obj = lambda x, y: focal_loss_train(x, y)
-            focal_loss_eval = lambda x, y: focal_loss_valid(x, y)
-            # focal_loss_obj = lambda x, y: custom_asymmetric_train(x, y)
-            # focal_loss_obj = lambda x, y: custom_asymmetric_train(
-            #     x, y, best['slope'], best['min_alpha'])
-            # focal_loss_eval = lambda x, y: custom_asymmetric_valid(
-            #     x, y, best['slope'], best['min_alpha'])
+            focal_loss_obj = lambda x, y: focal_loss_train(
+                x, y, self.y_max_pmf_reciprocal['y_train_splitted'],
+                self.inversed_y_pmf_dict['y_train_splitted'], self.gamma)
+
+            focal_loss_eval = lambda x, y: focal_loss_valid(
+                x, y, self.y_max_pmf_reciprocal['y_train_splitted'],
+                self.inversed_y_pmf_dict['y_train_splitted'], self.gamma)
+            # focal_loss_obj = lambda x, y: focal_loss_train(x, y)
+            # focal_loss_eval = lambda x, y: focal_loss_valid(x, y)
 
             model = lgb.train(best, self.lgb_train,
                               fobj=focal_loss_obj,
-                              feval=focal_loss_eval
-                             )
+                              feval=focal_loss_eval)
+
             y_pred = model.predict(self.X_test)
-            # eval_name, eval_result, is_higher_better = \
-            #     custom_asymmetric_valid(y_pred, self.lgb_eval,
-            #                             best['slope'],
-            #                             best['min_alpha'])
+
             eval_name, eval_result, is_higher_better = \
-                focal_loss_valid(y_pred, self.lgb_eval)
+                focal_loss_valid(y_pred, self.lgb_eval,
+                                 self.y_max_pmf_reciprocal['y_test'],
+                                 self.inversed_y_pmf_dict['y_test'],
+                                 self.gamma)
             print((f"""---------------\n"""
                    f"""With focal loss\n"""
                    f"""---------------"""))
@@ -619,6 +651,13 @@ class Regression(object):
             #     'regression/tc/lightgbm/model/'
             #     'na_valid_2068.120068_fl_smogn_final_thre_40_power_3_under_maxeval_100/'
             #     'test_pred.pkl'),
+            # 'NEW-TCL': (
+            #     '/Users/lujingze/Programming/SWFusion/'
+            #     'regression/tc/lightgbm/model/'
+            #     'na_valid_0.930482_fl_smogn_final_gamma_1_maxeval_3_only_high/'),
+            'MSE': ('/Users/lujingze/Programming/SWFusion/regression/'
+                    'tc/lightgbm/model/'
+                    'na_valid_2.496193/'),
             'SMOGN-TCL': (
                 '/Users/lujingze/Programming/SWFusion/'
                 'regression/tc/lightgbm/model/'
@@ -637,9 +676,6 @@ class Regression(object):
             #           'regression/tc/lightgbm/model/'
             #           'GBR_RF_LR/'
             #           'test_pred.pkl'),
-            'MSE': ('/Users/lujingze/Programming/SWFusion/regression/'
-                    'tc/lightgbm/model/'
-                    'na_valid_2.496193/')
         }
         y_test = self.y_test.to_numpy()
         y_test_pred = dict()
@@ -664,6 +700,31 @@ class Regression(object):
                 regressor.best_params, orient='index',
                 columns=[key])
             best_params_df.to_csv(f'{val}best_params.csv')
+
+            try:
+                col_names_to_plot = self.X_train.columns.tolist()
+                for idx, val in enumerate(col_names_to_plot):
+                    col_names_to_plot[idx] = val.replace('_', ' ')
+
+                feature_imp = pd.DataFrame(
+                    sorted(
+                        zip(regressor.model.feature_importance(
+                            importance_type='split'),
+                            col_names_to_plot)
+                    ),
+                    columns=['Value', 'Feature']
+                )
+                plt.figure(figsize=(20, 20))
+                sns.barplot(x="Value", y="Feature",
+                            data=feature_imp.sort_values(
+                                by="Value", ascending=False))
+                # plt.title('LightGBM Features (avg over folds)')
+                plt.tight_layout()
+                plt.savefig(f'{out_root_dir}lgbm_importances.png', dpi=600)
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
+
             y_test_pred[key] = regressor.model.predict(self.X_test)
 
             sum += y_test_pred[key]
@@ -671,67 +732,72 @@ class Regression(object):
         # y_test_pred['mean'] = sum / float(len(y_test_pred.keys()))
         # name_comparison += f'_vs_mean'
 
-        """
-        classifiers = []
-        classifier_root_path = (
-            '/Users/lujingze/Programming/SWFusion/classify/'
-            'tc/lightgbm/model/'
-        )
-        classifiers_dir_names = [
-            'na_valid_0.688073_38_fl_smogn_final_unb_maxeval_2',
-            'na_valid_0.703297_39_fl_smogn_final_unb_maxeval_2',
-            'na_valid_0.630137_40_fl_smogn_final_unb_maxeval_2',
-            'na_valid_0.555556_41_fl_smogn_final_unb_maxeval_2',
-            'na_valid_0.555556_42_fl_smogn_final_unb_maxeval_2',
-        ]
-        for name in classifiers_dir_names:
-            classifiers_dir = f'{classifier_root_path}{name}/'
-            save_file = [f for f in os.listdir(classifiers_dir)
-                         if f.endswith('.pkl')
-                         and f.startswith(f'{self.basin}')]
-            if len(save_file) != 1:
-                self.logger.error('Count of Bunch is not ONE')
-                exit(1)
+        if hasattr(self, 'classify') and self.classify:
+            classifiers = []
+            classifier_root_path = (
+                '/Users/lujingze/Programming/SWFusion/classify/'
+                'tc/lightgbm/model/'
+            )
+            classifiers_dir_names = [
+                # 'na_valid_0.688073_38_fl_smogn_final_unb_maxeval_2',
+                # 'na_valid_0.703297_39_fl_smogn_final_unb_maxeval_2',
+                # 'na_valid_0.630137_40_fl_smogn_final_unb_maxeval_2',
+                # 'na_valid_0.555556_41_fl_smogn_final_unb_maxeval_2',
+                # 'na_valid_0.555556_42_fl_smogn_final_unb_maxeval_2',
+                'na_valid_0.560000_45_fl_smogn_final_unb_maxeval_2',
+            ]
+            for name in classifiers_dir_names:
+                classifiers_dir = f'{classifier_root_path}{name}/'
+                save_file = [f for f in os.listdir(classifiers_dir)
+                             if f.endswith('.pkl')
+                             and f.startswith(f'{self.basin}')]
+                if len(save_file) != 1:
+                    self.logger.error('Count of Bunch is not ONE')
+                    exit(1)
 
-            with open(f'{classifiers_dir}{save_file[0]}', 'rb') as f:
-                best_result = pickle.load(f)
+                with open(f'{classifiers_dir}{save_file[0]}', 'rb') as f:
+                    best_result = pickle.load(f)
 
-            classifiers.append(best_result.model)
+                classifiers.append(best_result.model)
 
-        y_class_pred = np.zeros(shape=y_test.shape)
+            y_class_pred = np.zeros(shape=y_test.shape)
 
-        classifiers_preds = []
-        for clf in classifiers:
-            classifiers_preds.append(clf.predict(self.X_test))
-        for i in range(len(self.y_test)):
-            high = True
-            for pred in classifiers_preds:
-                if pred[i] < 0:
-                    high = False
-                    break
-            if high:
-                y_class_pred[i] = 1
-            else:
-                y_class_pred[i] = -1
+            classifiers_preds = []
+            for clf in classifiers:
+                classifiers_preds.append(clf.predict(self.X_test))
+            for i in range(len(self.y_test)):
+                high = True
+                for pred in classifiers_preds:
+                    if pred[i] < 0:
+                        high = False
+                        break
+                if high:
+                    y_class_pred[i] = 1
+                else:
+                    y_class_pred[i] = -1
 
-        # for clf in classifiers:
-        #     y_class_pred += clf.predict(self.X_test)
-        # y_class_pred /= float(len(classifiers))
+            # for clf in classifiers:
+            #     y_class_pred += clf.predict(self.X_test)
+            # y_class_pred /= float(len(classifiers))
 
-        y_test_hybird_pred = np.zeros(shape=y_test.shape)
-        for i in range(len(y_test)):
-            if y_class_pred[i] >= 0:
-                y_test_hybird_pred[i] = y_test_pred[
-                    'SG-FL-THRE-50-POWER-3-UNDER'][i]
-            else:
-                y_test_hybird_pred[i] = y_test_pred[
-                    'MSE'][i]
+            y_test_hybrid_pred = np.zeros(shape=y_test.shape)
+            for i in range(len(y_test)):
+                if y_class_pred[i] >= 0:
+                    y_test_hybrid_pred[i] = y_test_pred[
+                        'SMOGN-TCL'][i]
+                else:
+                    y_test_hybrid_pred[i] = y_test_pred[
+                        'MSE'][i]
 
-        y_test_pred['HYBIRD'] = y_test_hybird_pred
-        name_comparison += f'_vs_hybird'
-        """
+            y_test_pred['HYBRID'] = y_test_hybrid_pred
+            name_comparison += f'_vs_hybrid'
 
         name_comparison = name_comparison[4:]
+        if hasattr(self, 'valid') and self.valid:
+            name_comparison = f'VALID_{name_comparison}'
+        else:
+            name_comparison = f'TEST_{name_comparison}'
+
         out_dir = f'{out_root_dir}{name_comparison}/'
         os.makedirs(out_dir, exist_ok=True)
 
@@ -741,32 +807,19 @@ class Regression(object):
         #                                     self.X_test,
         #                                     test_outlier_indices)
         # breakpoint()
-        utils.box_plot_windspd(out_dir, y_test, y_test_pred)
-        utils.scatter_plot_pred(out_dir, y_test, y_test_pred)
+        utils.box_plot_windspd(out_dir, y_test, y_test_pred,
+                               x_label='actual SMAP wind speed range (m/s)',
+                               y_label='bias of wind speed (m/s)')
+        utils.scatter_plot_pred(out_dir, y_test, y_test_pred,
+                                statistic=False,
+                                x_label='actual SMAP wind speed (m/s)',
+                                y_label='simulated SMAP wind speed (m/s)')
         utils.statistic_of_bias(y_test, y_test_pred)
 
     def lgb_best_regressor(self, dpi=600):
         out_dir = ('/Users/lujingze/Programming/SWFusion/regression/'
                    'tc/lightgbm/model/'
                    'na_valid_177.225788_fl_smogn_final/')
-                   # 'na_valid_2557.909583_fl_smogn_final_thre_50_power_3_under_maxeval_100/')
-                   # 'na_valid_2068.120068_fl_smogn_final_thre_40_power_3_under_maxeval_100/')
-                   # 'na_valid_5446.103399_fl_smogn_final_thre_40_power_3_both_maxeval_100/')
-                   # 'na_valid_6773.534520_fl_smogn_final_thre_40_power_3_both/')
-                   # 'na_valid_103.207402_fl_smogn_final_thre_40_power_2/')
-                   # 'na_valid_1606.504331_fl_smogn_final_thre_50_power_3/')
-                   # 'na_valid_2.678083_smogn_final_no_focus/')
-                   # 'na_valid_2.496193/')
-                   # 'na_91.659975_fl_smogn_final/')
-                   # 'na_101.845662_fl_smogn_final_threshold_square_2/')
-                   # 'na_1910.959455_fl_smogn_final/')
-                   # 'na_18.772365_fl_smogn_final/')
-                   # 'na_20.648012_fl_smogn_final/')
-                   # 'na_160.349853_fl_smogn_final/')
-                   # 'na_2.954007_fl_smogn_final/')
-                   # 'na_246.245487_fl_smogn_final/')
-                   # 'na_0.891876_fl_smogn_50_slope_0.05/')
-                   # 'na_2.188733/')
         save_file = [f for f in os.listdir(out_dir)
                      if f.endswith('.pkl')
                      and f.startswith(f'{self.basin}')]
@@ -776,7 +829,6 @@ class Regression(object):
 
         with open(f'{out_dir}{save_file[0]}', 'rb') as f:
             best_result = pickle.load(f)
-
 
         print((f"""-----------\n"""
                f"""Best result\n"""
@@ -812,31 +864,6 @@ class Regression(object):
 
         y_pred = best_result.model.predict(self.X_test)
 
-        """
-        if self.with_focal_loss:
-            focal_loss_obj = lambda x, y: focal_loss_train(x, y)
-            focal_loss_eval = lambda x, y: focal_loss_valid(x, y)
-            # focal_loss_obj = lambda x, y: custom_asymmetric_train(x, y)
-            # focal_loss_obj = lambda x, y: custom_asymmetric_train(
-            #     x, y, best['slope'], best['min_alpha'])
-            # focal_loss_eval = lambda x, y: custom_asymmetric_valid(
-            #     x, y, best['slope'], best['min_alpha'])
-
-            model = lgb.train(best_result.best_params,
-                              self.lgb_train,
-                              fobj=focal_loss_obj,
-                              feval=focal_loss_eval
-                             )
-            y_pred = model.predict(self.X_test)
-        else:
-            model = lgb.train(best_result.best_params,
-                              self.lgb_train,
-                              fobj=symmetric_train,
-                              feval=symmetric_valid
-                             )
-            y_pred = model.predict(self.X_test)
-        """
-
         y_test = self.y_test.to_numpy()
         # utils.jointplot_kernel_dist_of_imbalance_windspd(
         #     out_dir, y_test, y_pred)
@@ -860,14 +887,15 @@ class Regression(object):
             params['seed'] = 1
 
             if self.with_focal_loss:
-                # focal_loss_obj = lambda x, y: custom_asymmetric_train(x, y)
-                # focal_loss_eval = lambda x, y: custom_asymmetric_valid(x, y)
-                # focal_loss_obj = lambda x, y: custom_asymmetric_train(
-                #     x, y, params['slope'], params['min_alpha'])
-                # focal_loss_eval = lambda x, y: custom_asymmetric_valid(
-                #     x, y, params['slope'], params['min_alpha'])
-                focal_loss_obj = lambda x, y: focal_loss_train(x, y)
-                focal_loss_eval = lambda x, y: focal_loss_valid(x, y)
+                # focal_loss_obj = lambda x, y: focal_loss_train(x, y)
+                # focal_loss_eval = lambda x, y: focal_loss_valid(x, y)
+                focal_loss_obj = lambda x, y: focal_loss_train(
+                    x, y, self.y_max_pmf_reciprocal['y_train_splitted'],
+                    self.inversed_y_pmf_dict['y_train_splitted'], self.gamma)
+
+                focal_loss_eval = lambda x, y: focal_loss_valid(
+                    x, y, self.y_max_pmf_reciprocal['y_train_splitted'],
+                    self.inversed_y_pmf_dict['y_train_splitted'], self.gamma)
 
                 cv_result = lgb.cv(
                     params,
@@ -1396,3 +1424,44 @@ class Regression(object):
         self.logger.info((f"""Reading SMAP-ERA5 data"""))
         self.X_train, self.y_train, self.X_test, self.y_test = \
             utils.get_combined_data(self)
+
+    def set_variables(self):
+        if 'classify' in self.instructions:
+            self.classify = True
+        else:
+            self.classify = False
+
+        if 'valid' in self.instructions:
+            self.valid = True
+        else:
+            self.valid = False
+
+        if 'plot_dist' in self.instructions:
+            self.plot_dist = True
+        else:
+            self.plot_dist = False
+
+        if 'smogn_hyperopt' in self.instructions:
+            self.smogn_hyperopt = True
+        else:
+            self.smogn_hyperopt = False
+
+        if 'smogn_final' in self.instructions:
+            self.smogn_final = True
+        else:
+            self.smogn_final = False
+
+        if 'save' in self.instructions:
+            self.save = True
+        else:
+            self.save = False
+
+        if 'load' in self.instructions:
+            self.load = True
+        else:
+            self.load = False
+
+        if 'focus' in self.instructions:
+            self.with_focal_loss = True
+        else:
+            self.with_focal_loss = False

@@ -35,10 +35,11 @@ class Statisticer(object):
         )
         self.tc_query_num = self.tc_query.count()
 
+        self.detect_rapid_intensification()
         # self.how_fast_tcs_move()
-        self.simple_statistic_of_tcs_moving_speed()
+        # self.simple_statistic_of_tcs_moving_speed()
         # self.how_fast_tcs_intensity_change()
-        self.simple_statistic_of_tc_intensity_change()
+        # self.simple_statistic_of_tc_intensity_change()
 
     def simple_statistic_of_tc_intensity_change(self):
         table_name = self.CONFIG['ibtracs']['table_name'][
@@ -64,6 +65,34 @@ class Statisticer(object):
         print(f'Max: {change_speed.max()}')
         print(f'Min: {change_speed.min()}')
         print()
+
+    def detect_rapid_intensification(self):
+        self.logger.info('Detecting rapid intensification')
+
+        for i, tc in enumerate(self.tc_query):
+            print(f'\r{i+1}/{self.tc_query_num}', end='')
+            # find next TC
+            if tc.wind is None or i == self.tc_query_num :
+                continue
+
+            for offset, next_tc in enumerate(self.tc_query[i+1:]):
+                j = i+1+offset
+                if next_tc.wind is None or j == self.tc_query_num:
+                    continue
+
+                delta = next_tc.date_time - tc.date_time
+
+                if (not (delta.days == 1 and delta.seconds == 0)
+                        or tc.sid != next_tc.sid):
+                    continue
+
+                # duration, shift = self.cal_before_speed(tc, next_tc)
+                intensity_change, intensity_change_percent = \
+                        self.cal_intensity_change(tc, next_tc)
+                if intensity_change >= 30:
+                    print((f"""{tc.name} {tc.date_time} - """
+                           f"""{next_tc.date_time} {intensity_change}"""))
+                # hours = duration / 60
 
     def how_fast_tcs_intensity_change(self):
         self.logger.info('Calculating how fast TCs\' intensity change')

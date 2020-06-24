@@ -57,9 +57,9 @@ grid:
     y: '../data/grid/y.pkl'
 plot:
   data_sources_title:
-    smap: 'SMAPW'
-    smap_prediction: 'SSMAPW'
-    era5: 'ERA5RW'
+    smap: 'SMAP Wind'
+    smap_prediction: 'Simulated SMAP Wind'
+    era5: 'ERA5 Wind'
   axis_label_mapper:
     dis_minutes: 'T(SSMAPW)-T(RSFMRW) (min)'
     dis_kms: 'D(SSMAPW, RSFMRW) (km)'
@@ -71,8 +71,8 @@ plot:
     compare:
       coastlines: 4
       mapboundary: 0
-      continents: 8
-      contour: 3
+      continents: 3
+      contour: 8
       contourf: 2
       wedge: 9
       sfmr_track: 9

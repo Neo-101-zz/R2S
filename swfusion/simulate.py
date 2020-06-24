@@ -26,13 +26,14 @@ import era5
 import satel_scs
 import utils
 import match_era5_smap
+import compare_tc
 
 Base = declarative_base()
 
-class TCComparer(object):
+class TCSimulator(object):
 
     def __init__(self, CONFIG, period, region, basin, passwd,
-                 save_disk, compare_instructions):
+                 save_disk, simulate_instructions):
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
@@ -40,9 +41,8 @@ class TCComparer(object):
         self.save_disk = save_disk
         self.engine = None
         self.session = None
-        self.compare_instructions = list(set(compare_instructions))
+        self.simulate_instructions = list(set(simulate_instructions))
         self.basin = basin
-        self.draw_sfmr = draw_sfmr
 
         self.logger = logging.getLogger(__name__)
         utils.setup_database(self, Base)
@@ -91,8 +91,28 @@ class TCComparer(object):
         self.zorders = self.CONFIG['plot']['zorders']['compare']
 
         utils.reset_signal_handler()
+        self.tc_names = []
+        for name in self.simulate_instructions:
+            self.tc_names.append(name.upper())
 
         self.simulate_smap_windspd()
+
+    """
++---------------+-----------+---------------------+-----------------------------------+
+| sid           | name      | start_datetime      | intensity_change_percent_per_hour |
++---------------+-----------+---------------------+-----------------------------------+
+| 2015193N35285 | CLAUDETTE | 2015-07-13 06:00:00 |                         0.0555556 |
+| 2017170N08310 | BRET      | 2017-06-20 00:00:00 |                            0.0625 |
+| 2017219N16279 | FRANKLIN  | 2017-08-09 00:00:00 |                            0.0625 |
+| 2017249N22263 | KATIA     | 2017-09-06 12:00:00 |                         0.0740741 |
+| 2017258N10337 | LEE       | 2017-09-24 00:00:00 |                              0.05 |
+| 2017260N12310 | MARIA     | 2017-09-16 12:00:00 |                         0.0555556 |
+| 2017260N12310 | MARIA     | 2017-09-18 18:00:00 |                         0.0530303 |
+| 2018246N22283 | GORDON    | 2018-09-03 06:00:00 |                         0.0555556 |
+| 2018246N22283 | GORDON    | 2018-09-03 09:00:00 |                          0.126984 |
+| 2018265N35315 | LESLIE    | 2018-09-25 12:00:00 |                         0.0555556 |
++---------------+-----------+---------------------+-----------------------------------+
+"""
 
     def simulate_smap_windspd(self):
         self.logger.info((
@@ -102,14 +122,36 @@ class TCComparer(object):
             self.basin]
         IBTrACS = utils.get_class_by_tablename(self.engine,
                                                table_name)
-        tc_query = self.session.query(IBTrACS).filter(
+        query_obj = self.session.query(IBTrACS).filter(
             IBTrACS.date_time >= self.period[0],
             IBTrACS.date_time <= self.period[1]
         )
+        in_expression = IBTrACS.name.in_(self.tc_names)
+        tc_query = query_obj.filter(in_expression)
         total = tc_query.count()
+
+        # Expand period
+        if total < 2:
+            self.logger.warning('Expand period')
+            query_obj = self.session.query(IBTrACS).filter(
+                IBTrACS.date_time >= (self.period[0]
+                                      - datetime.timedelta(
+                                          seconds=3600*3)),
+                IBTrACS.date_time <= (self.period[1]
+                                      + datetime.timedelta(
+                                          seconds=3600*3))
+            )
+            in_expression = IBTrACS.name.in_(self.tc_names)
+            tc_query = query_obj.filter(in_expression)
+            total = tc_query.count()
+            if total < 2:
+                self.logger.error('Too few TCs')
+                exit(1)
 
         # Filter TCs during period
         for idx, tc in enumerate(tc_query):
+            if tc.name not in self.tc_names:
+                continue
             converted_lon = utils.longitude_converter(tc.lon,
                                                       '360', '-180')
             if bool(globe.is_land(tc.lat, converted_lon)):
@@ -119,6 +161,11 @@ class TCComparer(object):
             if idx < total - 1:
                 next_tc = tc_query[idx + 1]
                 if tc.sid == next_tc.sid:
+                    if (tc.date_time >= self.period[1]
+                            or next_tc.date_time <= self.period[0]):
+                        continue
+                    print(f'Simulating {tc.date_time} - {next_tc.date_time}')
+
                     self.simulate_between_two_tcs(tc, next_tc)
 
         print('Done')
@@ -135,18 +182,70 @@ class TCComparer(object):
         if not hours:
             return False
 
-        subplots_row, subplots_col, fig_size = \
-            utils.get_subplots_row_col_and_fig_size(hours)
-        fig, axes = plt.subplots(subplots_row, subplots_col,
-                               figsize=fig_size)
+        # `tight_hours` is for the case that period totally falls in
+        # the interval of two TC records and is shorted than the
+        # interval.
+        if (self.period[0] > tc.date_time
+                or self.period[1] < next_tc.date_time):
+            tight_hours = int((self.period[1] - self.period[0]).seconds / 3600)
+        else:
+            tight_hours = hours
 
+        skip_hour_indices = []
         for i, h in enumerate(range(hours)):
             interped_tc = utils.interp_tc(self, h, tc, next_tc)
-            ax = axes.flat[i]
+            if (interped_tc.date_time < self.period[0]
+                    or interped_tc.date_time > self.period[1]):
+                skip_hour_indices.append(i)
 
-            success = simulate_hourly(interped_tc, fig, ax)
+        subplots_row, subplots_col, fig_size = \
+            utils.get_subplots_row_col_and_fig_size(tight_hours)
+        fig, axes = plt.subplots(subplots_row, subplots_col,
+                                 figsize=fig_size)
+
+        hours_max_windspd = -1
+        ax_idx = 0
+        for i, h in enumerate(range(hours)):
+            if i in skip_hour_indices:
+                continue
+            try:
+                interped_tc = utils.interp_tc(self, h, tc, next_tc)
+                if isinstance(axes, np.ndarray):
+                    ax = axes.flat[ax_idx]
+                else:
+                    ax = axes
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
+
+            success, hourly_max_windspd = self.simulate_hourly(
+                interped_tc, fig, ax)
+            if success:
+                hours_max_windspd = max(hours_max_windspd,
+                                        hourly_max_windspd)
+                ax_idx += 1
+        if hourly_max_windspd == -1:
+            return
+
+        ax_idx = 0
+        for i, h in enumerate(range(hours)):
+            if i in skip_hour_indices:
+                continue
+            try:
+                interped_tc = utils.interp_tc(self, h, tc, next_tc)
+                if isinstance(axes, np.ndarray):
+                    ax = axes.flat[ax_idx]
+                else:
+                    ax = axes
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
+
+            success, hourly_max_windspd = self.simulate_hourly(
+                interped_tc, fig, ax, hours_max_windspd, ax_idx)
 
             if success:
+                ax_idx += 1
                 print((f"""Simulating SMAP windspd """
                        f"""of TC {interped_tc.name} on """
                        f"""{interped_tc.date_time}"""))
@@ -160,26 +259,23 @@ class TCComparer(object):
         dt_str = (f"""{tc.date_time.strftime('%Y_%m%d_%H%M')}"""
                   f"""_"""
                   f"""{next_tc.date_time.strftime('_%H%M')}""")
-        fig_dir = self.CONFIG['result']['dirs']['fig']['root'][
-            'simulation']
+        fig_dir = self.CONFIG['result']['dirs']['fig']['simulation']
 
         os.makedirs(fig_dir, exist_ok=True)
         fig_name = f'{dt_str}_{tc.name}.png'
-        plt.savefig(f'{fig_dir}{fig_name}')
+        plt.savefig(f'{fig_dir}{fig_name}', dpi=600)
         plt.clf()
 
-        return True
-
-    def simulate_hourly(self, tc, fig, ax):
-        success, smap_lons, smap_lats = utils.get_smap_lonlat(tc)
+    def simulate_hourly(self, tc, fig, ax, hours_max_windspd=None,
+                        hour_idx=None):
+        success, smap_lons, smap_lats = utils.get_smap_lonlat(self, tc)
         if not success:
-            return False
+            return False, None
         del success
         # North, South, West, East
         draw_region = [min(smap_lats), max(smap_lats),
                        min(smap_lons), max(smap_lons)]
 
-        max_windspd = -1
         CompareTC = compare_tc.TCComparer(self.CONFIG, self.period,
                                           self.region, self.basin,
                                           self.db_root_passwd, False,
@@ -193,10 +289,9 @@ class TCComparer(object):
                     'smap_prediction', tc, smap_lons,
                     smap_lats)
             if not success:
-                return False
-            # Get max windspd
-            if windspd.max() > max_windspd:
-                max_windspd = windspd.max()
+                return False, None
+            if hours_max_windspd is None:
+                return True, windspd.max()
         except Exception as msg:
             breakpoint()
             exit(msg)
@@ -206,22 +301,26 @@ class TCComparer(object):
             f"""{accurate_dt.strftime('%H%M UTC %d %b %Y')} """
         )
         # Draw windspd
+        print(tc.date_time)
         try:
             fontsize = 20
             utils.draw_windspd(self, fig, ax, tc.date_time,
                                lons, lats, windspd,
-                               max_windspd, mesh, custom=True,
+                               hours_max_windspd,
+                               mesh, draw_contour=True,
+                               custom=True,
                                region=draw_region)
-            # if text_subplots_serial_number:
-            #     ax.text(0.1, 0.95,
-            #             f'{string.ascii_lowercase[index]})',
-            #             transform=ax.transAxes, fontsize=20,
-            #             fontweight='bold', va='top', ha='right')
-            ax.set_title((f"""{tc.name} """
-                          f"""SSMAPW """
-                          f"""{subplot_title_suffix}"""),
+            ax.text(0.1, 0.95,
+                    f'{string.ascii_lowercase[hour_idx]})',
+                    transform=ax.transAxes, fontsize=20,
+                    fontweight='bold', va='top', ha='right')
+            ax.set_title((
+                          f"""Simulated SMAP Wind """
+                          f"""{subplot_title_suffix} """
+                          f"""{tc.name}"""),
                          size=15)
         except Exception as msg:
             breakpoint()
             exit(msg)
 
+        return True, 'Done'

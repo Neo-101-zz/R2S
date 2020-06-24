@@ -5,6 +5,7 @@ import os
 import signal
 import sys
 import pickle
+from collections import Counter
 
 import numpy as np
 from urllib import request
@@ -37,6 +38,7 @@ from scipy import stats
 import string
 from matplotlib.colors import LinearSegmentedColormap
 import webcolors
+from matplotlib.ticker import EngFormatter, StrMethodFormatter
 
 from amsr2_daily import AMSR2daily
 from ascat_daily import ASCATDaily
@@ -55,6 +57,50 @@ DEGREE_OF_ONE_NMILE = float(1)/60
 KM_OF_ONE_NMILE = 1.852
 KM_OF_ONE_DEGREE = KM_OF_ONE_NMILE / DEGREE_OF_ONE_NMILE
 RADII_LEVELS = [34, 50, 64]
+
+
+class Pmf(Counter):
+    """A Counter with probabilities."""
+
+    def normalize(self):
+        """Normalizes the PMF so the probabilities add to 1."""
+        total = float(sum(self.values()))
+        for key in self:
+            self[key] /= total
+
+    def __add__(self, other):
+        """Adds two distributions.
+
+        The result is the distribution of sums of values from the
+        two distributions.
+
+        other: Pmf
+
+        returns: new Pmf
+        """
+        pmf = Pmf()
+        for key1, prob1 in self.items():
+            for key2, prob2 in other.items():
+                pmf[key1 + key2] += prob1 * prob2
+        return pmf
+
+    def __hash__(self):
+        """Returns an integer hash value."""
+        return id(self)
+
+    def __eq__(self, other):
+        return self is other
+
+    def render(self):
+        """Returns values and their probabilities, suitable for plotting."""
+        return zip(*sorted(self.items()))
+
+    def todict(self):
+        """Convert self to dictionary."""
+        d = dict()
+        for key, prob in self.items():
+            d[key] = prob
+        return d
 
 
 # Python program to check if rectangles overlap
@@ -1941,7 +1987,9 @@ def windspd_colormap():
 
 
 def draw_windspd_with_contourf(the_class, fig, ax, lons, lats, windspd,
-                               max_windspd, mesh, outliers, fontsize=13):
+                               max_windspd,
+                               mesh, draw_contour,
+                               outliers, fontsize=13):
     if not mesh:
         X, Y = np.meshgrid(lons, lats)
     else:
@@ -1956,6 +2004,7 @@ def draw_windspd_with_contourf(the_class, fig, ax, lons, lats, windspd,
     try:
         wind_zorder = the_class.zorders['contourf']
         outlier_zorder = the_class.zorders['outlier']
+        contour_zorder = the_class.zorders['contour']
         bounds = []
         for i in range(20):
             bounds.append(i * 5)
@@ -1963,16 +2012,25 @@ def draw_windspd_with_contourf(the_class, fig, ax, lons, lats, windspd,
                 clb_max = (i+1) * 5
                 bounds.append(clb_max)
                 break
-        windspd_levels = np.linspace(0, clb_max, int(1.5 * clb_max))
+        windspd_levels = np.linspace(0, clb_max, int(2.0 * clb_max))
+        contour_levels = bounds
         cf = ax.contourf(X, Y, Z,
                          levels=windspd_levels,
                          zorder=wind_zorder,
                          cmap=windspd_colormap(),
                          vmin=0, vmax=clb_max)
         cf.set_clim([0, clb_max])
+        if draw_contour:
+            cr = ax.contour(X, Y, Z,
+                            levels=contour_levels,
+                            colors=('k',),
+                            zorder=contour_zorder)
+                            # vmin=0, vmax=clb_max)
+            ax.clabel(cr, fmt='%d', colors='k', fontsize=14)
 
         if outliers is not None:
-            half_edge = the_class.CONFIG['regression']['edge_in_degree'] / 2
+            half_edge = the_class.CONFIG['regression'][
+                'edge_in_degree'] / 2
             offset = int(half_edge /
                          the_class.CONFIG['spatial_resolution']['smap'])
             for pt in outliers:
@@ -2019,22 +2077,23 @@ def draw_SCS_basemap(the_class, ax, custom, region, fontsize=13):
     map.drawmeridians(np.arange(lon1, lon2+0.01, meridians_interval),
                       labels=[1, 0, 0, 1],  fmt='%.1f',
                       zorder=the_class.zorders['grid'],
-                      fontsize=fontsize)
+                      fontsize=fontsize, dashes=[1,4])
     map.drawparallels(np.arange(lat1, lat2+0.01, parallels_interval),
                       labels=[1, 0, 0, 1], fmt='%.1f',
                       zorder=the_class.zorders['grid'],
-                      fontsize=fontsize)
+                      fontsize=fontsize, dashes=[1,4])
 
     return map
 
 
 def draw_windspd(the_class, fig, ax, dt, lons, lats, windspd,
-                 max_windspd, mesh, custom=False, region=None,
-                 outliers=None):
+                 max_windspd, mesh, draw_contour=False,
+                 custom=False, region=None, outliers=None):
     draw_SCS_basemap(the_class, ax, custom, region)
 
     draw_windspd_with_contourf(the_class, fig, ax, lons, lats, windspd,
-                               max_windspd, mesh, outliers)
+                               max_windspd, mesh, draw_contour,
+                               outliers)
 
 
 def get_latlon_and_index_in_grid(value, range, grid_lat_or_lon_list):
@@ -2404,8 +2463,10 @@ def get_subplots_row_col_and_fig_size(subplots_num):
     if subplots_num == 1:
         return 1, 1, (7, 7)
     elif subplots_num == 2:
-        return 1, 2, (15, 7)
-    elif subplots_num == 3 or subplots_num == 4:
+        return 1, 2, (13, 7)
+    elif subplots_num == 3:
+        return 1, 3, (21, 7)
+    elif subplots_num == 4:
         return 2, 2, (15, 15)
     elif subplots_num == 5 or subplots_num == 6:
         return 2, 3, (23, 15)
@@ -3370,7 +3431,7 @@ def draw_sfmr_windspd_and_track(the_class, fig, ax, tc_datetime,
                 break
 
         for i in range(len(sfmr_pts)):
-            ax.scatter(all_lons[i], all_lats[i], s=150,
+            ax.scatter(all_lons[i], all_lats[i], s=350,
                        c=all_windspd[i], cmap=windspd_colormap(),
                        vmin=0, vmax=clb_max,
                        zorder=the_class.zorders['sfmr_point'],
@@ -3454,7 +3515,8 @@ def validate_with_sfmr(the_class, tgt_name, tc, sfmr_pts, tgt_lons,
                         # Skip if the data point from target source is
                         # invalid
                         if (tgt_windspd[j][k] is None
-                                or tgt_windspd[j][k] <= 0):
+                                or tgt_windspd[j][k] <= 0
+                                or tgt_windspd[j][k] is MASKED):
                             continue
                         if not tgt_mesh:
                             tmp_lon = tgt_lons[k]
@@ -4704,32 +4766,31 @@ def jointplot_kernel_dist_of_imbalance_windspd(dir, y_test,
         exit(msg)
 
 
-def scatter_plot_pred(dir, y_test, y_pred, figsize=(8, 8),
+def scatter_plot_pred(dir, y_test, y_pred, statistic=False,
+                      x_label='', y_label='',
+                      palette_start=0,
+                      range_min=0, figsize=(8, 8),
                       fontsize=20, dpi=600):
-    # Classify tropical cyclone wind according to wind speed
-    split_values = [0, 15, 25, 35, 45, 999]
-
     try:
         df_list = []
         axs_list = []
+        df_dict = dict()
         if not (type(y_pred) is dict):
             plots_num = 1
             df_list[0] = pd.DataFrame({'y_test': y_test, 'y_pred': y_pred})
-            # df['windspd_range'] = ''
         else:
             plots_num = len(y_pred.keys())
 
-                # df['windspd_range'] = ''
             for key in y_pred.keys():
                 df_tmp = pd.DataFrame({'y_test': y_test,
                                        'y_pred': y_pred[key],
                                        'name': [key] * len(y_test)
                                       })
+                df_dict[key] = df_tmp
                 df_list.append(df_tmp)
 
             df = pd.concat(df_list).reset_index(drop=True)
             df['y_bias'] = df['y_pred'] - df['y_test']
-            # df['windspd_range'] = ''
 
         subplots_row, subplots_col, figsize = \
             get_subplots_row_col_and_fig_size(plots_num)
@@ -4749,37 +4810,65 @@ def scatter_plot_pred(dir, y_test, y_pred, figsize=(8, 8),
 
                 axs_list.append(ax)
 
-        # sorted_order = []
-        # for idx, val in enumerate(split_values):
-        #     if idx == len(split_values) - 1:
-        #         break
-        #     left = val
-        #     right = split_values[idx + 1]
-        #     indices = df.loc[(df['y_test'] >= left)
-        #                      & (df['y_test'] < right)].index
-        #     if idx + 1 < len(split_values) - 1:
-        #         label = f'{left} - {right}'
-        #     else:
-        #         label = f'> {left}'
-        #     df.loc[indices, ['windspd_range']] = label
-        #     sorted_order.append(label)
-
         sns.set_style("ticks")
         if not (type(y_pred) is dict):
             the_class.error('Not consider')
             sys.exit(1)
         else:
-            g = sns.FacetGrid(df, col='name', hue='name', aspect=1,
-                              palette=sns.color_palette("Set2"))
-            g = (g.map(sns.scatterplot, "y_test", "y_pred",
-                       size=30, linewidth=0.3, edgecolor='w')
-                 .set_titles('{col_name}')
-                 .set(xticks=[x * 10 for x in range(8)],
-                      yticks=[y * 10 for y in range(8)]))
-            g.set_axis_labels('SMAPW (m/s)', 'SSMAPW (m/s)')
-            axs = g.axes[0]
+            palette=sns.color_palette("Set2")
+            # g = sns.FacetGrid(df, col='name', hue='name', aspect=1,
+            #                   palette=sns.color_palette("Set2"))
+            # g = (g.map(sns.scatterplot, "y_test", "y_pred",
+            #            size=30, linewidth=0.3, edgecolor='w')
+            #      .set_titles('{col_name}')
+            #      .set(# xlim=(range_min, (int(y_test.max()/10)+1)*10),
+            #           xticks=[x * 10 for x in range(8)],
+            #           yticks=[y * 10 for y in range(8)]))
+
+            # g = sns.lmplot(x="y_test", y="y_pred", hue="name", col="name",
+            #                height=4,
+            #                palette=palette[palette_start:],
+            #                scatter_kws=dict(
+            #                    s=30, linewidths=0.3, edgecolors='w'),
+            #                line_kws=dict(
+            #                    color=(1.0, 0.8509803921568627,
+            #                           0.1843137254901961)),
+            #                data=df, aspect=1)
+            # g.set_axis_labels(x_label, y_label)
+            # axs = g.axes[0]
+
+            # build a rectangle in axes coords
+            left, width = .02, .96
+            bottom, height = .02, .96
+            right = left + width
+            top = bottom + height
+
+            y_pred_names = list(y_pred.keys())
+
             for i, ax in enumerate(axs):
+                sns.set_style("ticks")
+                pt_color = palette[i]
+                ax_df = df_dict[y_pred_names[i]]
+
+                sns.scatterplot(x='y_test', y='y_pred',
+                                data=ax_df, ax=ax,
+                                c=pt_color)
+
+                sns.kdeplot(data=ax_df['y_test'], data2=ax_df['y_pred'],
+                            ax=ax, n_levles=5, shade=True,
+                            shade_lowest=False, cmap=plt.cm.rainbow)
+
                 ax.plot([0, 70], [0, 70], 'k--', linewidth=1.0)
+
+                ax.set_xlabel(x_label, fontsize=fontsize)
+                ax.set_ylabel(y_label, fontsize=fontsize)
+                ax.tick_params(labelsize=fontsize)
+                ax.set_title(list(y_pred.keys())[i])
+
+                x_left, x_right = ax.get_xlim()
+                offset = x_right - (int(y_test.max()/10)+1)*10
+                ax.set_xlim(range_min - offset, x_right)
+
                 df_part = df.loc[df['name'] == list(y_pred.keys())[i]]
                 mean_bias = df_part["y_bias"].mean()
                 rmse = math.sqrt(mean_squared_error(df_part['y_test'],
@@ -4792,24 +4881,30 @@ def scatter_plot_pred(dir, y_test, y_pred, figsize=(8, 8),
                 linear_fit = (
                     f"""y={slope:.3f}x{interpect:+.3f}""")
                 statistic_str = {
+                    'linear_fit': f'linear fit: {linear_fit}',
                     'mean_bias': f'Mean Bias: {mean_bias:.2f} m/s',
                     'RMSE': f'RMSE: {rmse:.2f} m/s',
                     'determ_coeff': f'R\u00b2: {determ_coeff:.3f}',
-                    'linear_fit': f'linear fit: {linear_fit}'
                 }
-                for idx, (key, val) in enumerate(statistic_str.items()):
-                    ax.text(0.05, 0.915-0.1*(idx), val, fontsize=7,
-                            transform=ax.transAxes)
-                ax.text(0.9, 0.1, f'{string.ascii_lowercase[i]})',
+
+                # axes coordinates: (0, 0) is bottom left
+                # and (1, 1) is upper right
+                p = mpatches.Rectangle(
+                    (left, bottom), width, height,
+                    fill=False, transform=ax.transAxes, clip_on=False
+                    )
+                ax.add_patch(p)
+
+                if statistic:
+                    for idx, (key, val) in enumerate(statistic_str.items()):
+                        ax.text(right, bottom+0.1*idx, val, fontsize=7,
+                                horizontalalignment='right',
+                                # verticalalignment='bottom',
+                                transform=ax.transAxes)
+                ax.text(0.1, 0.9, f'{string.ascii_lowercase[i]})',
                         fontsize=10, transform=ax.transAxes,
                         fontweight='bold', va='bottom', ha='right')
-            # g.add_legend()
         sns.despine(top=False, bottom=False, left=False, right=False)
-
-        # legend = ax.legend()
-        # label_text_1 = legend.texts[0]._text
-        # legend.texts[0].set_text(label_text_1)
-        # ax.legend(fontsize=fontsize)
 
         plt.tight_layout()
         plt.savefig((f'{dir}scatterplot.png'), dpi=dpi)
@@ -4820,11 +4915,12 @@ def scatter_plot_pred(dir, y_test, y_pred, figsize=(8, 8),
     return
 
 
-def box_plot_windspd(dir, y_test, y_pred, figsize=(8, 8),
-                     fontsize=20, dpi=600):
+def box_plot_windspd(dir, y_test, y_pred, x_label='', y_label='',
+                     figsize=(12, 8), fontsize=20, dpi=600):
     # Classify tropical cyclone wind according to wind speed
     # split_values = [0, 15, 25, 35, 45, 999]
-    split_values = [0, 10, 20, 30, 40, 50, 60, 70, 999]
+    split_values = [0, 15, 30, 45, 60, 999]
+    # split_values = [0, 10, 20, 30, 40, 50, 60, 70]
 
     try:
         if not (type(y_pred) is dict):
@@ -4861,7 +4957,8 @@ def box_plot_windspd(dir, y_test, y_pred, figsize=(8, 8),
 
         plt.figure(figsize=figsize)
         # sns.set_style("whitegrid")
-        sns.set_style("ticks")
+        # sns.set_style("ticks")
+        sns.set_style("whitegrid")
         # sns.boxplot(x='windspd_range', y='y_bias', data=df,
         #             order=sorted_order)
         if not (type(y_pred) is dict):
@@ -4876,8 +4973,8 @@ def box_plot_windspd(dir, y_test, y_pred, figsize=(8, 8),
                                 palette=sns.color_palette("Set2"))
         sns.despine(top=False, bottom=False, left=False, right=False)
 
-        ax.set_xlabel('Wind speed range (m/s)', fontsize=fontsize)
-        ax.set_ylabel('SSMAPW - SMAPW (m/s)', fontsize=fontsize)
+        ax.set_xlabel(x_label, fontsize=fontsize)
+        ax.set_ylabel(y_label, fontsize=fontsize)
         ax.tick_params(labelsize=fontsize)
 
         legend = ax.legend()
@@ -5198,6 +5295,7 @@ def hyperopt_smogn_params_old(the_class):
 
     return train, test
 
+
 def get_train_test_with_final_smogn_params(the_class):
     df = get_df_of_era5_smap(the_class)
     if the_class.load:
@@ -5423,6 +5521,45 @@ def get_original_train_test(the_class):
     print(f'Test set shape: {test.shape}')
 
     return train, test
+
+
+def bin_target_value(y, interval):
+    y_full = y
+    ceiled_max = math.ceil(y_full.max())
+    bins = np.linspace(0, ceiled_max, int(ceiled_max / interval) + 1)
+    y_binned = np.digitize(y_full, bins)
+    y_binned_from_zero_float = y_binned - np.ones(shape=y.shape)
+    y_binned_from_zero_int = np.array(y_binned_from_zero_float,
+                                      dtype=int)
+
+    recounted = Counter(y_binned_from_zero_int)
+    pmf = Pmf(recounted)
+    pmf.normalize()
+
+    all_bins = []
+    xp = []
+    fp = []
+    for i in range(ceiled_max):
+        all_bins.append(i)
+        if i in pmf:
+            xp.append(i)
+            fp.append(pmf[i])
+    interped_prob = np.interp(all_bins, xp, fp)
+    for i in range(ceiled_max):
+        if i not in pmf:
+            pmf[i] = interped_prob[i]
+
+    sorted_pmf = pmf.most_common()
+    max_p = sorted_pmf[0][1]
+    max_p_bin_val = sorted_pmf[0][0]
+    res = []
+    for i in range(len(sorted_pmf)):
+        if sorted_pmf[i][0] < max_p_bin_val:
+            res.append((sorted_pmf[i][0], max_p))
+        else:
+            res.append(sorted_pmf[i])
+
+    return res
 
 
 def get_train_test_old(the_class):
@@ -5656,9 +5793,9 @@ def show_correlation_heatmap(data):
     plt.show()
 
 
-def show_diff_count(the_class, diff_count):
+def show_diff_count(the_class, diff_count, diff_sum):
     try:
-        print((f"""diff_count:\n"""
+        print((f"""\n\ndiff_count:\n"""
                f"""-------\n"""
                f"""single:\n"""
                f"""-------\n"""))
@@ -5667,7 +5804,8 @@ def show_diff_count(the_class, diff_count):
                 diff_count['single'].items()):
             if not val:
                 continue
-            print(f'{key}: {val}')
+            avg = diff_sum['single'][key] / val
+            print(f'{key}: num-{val}\tavg_bias_percent-{avg}')
 
         print((f"""\n\n---------\n"""
                f"""pressure:\n"""
@@ -5677,7 +5815,8 @@ def show_diff_count(the_class, diff_count):
                 diff_count['pressure'].items()):
             if not val:
                 continue
-            print(f'{key}: {val}')
+            avg = diff_sum['pressure'][key] / val
+            print(f'{key}: num-{val}\tavg_bias_percent-{avg}')
     except Exception as msg:
         breakpoint()
         sys.exit(msg)
@@ -5912,7 +6051,7 @@ def statistic_of_bias(y_test, y_pred):
             df_tmp[bias_col_name] = df_tmp['y_pred'] - df_tmp['y_test']
             bias_list.append(df_tmp)
 
-        windspd_split = [15, 25, 35, 45]
+        windspd_split = [0, 15, 30, 45, 60]
         for idx, val in enumerate(windspd_split):
             left = val
             if idx == len(windspd_split) - 1:
@@ -5986,3 +6125,257 @@ def where_outlier_in_distribution(out_dir, X_train, X_test,
 def hightlight_outlier(the_class, fig, ax, outliers):
     pass
 
+
+def pred_of_classifier(the_class, classifier_root_path,
+                       classifiers_dir_names,
+                       candidates, strategies):
+    preds = dict()
+
+    try:
+        for i, (cand_name, clf_indices) in enumerate(
+            candidates.items()):
+            # preds[strat_name] = np.zeros(shape=the_class.y_test.shape)
+            tmp_pred = []
+
+            for idx in clf_indices:
+                clf_dir_name = classifiers_dir_names[idx]
+
+                classifiers_dir = (
+                    f'{classifier_root_path}{clf_dir_name}/')
+                save_file = [f for f in os.listdir(classifiers_dir)
+                             if f.endswith('.pkl')
+                             and f.startswith(f'{the_class.basin}')]
+                if len(save_file) != 1:
+                    the_class.logger.error(
+                        'Count of Bunch is not ONE')
+                    exit(1)
+
+                with open(f'{classifiers_dir}{save_file[0]}',
+                          'rb') as f:
+                    best_result = pickle.load(f)
+
+                tmp_pred.append(best_result.model.predict(
+                    the_class.X_test))
+
+            for strat_name in strategies:
+                pred_key = f'{cand_name}-{strat_name}'
+                clf_num = len(tmp_pred)
+                pred_length = len(tmp_pred[0])
+                res = np.empty(shape=tmp_pred[0].shape, dtype=bool)
+
+                if strat_name == 'less_obey_more':
+                    preds[pred_key] = less_obey_more(
+                        tmp_pred, clf_num, pred_length, res)
+                elif strat_name == 'sum':
+                    preds[pred_key] = sum_pred(
+                        tmp_pred, clf_num, pred_length, res)
+                elif strat_name == 'like_low':
+                    preds[pred_key] = like_low_pred(
+                        tmp_pred, clf_num, pred_length, res)
+                elif strat_name == 'like_high':
+                    preds[pred_key] = like_high_pred(
+                        tmp_pred, clf_num, pred_length, res)
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+    return preds
+
+
+def less_obey_more(pred, clf_num, pred_length, res):
+    for i in range(pred_length):
+        high_num = 0
+        low_num = 0
+        for j in range(clf_num):
+            if pred[j][i] > 0:
+                high_num += 1
+            elif pred[j][i] < 0:
+                low_num += 1
+        if high_num > low_num:
+            res[i] = True
+        else:
+            res[i] = False
+
+    return res
+
+
+def sum_pred(pred, clf_num, pred_length, res):
+    for i in range(pred_length):
+        sum = 0
+        for j in range(clf_num):
+            sum += pred[j][i]
+        if sum > 0:
+            res[i] = True
+        else:
+            res[i] = False
+
+    return res
+
+
+def like_low_pred(pred, clf_num, pred_length, res):
+    for i in range(pred_length):
+        high = True
+        for j in range(clf_num):
+            if pred[j][i] < 0:
+                high = False
+                break
+        if high:
+            res[i] = True
+        else:
+            res[i] = False
+
+    return res
+
+
+def like_high_pred(pred, clf_num, pred_length, res):
+    for i in range(pred_length):
+        high = False
+        for j in range(clf_num):
+            if pred[j][i] > 0:
+                high = True
+                break
+        if high:
+            res[i] = True
+        else:
+            res[i] = False
+
+    return res
+
+
+def grid_rmse_and_bias(fig_dir, vx, vy, tgt, base, fontsize=13):
+    try:
+        masked_value = -999
+        length = dict()
+        mins = dict()
+        if isinstance(vx.min(), np.int64):
+            length_adjust = 1
+        else:
+            length_adjust = 0
+
+        for name, val in zip(['x', 'y'], [vx, vy]):
+            mins[name] = int(math.floor(val.min()))
+            length[name] = (int(math.ceil(val.max()) - mins[name])
+                            + length_adjust)
+
+        grid_shape = (length['y'], length['x'])
+        array_length = len(tgt)
+
+        statistic_grid = {
+            'rmse': np.full(shape=grid_shape,
+                            fill_value=masked_value,
+                            dtype=float),
+            'bias': np.full(shape=grid_shape,
+                            fill_value=masked_value,
+                            dtype=float)
+        }
+        tgt_grid = np.empty(shape=grid_shape, dtype=object)
+        base_grid = np.empty(shape=grid_shape, dtype=object)
+
+        for i in range(array_length):
+            x_idx = int(vx[i] - mins['x'])
+            y_idx = int(vy[i] - mins['y'])
+
+            if tgt_grid[y_idx][x_idx] is None:
+                tgt_grid[y_idx][x_idx] = []
+            tgt_grid[y_idx][x_idx].append(tgt[i])
+
+            if base_grid[y_idx][x_idx] is None:
+                base_grid[y_idx][x_idx] = []
+            base_grid[y_idx][x_idx].append(base[i])
+
+        x_grid = np.zeros(shape=grid_shape, dtype=float)
+        y_grid = np.zeros(shape=grid_shape, dtype=float)
+        spa_resolu = 0.25
+
+        for y_idx in range(length['y']):
+            for x_idx in range(length['x']):
+
+                y_grid[y_idx][x_idx] = (mins['y'] + y_idx) * spa_resolu
+                x_grid[y_idx][x_idx] = (mins['x'] + x_idx) * spa_resolu
+
+                if tgt_grid[y_idx][x_idx] is None:
+                    continue
+
+                statistic_grid['rmse'][y_idx][x_idx] = math.sqrt(
+                    mean_squared_error(base_grid[y_idx][x_idx],
+                                       tgt_grid[y_idx][x_idx]))
+                diff = (np.array(tgt_grid[y_idx][x_idx])
+                        - np.array(base_grid[y_idx][x_idx]))
+                statistic_grid['bias'][y_idx][x_idx] = diff.mean()
+
+        # max_idx = statistic_grid.argmax()
+        # print(f'Remove max outlier: {task} = {statistic_grid.max()}')
+        # statistic_grid[int(max_idx / grid_shape[1])][
+        #     max_idx % grid_shape[1]] = masked_value
+
+        statistic_grid['rmse'] = np.ma.masked_values(
+            statistic_grid['rmse'], masked_value)
+        statistic_grid['bias'] = np.ma.masked_values(
+            statistic_grid['bias'], masked_value)
+
+        subplots_row, subplots_col, fig_size = \
+            get_subplots_row_col_and_fig_size(2)
+
+        fig, axs = plt.subplots(subplots_row, subplots_col,
+                                figsize=fig_size, sharey=False)
+
+        titles = ['RMSE', 'Mean Bias']
+        for idx, (key, val) in enumerate(statistic_grid.items()):
+            ax = axs[idx]
+
+            ceil_sta_max = math.ceil(val.max())
+            floor_sta_min = math.floor(val.min())
+            contour_range_width = int(ceil_sta_max - floor_sta_min)
+            contour_levels_num = int(contour_range_width / 2)
+            bounds = [x + floor_sta_min for x in range(
+                contour_range_width + 1)]
+
+            cf = ax.contourf(x_grid, y_grid, val,
+                             levels=50,
+                             cmap=plt.cm.viridis,
+                             vmin=floor_sta_min, vmax=ceil_sta_max)
+            cf.set_clim([floor_sta_min, ceil_sta_max])
+
+            cr = ax.contour(x_grid, y_grid, val,
+                            levels=contour_levels_num,
+                            colors=('k',))
+            ax.clabel(cr, fmt='%d', colors='k')
+
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes('bottom', size='5%', pad=0.3)
+
+            clb = fig.colorbar(cf, cax=cax, orientation='horizontal',
+                               format='%d', ticks=bounds)
+            clb.ax.tick_params(labelsize=fontsize)
+            clb.set_label('(m/s)', size=fontsize)
+
+            ax.xaxis.set_major_formatter(StrMethodFormatter(u"{x:.1f}°"))
+            ax.yaxis.set_major_formatter(StrMethodFormatter(u"{x:.1f}°"))
+
+            ax.set_title(titles[idx], size=1.5*fontsize)
+            ax.tick_params(axis="x", labelsize=fontsize)
+            ax.tick_params(axis="y", labelsize=fontsize)
+
+            ax.text(0.065, 0.98,
+                    f'{string.ascii_lowercase[idx]})',
+                    transform=ax.transAxes, fontsize=20,
+                    fontweight='bold', va='top', ha='right')
+
+            # ax.set_xlabel('relative longitude', fontsize=fontsize)
+            # ax.set_ylabel('relative latitude', fontsize=fontsize)
+            # ax.xaxis.set_label_position('top')
+            # Set ticks on both sides of axes on
+            # ax.tick_params(axis="x", bottom=False, top=True,
+            #                labelbottom=False, labeltop=True)
+            ax.set_aspect('equal')
+            ax.grid(True)
+
+        fig.tight_layout()
+
+        fig_name = 'RMSE_mean_bias_2d.png'
+        plt.savefig(f'{fig_dir}{fig_name}', dpi=600)
+        plt.clf()
+
+    except Exception as msg:
+        breakpoint()
+        exit(msg)

@@ -34,6 +34,7 @@ import merra2
 import match_era5_sfmr
 import combine_table
 import classify
+import simulate
 
 unixOptions = 'p:r:eg:c:siv:k'
 # gnuOptions = ['match_smap', 'reg-dnn', 'reg-xgb', 'reg-dt',
@@ -43,7 +44,8 @@ gnuOptions = ['period=', 'region=', 'basin=', 'match_smap', 'reg=',
               'compare=', 'sfmr', 'ibtracs', 'validate=', 'check',
               'sta_ibtracs', 'sta_era5_smap=', 'smart_compare',
               'merra2', 'match_sfmr', 'combine', 'tag=',
-              'classify=', 'smogn_target=', 'draw_sfmr=']
+              'classify=', 'smogn_target=', 'draw_sfmr=',
+              'interval=', 'simulate=']
 
 def work_flow():
     """The work flow of blending several TC OSW.
@@ -79,6 +81,8 @@ def work_flow():
     do_regression = False
     reg_instructions = None
     smogn_target = None
+    interval = None
+    do_simulate = False
     do_classify = False
     classify_instruction = None
     tag = None
@@ -124,6 +128,11 @@ def work_flow():
             reg_instructions = current_value.split(',')
         elif current_argument in ('--smogn_target'):
             smogn_target = current_value.split(',')[0]
+        elif current_argument in ('--interval'):
+            interval = current_value.split(',')[:2]
+        elif current_argument in ('--simulate'):
+            do_simulate = True
+            simulate_instructions = current_value.split(',')
         elif current_argument in ('--classify'):
             do_classify = True
             classify_instructions = current_value.split(',')
@@ -225,6 +234,10 @@ def work_flow():
             classify.Classifier(
                 CONFIG, period, train_test_split_dt, region, basin,
                 passwd, False, classify_instructions, smogn_target)
+        if do_simulate:
+            simulate.TCSimulator(
+                CONFIG, period, region, basin, passwd, False,
+                simulate_instructions)
         if do_regression:
             # if tag is None:
             #     logger.error('No model tag')

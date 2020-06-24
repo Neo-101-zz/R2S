@@ -1,14 +1,64 @@
-import numpy as np
-import lightgbm as lgb
+import time
 
+import numpy as np
 from sklearn.metrics import f1_score
 from scipy.misc import derivative
 
 
-def sigmoid(x): return 1./(1. +  np.exp(-x))
+def sigmoid(x): return 1./(1. + np.exp(-x))
 
 
-def focal_loss_train(y_pred, train_data, threshold=40, power=2):
+def focal_loss_train(y_pred, train_data, reciprocal,
+                     inversed_pmf_dict, gamma):
+    try:
+        y_true = train_data.label
+        # st = time.time()
+        # ratio = np.zeros(shape=y_pred.shape)
+        # for i in range(len(y_pred)):
+        #     ratio[i] = (reciprocal
+        #                 * inversed_pmf_dict[int(y_true[i])]) ** gamma
+        # used_time = time.time() - st
+        # print(used_time)
+        # breakpoint()
+        ratio = (
+            (np.vectorize(inversed_pmf_dict.get)(
+                np.array(y_true, dtype=int))
+                * reciprocal)) ** gamma
+
+        residual = (y_true - y_pred).astype("float")
+        grad = -2*ratio*residual
+        hess = 2*ratio
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+    return grad, hess
+
+
+def focal_loss_valid(y_pred, train_data, reciprocal,
+                     inversed_pmf_dict, gamma):
+    try:
+        y_true = train_data.label
+        # ratio = np.zeros(shape=y_pred.shape)
+        # for i in range(len(y_pred)):
+        #     ratio[i] = (reciprocal
+        #                 * inversed_pmf_dict[int(y_true[i])]) ** gamma
+        ratio = (
+            (np.vectorize(inversed_pmf_dict.get)(
+                np.array(y_true, dtype=int))
+                * reciprocal)) ** gamma
+
+        residual = (y_true - y_pred).astype("float")
+        loss = (residual**2)*ratio
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+    return "custom_asymmetric_eval", np.mean(loss), False
+
+
+"""
+def focal_loss_train(y_pred, train_data, threshold=45, power=2.5):
     try:
         y_true = train_data.label
         residual = (y_true - y_pred).astype("float")
@@ -26,7 +76,7 @@ def focal_loss_train(y_pred, train_data, threshold=40, power=2):
     return grad, hess
 
 
-def focal_loss_valid(y_pred, train_data, threshold=40, power=2):
+def focal_loss_valid(y_pred, train_data, threshold=45, power=2.5):
     try:
         y_true = train_data.label
         residual = (y_true - y_pred).astype("float")
@@ -40,6 +90,7 @@ def focal_loss_valid(y_pred, train_data, threshold=40, power=2):
         exit(msg)
 
     return "custom_asymmetric_eval", np.mean(loss), False
+"""
 
 
 def custom_asymmetric_train(y_pred, train_data, slope, min_alpha):

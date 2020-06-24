@@ -9,8 +9,8 @@ import lightgbm as lgb
 from scipy.misc import derivative
 
 import utils
-from metrics import (focal_loss_lgb, focal_loss_lgb_eval_error, lgb_f1_score,
-                     lgb_focal_f1_score, sigmoid)
+from metrics import (focal_loss_lgb, focal_loss_lgb_eval_error,
+                     lgb_f1_score, lgb_focal_f1_score, sigmoid)
 from sklearn.metrics import (accuracy_score, f1_score, precision_score,
                              recall_score, confusion_matrix)
 from sklearn.utils import Bunch
@@ -47,7 +47,7 @@ class Classifier(object):
         self.set_variables()
 
         self.read_smap_era5()
-        self.classify_threshold = 42
+        self.classify_threshold = 45
         self.label_y()
         self.lgb_train = lgb.Dataset(self.X_train, self.y_train,
                                      free_raw_data=False)
@@ -56,8 +56,12 @@ class Classifier(object):
                                     free_raw_data=False)
 
         if 'lgb' in self.instructions:
+            self.record_best_params()
             if 'optimize' in self.instructions:
-                self.optimize_classifier(maxevals=2)
+                self.optimize_classifier(maxevals=100)
+            if 'compare' in self.instructions:
+                self.compare_classifier()
+
             # elif 'compare_best' in self.instructions:
             #     self.compare_lgb_best_regressor()
             # elif 'best' in self.instructions:
@@ -66,6 +70,93 @@ class Classifier(object):
             #     self.lgb_default_regressor()
             else:
                 self.logger.error('Nothing happen')
+
+    def record_best_params(self):
+        result_dir = ('/Users/lujingze/Programming/SWFusion/'
+                       'classify/tc/lightgbm/model/'
+                       'na_valid_0.560000_45_fl_smogn_final'
+                       '_unb_maxeval_2/')
+        model_name = [f for f in os.listdir(result_dir)
+                     if f.endswith('.pkl')
+                     and f.startswith(f'{self.basin}')]
+        if len(model_name) != 1:
+            self.logger.error('Count of Bunch is not ONE')
+            exit(1)
+
+        with open(f'{result_dir}{model_name[0]}', 'rb') as f:
+            regressor = pickle.load(f)
+
+        best_params_df = pd.DataFrame.from_dict(
+            regressor.best_params, orient='index',
+            columns=['classifier'])
+        best_params_df.to_csv(f'{result_dir}best_params.csv')
+
+    def compare_classifier(self):
+        classifier_root_path = (
+            '/Users/lujingze/Programming/SWFusion/classify/'
+            'tc/lightgbm/model/'
+        )
+        classifiers_dir_names = [
+            'na_valid_0.688073_38_fl_smogn_final_unb_maxeval_2',
+            'na_valid_0.703297_39_fl_smogn_final_unb_maxeval_2',
+            'na_valid_0.630137_40_fl_smogn_final_unb_maxeval_2',
+            'na_valid_0.555556_41_fl_smogn_final_unb_maxeval_2',
+            'na_valid_0.555556_42_fl_smogn_final_unb_maxeval_2',
+        ]
+        candidates = {
+            'diff_vote': [i for i in range(5)],
+            'repeat_vote': [2] * 5,
+            'single_vote': [2],
+        }
+        strategies = ['less_obey_more', 'sum', 'like_low', 'like_high']
+
+        preds = utils.pred_of_classifier(self, classifier_root_path,
+                                         classifiers_dir_names,
+                                         candidates, strategies)
+        acc = dict()
+        f1 = dict()
+        prec = dict()
+        rec = dict()
+        cm = dict()
+
+        for idx, (key, val) in enumerate(preds.items()):
+            acc[key] = accuracy_score(self.y_test, val)
+            f1[key] = f1_score(self.y_test, val)
+            prec[key] = precision_score(self.y_test, val)
+            rec[key] = recall_score(self.y_test, val)
+            cm[key] = confusion_matrix(self.y_test, val)
+
+        schemes_num = len(preds.keys())
+        metrics_num = 4
+        rank = np.ndarray(shape=(schemes_num, metrics_num+1),
+                          dtype=int)
+        metrics_list = [acc, f1, prec, rec]
+        schemes_name = list(preds.keys())
+
+        for j, x in enumerate(metrics_list):
+            sorted_x = {k: v for k, v in sorted(
+                x.items(), key=lambda item: item[1],
+                reverse=True)}
+            val_descending = []
+            rank_cursor = 0
+            for i, (key, val) in enumerate(sorted_x.items()):
+                if val not in val_descending:
+                    val_descending.append(val)
+                    rank_cursor += 1
+                key_idx_in_schemes_name = schemes_name.index(key)
+                rank[key_idx_in_schemes_name][j] = rank_cursor
+
+        rank_sum_col_index = len(metrics_list)
+        for i in range(len(schemes_name)):
+            rank_sum = 0
+            for j in range(rank_sum_col_index):
+                rank_sum += rank[i][j]
+            rank[i][rank_sum_col_index] = rank_sum
+
+        rank_df = pd.DataFrame(data=rank, index=schemes_name,
+                               columns=['acc', 'f1', 'prec',
+                                        'rec', 'rank_sum'])
+        breakpoint()
 
     def optimize_classifier(self, maxevals=200):
         self.early_stop_dict = {}

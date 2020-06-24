@@ -81,7 +81,6 @@ class TCComparer(object):
         for part in self.compare_instructions:
             if part in self.source_candidates:
                 self.sources.append(part)
-
         # if 'smap' in self.sources and 'sfmr' in self.sources:
         #     self.logger.error((
         #         f"""Not support synchronously compare """
@@ -102,18 +101,22 @@ class TCComparer(object):
             self.sources[0] = 'sfmr'
             self.sources[des_idx] = tmp
 
+        if set(['sfmr', 'smap', 'smap_prediction', 'era5']).issubset(
+                set(self.sources)):
+            self.sources = ['sfmr', 'era5', 'smap', 'smap_prediction']
+
         # `smap` should before `smap_prediction` to filter cases
         # where they did not synchronously exists because the cases
         # where SMAP overlapped SFMR around TC is less frequent than
         # that  of SMAP prediction
-        if set(['sfmr', 'smap', 'smap_prediction']).issubset(
-                set(self.sources)):
-            smap_index = self.sources.index('smap')
-            smap_pred_index = self.sources.index('smap_prediction')
-            if smap_index > smap_pred_index:
-                self.sources[smap_index], self.sources[smap_pred_index]\
-                    = self.sources[smap_pred_index], self.sources[
-                        smap_index]
+        # if set(['sfmr', 'smap', 'smap_prediction']).issubset(
+        #         set(self.sources)):
+        #     smap_index = self.sources.index('smap')
+        #     smap_pred_index = self.sources.index('smap_prediction')
+        #     if smap_index > smap_pred_index:
+        #         self.sources[smap_index], self.sources[smap_pred_index]\
+        #             = self.sources[smap_pred_index], self.sources[
+        #                 smap_index]
 
         if 'sfmr' in self.sources and len(self.sources) < 2:
             self.logger.error((
@@ -544,6 +547,7 @@ class TCComparer(object):
         diff_mins = dict()
 
         max_windspd = -1
+        min_windspd = 999
         for src in self.sources:
             if src == 'sfmr':
                 success, sfmr_tracks, sfmr_pts = \
@@ -555,6 +559,7 @@ class TCComparer(object):
                 for single_track_pts in sfmr_pts:
                     for pt in single_track_pts:
                         max_windspd = max(pt.windspd, max_windspd)
+                        min_windspd = min(pt.windspd, min_windspd)
             else:
                 try:
                     # Get lons, lats, windspd
@@ -576,6 +581,8 @@ class TCComparer(object):
                     # Get max windspd
                     if windspd[src].max() > max_windspd:
                         max_windspd = windspd[src].max()
+                    if windspd[src].min() > min_windspd:
+                        min_windspd = windspd[src].min()
                 except Exception as msg:
                     breakpoint()
                     exit(msg)
@@ -607,9 +614,12 @@ class TCComparer(object):
                 seconds=60*diff_mins['smap'].mean())
         else:
             accurate_dt = tc_dt
-        subplot_title_suffix = (
-            f"""{accurate_dt.strftime('%H%M UTC %d %b %Y')} """
-        )
+        subplot_title_suffix = {
+            'smap': f'{accurate_dt.strftime("%H%M UTC %d %b %Y")} ',
+            'era5': f'{tc_dt.strftime("%H%M UTC %d %b %Y")} ',
+        }
+        subplot_title_suffix['smap_prediction'] = subplot_title_suffix[
+            'smap']
         smap_prediction_outliers = [
             utils.Outlier(tc_sid='2017171N24271',
                           tc_datetime=datetime.datetime(
@@ -644,6 +654,7 @@ class TCComparer(object):
             for hit, outlier in zip(outlier_exists, tmp):
                 if hit:
                     smap_prediction_outliers.append(outlier)
+
         # Draw windspd
         for src in self.sources:
             try:
@@ -654,25 +665,22 @@ class TCComparer(object):
                 fontsize = 20
                 utils.draw_windspd(self, fig, ax, interped_tc.date_time,
                                    lons[src], lats[src], windspd[src],
-                                   max_windspd, mesh[src], custom=True,
-                                   region=draw_region,
+                                   max_windspd, mesh[src],
+                                   draw_contour=False,
+                                   custom=True, region=draw_region,
                                    outliers=smap_prediction_outliers)
                 if self.draw_sfmr:
                     utils.draw_sfmr_windspd_and_track(
                         self, fig, ax, interped_tc.date_time,
                         sfmr_tracks, sfmr_pts, max_windspd)
                 if text_subplots_serial_number:
-                    ax.text(0.1, 0.95,
+                   ax.text(0.1, 0.95,
                             f'{string.ascii_lowercase[index]})',
                             transform=ax.transAxes, fontsize=20,
                             fontweight='bold', va='top', ha='right')
-                # ax.title.set_text((f"""{interped_tc.name} """
-                #                    f"""{self.sources_titles[src]} """
-                #                    f"""{subplot_title_suffix}"""))
-                # ax.title.set_size(13)
-                ax.set_title((f"""{interped_tc.name} """
-                              f"""{self.sources_titles[src]} """
-                              f"""{subplot_title_suffix}"""),
+                ax.set_title((f"""{self.sources_titles[src]} """
+                              f"""{subplot_title_suffix[src]} """
+                              f"""{interped_tc.name} """),
                              size=15)
                 index += 1
             except Exception as msg:
@@ -693,7 +701,7 @@ class TCComparer(object):
 
         os.makedirs(fig_dir, exist_ok=True)
         fig_name = f'{dt_str}_{interped_tc.name}.png'
-        plt.savefig(f'{fig_dir}{fig_name}')
+        plt.savefig(f'{fig_dir}{fig_name}', dpi=600)
         plt.clf()
 
         return True
@@ -1234,14 +1242,20 @@ class TCComparer(object):
                     'pressure': {},
                     'single': {},
                 }
+                diff_percent_sum = {
+                    'pressure': {},
+                    'single': {},
+                }
                 for col in self.CONFIG['era5']['vars']['grib'][
                         'reanalysis_pressure_levels']['all_vars']:
                     if col in compare_cols:
                         diff_count['pressure'][col] = 0
+                        diff_percent_sum['pressure'][col] = 0
                 for col in self.CONFIG['era5']['vars']['grib'][
                         'reanalysis_single_levels']['tc']:
                     if col in compare_cols:
                         diff_count['single'][col] = 0
+                        diff_percent_sum['single'][col] = 0
 
                 # Compare `env_data` and `refer_query`
                 for i in range(refer_num):
@@ -1254,19 +1268,25 @@ class TCComparer(object):
                     for col in compare_cols:
                         env_val = same_pt_env[col].iloc[0]
                         refer_val = getattr(refer, col)
+                        diff = env_val - refer_val
+                        avg = (env_val - refer_val) / 2.0
 
-                        if env_val != refer_val:
+                        if diff:
                             # TODO: check whether pressure levels vars
                             # biased
                             if col in self.CONFIG['era5']['vars'][
                                 'grib']['reanalysis_pressure_levels'][
                                     'all_vars']:
                                 diff_count['pressure'][col] += 1
+                                diff_percent_sum['pressure'][col] += (
+                                    diff / avg)
                             elif col in self.CONFIG['era5']['vars'][
                                 'grib']['reanalysis_single_levels'][
                                     'tc']:
                                 diff_count['single'][col] += 1
-                utils.show_diff_count(self, diff_count)
+                                diff_percent_sum['single'][col] += (
+                                    diff / avg)
+                utils.show_diff_count(self, diff_count, diff_percent_sum)
         except Exception as msg:
             breakpoint()
             exit(msg)
@@ -1299,16 +1319,52 @@ class TCComparer(object):
             df.drop(self.CONFIG['regression']['useless_columns'][
                 'smap_era5'], axis=1, inplace=True)
 
-            env_df = df.drop(['smap_windspd'], axis=1).reset_index()
-            # model_dir = self.CONFIG['regression']['dirs']['tc']\
-            #         ['lightgbm']['model']
-            model_dir = ('/Users/lujingze/Programming/SWFusion/'
-                         'regression/tc/lightgbm/model/'
-                         'na_0.891876_fl_smogn_50_slope_0.05/')
-            # best_model = utils.load_best_model(model_dir, self.basin)
-            model = utils.load_model_from_bunch(model_dir, self.basin,
-                                                '.pkl', 'model')
-            y_pred = model.predict(env_df)
+            env_df = df.drop(['smap_windspd'],axis=1).reset_index(
+                drop=True)
+
+            model_dirs = {
+                'SMOGN-TCL': (
+                    '/Users/lujingze/Programming/SWFusion/'
+                    'regression/tc/lightgbm/model/'
+                    'na_valid_2557.909583_fl_smogn_final_thre_'
+                    '50_power_3_under_maxeval_100/'),
+                'MSE': ('/Users/lujingze/Programming/SWFusion/'
+                        'regression/tc/lightgbm/model/'
+                        'na_valid_2.496193/'),
+                'FL-CLF': ('/Users/lujingze/Programming/SWFusion/'
+                           'classify/tc/lightgbm/model/'
+                           'na_valid_0.560000_45_fl_smogn_final'
+                           '_unb_maxeval_2/'),
+            }
+            models = dict()
+            preds = dict()
+            for idx, (key, val) in enumerate(model_dirs.items()):
+                save_file = [f for f in os.listdir(val)
+                             if f.endswith('.pkl')
+                             and f.startswith(f'{self.basin}')]
+                if len(save_file) != 1:
+                    self.logger.error('Count of Bunch is not ONE')
+                    exit(1)
+
+                with open(f'{val}{save_file[0]}', 'rb') as f:
+                    models[key] = (pickle.load(f)).model
+
+                preds[key] = models[key].predict(env_df)
+
+            y_pred = np.zeros(shape=(env_df.shape[0],))
+            for i in range(env_df.shape[0]):
+                if preds['FL-CLF'][i] > 0:
+                    y_pred[i] = preds['SMOGN-TCL'][i]
+                else:
+                    y_pred[i] = preds['MSE'][i]
+
+            # model_dir = ('/Users/lujingze/Programming/SWFusion/'
+            #              'regression/tc/lightgbm/model/'
+            #              'na_0.891876_fl_smogn_50_slope_0.05/')
+            # # best_model = utils.load_best_model(model_dir, self.basin)
+            # model = utils.load_model_from_bunch(model_dir, self.basin,
+            #                                     '.pkl', 'model')
+            # y_pred = model.predict(env_df)
             smap_windspd_xyz_matrix_dict['windspd'] = list(y_pred)
 
             smap_windspd_xyz_matrix_df = pd.DataFrame(
@@ -1368,8 +1424,7 @@ class TCComparer(object):
                         'diff_mins', file_path, tc.date_time,
                         draw_region)
             if diff_mins is None:
-                breakpoint()
-                return None
+                return None, None
             # Not all points of area has this feature
             # Make sure it is interpolated properly
             diff_mins = utils.interp_satel_era5_diff_mins_matrix(

@@ -1,8 +1,10 @@
 import logging
 import math
+import os
 import string
 import sys
 
+from mpl_toolkits.mplot3d import Axes3D
 from sqlalchemy.ext.declarative import declarative_base
 import pandas as pd
 from sklearn.metrics import mean_squared_error
@@ -48,7 +50,7 @@ class Statisticer(object):
         self.src_2 = self.sources[1]
 
         src_plot_names_mapper = {
-            'smap_prediction': 'SMAP Prediction',
+            'smap_prediction': 'HYBRID',
             'smap': 'SMAP',
             'era5': 'ERA5',
         }
@@ -155,16 +157,22 @@ class Statisticer(object):
         bias = dict()
         sfmr_dt = dict()
         sfmr_dt_name = 'sfmr_datetime'
+        center_border_range = 1
+        cbr = center_border_range
+        not_center_clause = (f"""and not (x > -{cbr} and x < {cbr} """
+                             f"""and y > -{cbr} and y < {cbr})""")
 
         for src in self.sources:
-            table_name = utils.gen_validation_tablename(self, 'sfmr', src)
+            table_name = utils.gen_validation_tablename(self, 'sfmr',
+                                                        src)
             if src == 'smap_prediction' and 'smap' in self.sources:
                 table_name = ('smap_prediction_validation_by_sfmr'
                              '_na_aligned_with_smap')
             df = pd.read_sql(
                 (f"""SELECT * FROM {table_name} """
                  f"""where sfmr_datetime > "{self.period_str[0]}" """
-                 f"""and sfmr_datetime < "{self.period_str[1]}" """),
+                 f"""and sfmr_datetime < "{self.period_str[1]}" """
+                 f"""{not_center_clause}"""),
                 self.engine)
 
             bias[src] = df
@@ -205,12 +213,40 @@ class Statisticer(object):
         bias_list = [bias[src] for src in self.sources]
         bias_list = self.unify_df_colnames(bias_list)
 
+        validation = bias['smap_prediction']
+        self.dig_into_validation(validation)
+
         self.show_simple_statistic(bias_list)
         self.show_detailed_statistic(bias_list)
-        self.plot_scatter_regression(bias_list)
+
+        # Pre-process bias list
+        # sfmr_windspd = np.zeros(shape=(bias[self.sources[0]].shape[0],))
+        sfmr_windspd = bias_list[0]['sfmr_windspd'].to_numpy()
+        pred_windspd = dict()
+        for idx, src in enumerate(self.sources):
+            name = self.src_plot_names[idx]
+            pred_windspd[name] = bias_list[idx][
+                'tgt_windspd'].to_numpy()
+        out_dir = self.CONFIG['result']['dirs'][
+            'fig']['validation_by_sfmr']
+        os.makedirs(out_dir, exist_ok=True)
+        utils.scatter_plot_pred(out_dir, sfmr_windspd, pred_windspd,
+                                statistic=False,
+                                x_label='resampled SFMR wind speed (m/s)',
+                                y_label='wind speed (m/s)',
+                                palette_start=2,
+                                range_min=15)
+        # self.plot_scatter_regression(bias_list)
         # val_dir = self.CONFIG['results']['dirs']['fig'][
         #     'validation_by_sfmr']
         # utils.box_plot_windspd(val_dir
+
+    def dig_into_validation(self, df):
+        fig_dir = self.CONFIG['result']['dirs']['fig'][
+            'validation_by_sfmr']
+        utils.grid_rmse_and_bias(fig_dir, df['x'], df['y'],
+                                df['tgt_windspd'],
+                                df['sfmr_windspd'])
 
     def unify_df_colnames(self, bias_list):
         for i in range(len(bias_list)):
@@ -226,6 +262,7 @@ class Statisticer(object):
         return bias_list
 
     def plot_scatter_regression(self, bias_list):
+        breakpoint()
         sns.set(style="ticks", color_codes=True)
         sfmr_min = bias_list[0]['sfmr_windspd'].min()
         sfmr_max = bias_list[0]['sfmr_windspd'].max()
