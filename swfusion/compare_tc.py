@@ -284,9 +284,14 @@ class TCComparer(object):
         return True
 
     def compare_with_sfmr(self, tc, next_tc):
+        # Skip interpolating between two TC records if the begin and
+        # termianl of interval is not at the hour
+        if (next_tc.date_time.minute or next_tc.date_time.second
+                or tc.date_time.minute or tc.date_time.second):
+            return False
         # Temporal shift
         delta = next_tc.date_time - tc.date_time
-        # Skip interpolating between two TC recors if two neighbouring
+        # Skip interpolating between two TC records if two neighbouring
         # records of TC are far away in time
         if delta.days:
             return False
@@ -328,110 +333,6 @@ class TCComparer(object):
             success = self.compare_with_sfmr_not_all_records_hit(
                 tc, next_tc, hours, result['spatial_temporal_info'], 
                 result['hour_info_pt_idx'])
-
-        return success
-
-    def compare_with_sfmr_old(self, tc, next_tc):
-        # Temporal shift
-        delta = next_tc.date_time - tc.date_time
-        # Skip interpolating between two TC recors if two neighbouring
-        # records of TC are far away in time
-        if delta.days:
-            return False
-        hours = int(delta.seconds / 3600)
-        # Time interval between two TCs are less than one hour
-        if not hours:
-            return False
-
-        Match = utils.create_match_table(self, self.sources)
-        hit_dt = []
-        match_dt = []
-        for h in range(hours):
-            interped_tc = utils.interp_tc(self, h, tc, next_tc)
-
-            # Check whether the match record of sources near
-            # this TC exists
-            same_sid_dt_query = self.session.query(Match).filter(
-                Match.date_time == interped_tc.date_time,
-                Match.tc_sid == interped_tc.sid)
-            same_sid_dt_count = same_sid_dt_query.count()
-
-            if not same_sid_dt_count:
-                continue
-            elif same_sid_dt_count == 1:
-                hit_dt.append(interped_tc.date_time)
-                if same_sid_dt_query[0].match:
-                    match_dt.append(interped_tc.date_time)
-            else:
-                self.logger.error((f"""Strange: two or more """
-                                   f"""comparison has same sid """
-                                   f"""and datetime"""))
-                breakpoint()
-                exit()
-
-        hit_count = len(hit_dt)
-        match_count = len(match_dt)
-        if hit_count == hours and not match_count:
-            print((f"""[Skip] All internal hours of TC """
-                   f"""{tc.name} between {tc.date_time} """
-                   f"""and {next_tc.date_time}"""))
-            return False
-
-        # Check existence of SFMR between two IBTrACS records
-        existence, spatial_temporal_info = self.sfmr_exists(
-            tc, next_tc)
-        if not existence:
-            # First executed here between particular two TCs
-            if hit_count < hours:
-                # update match of data sources
-                utils.update_no_match_between_tcs(self, Match, hours,
-                                                  tc, next_tc)
-
-            print((f"""[Not exist] SFMR of TC {tc.name} between """
-                   f"""{tc.date_time} and {next_tc.date_time}"""))
-            return False
-
-        # Round SMFR record to different hours
-        # hour_info_pt_idx:
-        #   {
-        #       hour_datetime_1: {
-        #           sfmr_brief_info_idx_1: [pt_idx_1, pt_idx_2, ...],
-        #           sfmr_brief_info_idx_2: [pt_idx_1, pt_idx_2, ...],
-        #           ...
-        #       }
-        #       hour_datetime_2: {
-        #           ...
-        #       }
-        #       ...
-        #   }
-        hour_info_pt_idx = self.sfmr_rounded_hours(
-            tc, next_tc, spatial_temporal_info)
-        if not len(hour_info_pt_idx):
-            # First executed here between particular two TCs
-            if hit_count < hours:
-                # update match of data sources
-                utils.update_no_match_between_tcs(self, Match, hours,
-                                                  tc, next_tc)
-
-            print((f"""[Fail rounding to hour] SFMR of TC {tc.name} """
-                   f"""between {tc.date_time} and """
-                   f"""{next_tc.date_time}"""))
-            return False
-
-        if hit_count == hours:
-            # In this condition, `match count` is larger than zero.  
-            # Just compare the datetimes when `match` value is True
-            # and no need to update `match_data_sources`
-            success = self.compare_with_sfmr_all_records_hit(
-                tc, next_tc, hours, match_dt,
-                spatial_temporal_info, hour_info_pt_idx)
-        else:
-            # First executed here between particular two TCs.  
-            # For each hour, compare SFMR wind speed with wind speed
-            # from other sources and have to update `match_data_sources`
-            success = self.compare_with_sfmr_not_all_records_hit(
-                tc, next_tc, hours, spatial_temporal_info, 
-                hour_info_pt_idx)
 
         return success
 
@@ -600,10 +501,18 @@ class TCComparer(object):
         for src in self.sources:
             if src == 'sfmr':
                 continue
-            utils.validate_with_sfmr(
+            sfmr_pts = utils.validate_with_sfmr(
                 self, src, interped_tc, sfmr_pts,
                 lons[src], lats[src], windspd[src], mesh[src],
                 diff_mins[src], tag)
+
+        sfmr_pts_null = True
+        for t in range(len(sfmr_pts)):
+            if len(sfmr_pts[t]):
+                sfmr_pts_null = False
+                break
+        if sfmr_pts_null:
+            return False
 
         index = 0
         tc_dt = interped_tc.date_time
@@ -620,40 +529,6 @@ class TCComparer(object):
         }
         subplot_title_suffix['smap_prediction'] = subplot_title_suffix[
             'smap']
-        smap_prediction_outliers = [
-            utils.Outlier(tc_sid='2017171N24271',
-                          tc_datetime=datetime.datetime(
-                              2017, 6, 21, 12, 0, 0),
-                          x=2,
-                          y=8),
-            utils.Outlier(tc_sid='2017171N24271',
-                          tc_datetime=datetime.datetime(
-                              2017, 6, 21, 12, 0, 0),
-                          x=-6,
-                          y=6),
-            utils.Outlier(tc_sid='2017171N24271',
-                          tc_datetime=datetime.datetime(
-                              2017, 6, 21, 12, 0, 0),
-                          x=-5,
-                          y=6)
-        ]
-        outlier_exists = []
-        for outlier in smap_prediction_outliers:
-            if (outlier.tc_sid == interped_tc.sid
-                and outlier.tc_datetime == \
-                    interped_tc.date_time):
-                outlier_exists.append(True)
-            else:
-                outlier_exists.append(False)
-        if ('smap_prediction' not in self.sources
-                or True not in outlier_exists):
-            smap_prediction_outliers = None
-        else:
-            tmp = copy.copy(smap_prediction_outliers)
-            smap_prediction_outliers = []
-            for hit, outlier in zip(outlier_exists, tmp):
-                if hit:
-                    smap_prediction_outliers.append(outlier)
 
         # Draw windspd
         for src in self.sources:
@@ -667,8 +542,7 @@ class TCComparer(object):
                                    lons[src], lats[src], windspd[src],
                                    max_windspd, mesh[src],
                                    draw_contour=False,
-                                   custom=True, region=draw_region,
-                                   outliers=smap_prediction_outliers)
+                                   custom=True, region=draw_region)
                 if self.draw_sfmr:
                     utils.draw_sfmr_windspd_and_track(
                         self, fig, ax, interped_tc.date_time,
@@ -1133,16 +1007,13 @@ class TCComparer(object):
                 if col.name not in useless_cols_name:
                     col_names.append(col.name)
 
-            smap_file_path = None
-
             # smap_lons, smap_lats = self.get_smap_lonlat(tc)
             # North, West, South, East,
             area = [max(smap_lats), min(smap_lons),
                     min(smap_lats), max(smap_lons)]
 
             return self.get_smap_prediction_xyz_matrix_step_2(
-                tc, smap_lons, smap_lats, col_names,
-                smap_file_path, area)
+                tc, smap_lons, smap_lats, col_names, area)
         except Exception as msg:
             self.logger.error((
                 f"""function get_smap_prediction_xyz_matrix_step_1:"""
@@ -1152,79 +1023,79 @@ class TCComparer(object):
 
     def get_smap_prediction_xyz_matrix_step_2(self, tc, smap_lons,
                                               smap_lats, col_names,
-                                              smap_file_path, area):
-
-        suffix = f'_{tc.sid}_{tc.date_time.strftime("%Y%m%d%H")}'
-        SMAPERA5 = utils.create_smap_era5_table(self, tc.date_time,
-                                                suffix)
-        # Need set the temporal shift from era5 as same as original
-        # SMAP
-        if 'smap' in self.sources:
-            satel_manager = satel_scs.SCSSatelManager(
-                self.CONFIG, self.period, self.region,
-                self.db_root_passwd, save_disk=self.save_disk,
-                work=False)
-            smap_file_path = satel_manager.download('smap',
-                                                    tc.date_time)
-
-            env_data, diff_mins = \
-                self.get_env_data_of_matrix_with_coordinates(
-                    tc, col_names, smap_lons, smap_lats, SMAPERA5,
-                    smap_file_path)
-
-            match_manager = match_era5_smap.matchManager(
-                self.CONFIG, self.period, self.region, self.basin,
-                self.db_root_passwd, False, work=False)
-
-            smap_data, hourtimes, smap_area = match_manager.\
-                get_smap_part(SMAPERA5, tc, smap_file_path)
-        # Just set the temporal shift from era5 to zero
-        else:
-            env_data, diff_mins = \
-                self.get_env_data_of_matrix_with_coordinates(
-                    tc, col_names, smap_lons, smap_lats, SMAPERA5)
-            hourtimes = [tc.date_time.hour]
-
-        if env_data is None:
-            return False, None, None, None, None, None
-
-        diff = 0.5
-        north = max(smap_lats)
-        south = min(smap_lats)
-        east = max(smap_lons)
-        west = min(smap_lons)
-        area = [north + diff, (west - diff + 360) % 360,
-                south - diff, (east + diff + 360) % 360]
-
-        for idx, val in enumerate(area):
-            if utils.is_multiple_of(val, 0.125):
-                # decrease north and east a little
-                if not idx or idx == 3:
-                    area[idx] = val - 0.125
-                # increase west and south a little
-                else:
-                    area[idx] = val + 0.125
-            else:
-                self.logger.error(('Coordinates of SMAP are not '
-                                    f'multiple of 0.125'))
-        area[1] = (area[1] + 360) % 360
-        area[3] = (area[3] + 360) % 360
-
-        env_data = utils.add_era5(self, 'smap', tc, env_data,
-                                  hourtimes, area)
-
-        utils.bulk_insert_avoid_duplicate_unique(
-            env_data, self.CONFIG['database']['batch_size']['insert'],
-            SMAPERA5, ['satel_datetime_lon_lat'], self.session,
-            check_self=True)
-
-        table_name = utils.gen_tc_satel_era5_tablename('smap',
-                                                       self.basin)
-        table_name += suffix
-
-        df = pd.read_sql(f'SELECT * FROM {table_name}', self.engine)
-
+                                              area):
         try:
+            suffix = f'_{tc.sid}_{tc.date_time.strftime("%Y%m%d%H")}'
+            SMAPERA5 = utils.create_smap_era5_table(self, tc.date_time,
+                                                    suffix)
+            # Need set the temporal shift from era5 as same as original
+            # SMAP
+            if 'smap' in self.sources:
+                satel_manager = satel_scs.SCSSatelManager(
+                    self.CONFIG, self.period, self.region,
+                    self.db_root_passwd, save_disk=self.save_disk,
+                    work=False)
+                smap_file_path = satel_manager.download('smap',
+                                                        tc.date_time)
+
+                env_data, diff_mins = \
+                    self.get_env_data_of_matrix_with_coordinates(
+                        tc, col_names, smap_lons, smap_lats, SMAPERA5,
+                        smap_file_path)
+
+                match_manager = match_era5_smap.matchManager(
+                    self.CONFIG, self.period, self.region, self.basin,
+                    self.db_root_passwd, False, work=False)
+
+                smap_data, hourtimes, smap_area = match_manager.\
+                    get_smap_part(SMAPERA5, tc, smap_file_path)
+            # Just set the temporal shift from era5 to zero
+            else:
+                env_data, diff_mins = \
+                    self.get_env_data_of_matrix_with_coordinates(
+                        tc, col_names, smap_lons, smap_lats, SMAPERA5)
+                hourtimes = [utils.hour_rounder(tc.date_time).hour]
+
+            if env_data is None:
+                return False, None, None, None, None, None
+
+            diff = 0.5
+            north = max(smap_lats)
+            south = min(smap_lats)
+            east = max(smap_lons)
+            west = min(smap_lons)
+            area = [north + diff, (west - diff + 360) % 360,
+                    south - diff, (east + diff + 360) % 360]
+
+            for idx, val in enumerate(area):
+                if utils.is_multiple_of(val, 0.125):
+                    # decrease north and east a little
+                    if not idx or idx == 3:
+                        area[idx] = val - 0.125
+                    # increase west and south a little
+                    else:
+                        area[idx] = val + 0.125
+                else:
+                    self.logger.error(('Coordinates of SMAP are not '
+                                        f'multiple of 0.125'))
+            area[1] = (area[1] + 360) % 360
+            area[3] = (area[3] + 360) % 360
+
+            env_data = utils.add_era5(self, 'smap', tc, env_data,
+                                      hourtimes, area)
+
+            utils.bulk_insert_avoid_duplicate_unique(
+                env_data, self.CONFIG['database']['batch_size'][
+                    'insert'],
+                SMAPERA5, ['satel_datetime_lon_lat'], self.session,
+                check_self=True)
+
+            table_name = utils.gen_tc_satel_era5_tablename('smap',
+                                                           self.basin)
+            table_name += suffix
+
+            df = pd.read_sql(f'SELECT * FROM {table_name}', self.engine)
+
             refer_table_name = f'tc_smap_era5_{self.basin}'
             ReferTable = utils.get_class_by_tablename(
                 self.engine, refer_table_name)
@@ -1286,21 +1157,14 @@ class TCComparer(object):
                                 diff_count['single'][col] += 1
                                 diff_percent_sum['single'][col] += (
                                     diff / avg)
-                utils.show_diff_count(self, diff_count, diff_percent_sum)
-        except Exception as msg:
-            breakpoint()
-            exit(msg)
+                utils.show_diff_count(self, diff_count,
+                                      diff_percent_sum)
+            # drop table
+            utils.drop_table_by_name(self.engine, table_name)
 
-        # if tc.date_time == datetime.datetime(2015, 5, 7, 23, 0, 0):
-        #     breakpoint()
-
-        # drop table
-        utils.drop_table_by_name(self.engine, table_name)
-
-        # Get original lon and lat.  It is possible that lon and lat
-        # are not in `col_names`.  So we should extract them
-        # specifically.
-        try:
+            # Get original lon and lat.  It is possible that lon and lat
+            # are not in `col_names`.  So we should extract them
+            # specifically.
             env_lons = []
             env_lats = []
             for i in range(len(df)):
@@ -1311,11 +1175,7 @@ class TCComparer(object):
                 'lon': env_lons,
                 'lat': env_lats,
             }
-        except Exception as msg:
-            breakpoint()
-            exit(msg)
 
-        try:
             df.drop(self.CONFIG['regression']['useless_columns'][
                 'smap_era5'], axis=1, inplace=True)
 
@@ -1429,10 +1289,18 @@ class TCComparer(object):
             # Make sure it is interpolated properly
             diff_mins = utils.interp_satel_era5_diff_mins_matrix(
                 diff_mins)
-        # Just set the temporal shift from era5 to zero
         else:
-            diff_mins = np.zeros(shape=(lats_num, lons_num),
-                                 dtype=float)
+            if tc.date_time.minute == 0 and tc.date_time.second == 0:
+                # Just set the temporal shift from era5 to zero
+                diff_mins = np.zeros(shape=(lats_num, lons_num),
+                                     dtype=float)
+            else:
+                # When tc is not at the hour
+                diff_mins_val = int((tc.date_time - utils.hour_rounder(
+                    tc.date_time)).total_seconds() / 60)
+                diff_mins = np.full(shape=(lats_num, lons_num),
+                                    fill_value=diff_mins_val,
+                                    dtype=int)
 
         for y in range(lats_num):
             for x in range(lons_num):
@@ -1440,7 +1308,7 @@ class TCComparer(object):
 
                 row.sid = tc.sid
                 row.satel_era5_diff_mins = diff_mins[y][x]
-                row.era5_datetime = tc.date_time
+                row.era5_datetime = utils.hour_rounder(tc.date_time)
                 row.satel_datetime = (
                     row.era5_datetime + datetime.timedelta(
                         seconds=int(row.satel_era5_diff_mins)*60))

@@ -1,3 +1,4 @@
+import copy
 import datetime
 import logging
 import math
@@ -45,6 +46,7 @@ from ascat_daily import ASCATDaily
 from quikscat_daily_v4 import QuikScatDaily
 from windsat_daily_v7 import WindSatDaily
 import era5
+import compare_tc
 
 # Global variables
 logger = logging.getLogger(__name__)
@@ -3479,6 +3481,278 @@ def interp_satel_era5_diff_mins_matrix(diff_mins):
 
     return diff_mins
 
+def validate_smap_prediction_with_sfmr(the_class, tc, sfmr_pts,
+                                       tgt_name):
+    Validation = create_sfmr_validation_table(the_class, tgt_name)
+    # Traverse each SFMR point
+    num_sfmr_tracks = len(sfmr_pts)
+    grid_edge = the_class.CONFIG['spatial_resolution'][tgt_name]
+
+    validation_list = []
+    sfmr_pts_idx_to_remove = []
+    for t in range(num_sfmr_tracks):
+        for i in range(len(sfmr_pts[t])):
+            one_sfmr_pt = sfmr_pts[t][i]
+
+            smap_pred, precise_tc = smap_pred_at_sfmr_point(
+                the_class, tc, one_sfmr_pt)
+
+            if smap_pred is None:
+                continue
+            elif smap_pred is 'void':
+                sfmr_pts_idx_to_remove.append((t, i))
+                continue
+
+            row = Validation()
+            row.tc_sid = precise_tc.sid
+            row.sfmr_datetime = one_sfmr_pt.date_time
+            row.sfmr_lon = one_sfmr_pt.lon
+            row.sfmr_lat = one_sfmr_pt.lat
+
+            for attr in ['air_temp', 'salinity', 'sst', 'rain_rate',
+                         'windspd']:
+                value = getattr(one_sfmr_pt, attr)
+                setattr(row, f'sfmr_{attr}', value)
+
+            for attr in ['datetime', 'lon', 'lat']:
+                value = getattr(row, f'sfmr_{attr}')
+                setattr(row, f'{tgt_name}_{attr}', value)
+
+            setattr(row, f'{tgt_name}_windspd', smap_pred)
+
+            row.x = int((row.sfmr_lon - precise_tc.lon) / grid_edge)
+            row.y = int((row.sfmr_lat - precise_tc.lat) / grid_edge)
+
+            row.dis_minutes = 0
+            row.dis_kms = 0
+            row.windspd_bias = (getattr(row, f'{tgt_name}_windspd')
+                                - row.sfmr_windspd)
+            row.tc_sid_sfmr_datetime = (f"""{row.tc_sid}_"""
+                                        f"""{row.sfmr_datetime}""")
+            validation_list.append(row)
+
+    # Write into database
+    if len(validation_list):
+        bulk_insert_avoid_duplicate_unique(
+            validation_list,
+            the_class.CONFIG['database']['batch_size']['insert'],
+            Validation, ['tc_sid_sfmr_datetime'], the_class.session,
+            check_self=True)
+
+    # Remove SFMR points which nearest SMAP prediction grid point
+    # is masked
+    new_sfmr_pts = []
+    for t in range(num_sfmr_tracks):
+        new_sfmr_pts.append([])
+        for i in range(len(sfmr_pts[t])):
+            if (t, i) not in sfmr_pts_idx_to_remove:
+                new_sfmr_pts[t].append(sfmr_pts[t][i])
+
+    return new_sfmr_pts
+
+
+def smap_pred_at_sfmr_point(the_class, tc, sfmr_pt):
+    grid_edge = the_class.CONFIG['spatial_resolution'][
+        'smap_prediction']
+    region_edge = the_class.CONFIG['regression']['edge_in_degree']
+    region_half_edge = region_edge / 2
+    region_half_edge_grid_num =int(region_half_edge / grid_edge)
+
+    # Get temporal shift between sfmr_pt and TC
+    smfr_datetime = sfmr_pt.date_time
+    diff_mins = int((sfmr_pt.date_time - tc.date_time).total_seconds()
+                    / 60)
+
+    # Get the precise TC center
+    if diff_mins != 0:
+        precise_tc = get_precise_tc(the_class, tc, diff_mins)
+    else:
+        precise_tc = tc
+
+    # Get SMAP prediction of whole area according to
+    # the precise TC center and diff_mins
+    success, smap_lons, smap_lats = get_smap_lonlat(the_class,
+                                                    precise_tc)
+    if not success:
+        return None, Nonne
+
+    CompareTC = compare_tc.TCComparer(the_class.CONFIG, the_class.period,
+                                      the_class.region, the_class.basin,
+                                      the_class.db_root_passwd, False,
+                                      ['sfmr', 'smap_prediction'],
+                                      draw_sfmr=False,
+                                      work=False)
+    try:
+        # Get lons, lats, windspd
+        success, lons, lats, windspd, mesh, diff_mins = \
+            CompareTC.get_sources_xyz_matrix(
+                'smap_prediction', precise_tc, smap_lons,
+                smap_lats)
+        if not success:
+            return None, None
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+    # Check whether the gird point of SMAP prediction
+    # which is closest to SFMR point is masked or not
+    sfmr_pt_x = int((sfmr_pt.lon - precise_tc.lon) /
+                    grid_edge) + region_half_edge_grid_num
+    sfmr_pt_y = int((sfmr_pt.lat - precise_tc.lat) 
+                    / grid_edge) + region_half_edge_grid_num
+    if windspd[sfmr_pt_y][sfmr_pt_x] is MASKED:
+        return 'void', None
+
+    # Interploate the SMAP prediction right at the SFMR point's location
+    func_windspd = interpolate.interp2d(lons, lats, windspd)
+    smap_pred_at_sfmr_pt = func_windspd(sfmr_pt.lon, sfmr_pt.lat)
+    if smap_pred_at_sfmr_pt.shape != (1,):
+        the_class.error('smap_pred_at_sfmr_pt shape error')
+        breakpoint()
+
+    return float(smap_pred_at_sfmr_pt), precise_tc
+
+
+def get_precise_tc(the_class, tc, diff_mins):
+    table_name = the_class.CONFIG['ibtracs']['table_name'][
+        the_class.basin]
+    IBTrACS = get_class_by_tablename(the_class.engine, table_name)
+    tc_query = the_class.session.query(IBTrACS).filter(
+        IBTrACS.date_time >= tc.date_time - datetime.timedelta(days=1),
+        IBTrACS.date_time <= tc.date_time + datetime.timedelta(days=1)
+    )
+
+    total = tc_query.count()
+    tc_before = None
+    tc_after = None
+    first_of_lifetime = False
+    last_of_lifetime = False
+
+    for idx,former_tc in enumerate(tc_query):
+        # `tc` cannot be the last of `tc_query`
+        if idx == total - 1:
+            break
+        # Whether `tc` is right in `tc_query` or not,
+        # when it be found, its sid must be the same as `former_tc`
+        if former_tc.sid != tc.sid:
+            continue
+
+        # Possibility 1: `tc` is right in `tc_query`
+        if former_tc.date_time == tc.date_time:
+            tc_before = former_tc
+            # Possibility 1-a: `tc` has its next record
+            # and but is the first record of its lifetime
+            if tc_query[idx - 1].sid != former_tc.sid:
+                first_of_life_time = True
+            # Possibility 1-b: `tc` has its next record
+            # and is not the first record of its lifetime
+            if tc_query[idx + 1].sid == former_tc.sid:
+                tc_after = tc_query[idx + 1]
+            # Possibility 1-c: `tc` is the last record of its lifetime
+            else:
+                last_of_lifetime = True
+                tc_before = tc_query[idx - 1]
+                tc_after = former_tc
+            break
+
+        next_tc = tc_query[idx + 1]
+        if former_tc.sid != next_tc.sid:
+            continue
+        # Possibility 2: `tc` is between two records in `tc_query`
+        if (former_tc.date_time < tc.date_time
+                and next_tc.date_time > tc.date_time):
+            tc_before = former_tc
+            tc_after = next_tc
+            break
+
+    precise_tc = cal_precise_tc(the_class, tc, tc_before, tc_after,
+                                diff_mins, first_of_lifetime,
+                                last_of_lifetime)
+    return precise_tc
+
+
+def cal_precise_tc(the_class, tc, tc_before, tc_after,
+                   diff_mins, first_of_lifetime, last_of_lifetime):
+    interval_shift = {
+        'mins': int((tc_after.date_time
+                     - tc_before.date_time).total_seconds()
+                    / 60),
+        'lon': tc_after.lon - tc_before.lon,
+        'lat': tc_after.lat - tc_before.lat,
+    }
+    interval_speed = {
+        'lon': interval_shift['lon'] / interval_shift['mins'],
+        'lat': interval_shift['lat'] / interval_shift['mins'],
+    }
+
+    # It seems that we do not need to classify conditions
+    # so detailed.  Just need `tc_before`, `tc_after`, `tc`
+    # and `diff_mins` these four variables.  We can check
+    # the relative pisition of `tc` to interval made by
+    # `tc_before` and `tc_after` (before / in / after) and
+    # how far is `tc` from the nearest tc in IBTrACS
+    # (`tc_before` or `tc_after`) by the positive or negative
+    # of `diff_mins` and the temporal distance between
+    # precise datetime of TC and the datetime of the nearest
+    # TC in IBTrACS, respectively.
+
+    precise_tc_dt = tc.date_time + datetime.timedelta(
+        seconds=60*diff_mins)
+
+    # Figure out which TC record is the nearest
+    if (abs(tc_before.date_time - precise_tc_dt) <
+            abs(tc_after.date_time - precise_tc_dt)):
+        nearest_tc = tc_before
+    else:
+        nearest_tc = tc_after
+
+    # relative temporal shift in minutes
+    temporal_shift = int((precise_tc_dt - nearest_tc.date_time)
+                         .total_seconds() / 60)
+    # Calculate the precise lon and lat
+    lon_shift = interval_speed['lon'] * temporal_shift
+    lat_shift = interval_speed['lat'] * temporal_shift
+
+    # Generate precise TC
+    precise_tc = copy.copy(tc)
+    precise_tc.date_time = precise_tc_dt
+    precise_tc.lon = nearest_tc.lon + lon_shift
+    precise_tc.lat = nearest_tc.lat + lat_shift
+
+    return precise_tc
+
+    """
+    # Possibility 1-a: `tc` is right in IBTrACS
+    # and has its next record
+    # and but is the first record of its lifetime
+    if first_of_lifetime:
+        # Interpolate before `tc_before`
+        if diff_mins < 0:
+            pass
+        # Interpolate between `tc_before` and `tc_after`
+        elif diff_mins > 0:
+            pass
+    # Possibility 1-b: `tc` is right in IBTrACS
+    # and has its next record
+    # and is not the first record of its lifetime
+    # OR
+    # Possibility 2: `tc` is not in IBTrACS
+    # and is between two records in `tc_query`
+    elif not last_of_lifetime:
+        # Interpolate between `tc_before` and `tc_after`
+        pass
+    # Possibility 1-c: `tc` is right in IBTrACS
+    # and is the last record of its lifetime
+    elif last_of_lifetime:
+        # Interpolate between `tc_before` and `tc_after`
+        if diff_mins < 0:
+            pass
+        # Interpolate after `tc_after`
+        elif diff_mins > 0:
+    """
+
+
+
 
 def validate_with_sfmr(the_class, tgt_name, tc, sfmr_pts, tgt_lons,
                        tgt_lats, tgt_windspd, tgt_mesh, tgt_diff_mins,
@@ -3486,6 +3760,11 @@ def validate_with_sfmr(the_class, tgt_name, tc, sfmr_pts, tgt_lons,
     """'tgt' is the abbreviation for word 'target'.
 
     """
+    if tgt_name == 'smap_prediction':
+        return validate_smap_prediction_with_sfmr(the_class,
+                                                  tc, sfmr_pts,
+                                                  tgt_name)
+    # TODO: imporve matchup of smap / era5 with SFMR like SMAP pred
     Validation = create_sfmr_validation_table(the_class, tgt_name, tag)
     num_sfmr_tracks = len(sfmr_pts)
     num_tgt_lats, num_tgt_lons = tgt_windspd.shape
@@ -3604,6 +3883,7 @@ def validate_with_sfmr(the_class, tgt_name, tc, sfmr_pts, tgt_lons,
         Validation, ['tc_sid_sfmr_datetime'], the_class.session,
         check_self=True)
 
+    return sfmr_pts
 
 def get_bound_of_multiple_int(lims, interval):
     """lims[0] < lims[1]
@@ -4142,7 +4422,8 @@ def extract_era5_single_levels(the_class, tgt_name, tc, tgt_part,
     try:
         era5_file_path = \
                 era5_manager.download_single_levels_vars(
-                    vars_mode='tc', target_datetime=tc.date_time,
+                    vars_mode='tc',
+                    target_datetime=hour_rounder(tc.date_time),
                     time_mode='', times=hourtimes, area=area,
                     match_satel=tgt_name, filename_suffix=tc.sid)
     except Exception as msg:
@@ -4177,8 +4458,11 @@ def extract_era5_pressure_levels(the_class, tgt_name, tc,
     try:
         era5_file_path = \
                 era5_manager.download_pressure_levels_vars(
-                    'tc', tc.date_time, '', hourtimes, area,
-                    sorted(list(set(pres_lvls))), tgt_name, tc.sid)
+                    vars_mode='tc',
+                    target_datetime=hour_rounder(tc.date_time),
+                    time_mode='', times=hourtimes, area=area,
+                    pressure_levels=sorted(list(set(pres_lvls))),
+                    match_satel=tgt_name, filename_suffix=tc.sid)
     except Exception as msg:
         the_class.logger.error((
             f"""Fail downloading ERA5 pressure levels: {tgt_name} """
@@ -4375,96 +4659,96 @@ def add_era5_single_levels(the_class, era5_file_path, tc_dt, tgt_name,
 
 def add_era5_pressure_levels(the_class, era5_file_path, tc_dt,
                              tgt_name, era5_step_1, area, pres_lvls):
-    tgt_from_rss = False
-    rss_tgt_name = None
-    if tgt_name in the_class.CONFIG['satel_data_sources']['rss']:
-        tgt_from_rss = True
-        rss_tgt_name = 'satel'
-        hourtime_row_mapper = get_hourtime_row_mapper(era5_step_1,
-                                                      rss_tgt_name)
-    else:
-        hourtime_row_mapper = get_hourtime_row_mapper(era5_step_1,
-                                                      tgt_name)
-    north, west, south, east = area
+    try:
+        tgt_from_rss = False
+        rss_tgt_name = None
+        if tgt_name in the_class.CONFIG['satel_data_sources']['rss']:
+            tgt_from_rss = True
+            rss_tgt_name = 'satel'
+            hourtime_row_mapper = get_hourtime_row_mapper(era5_step_1,
+                                                          rss_tgt_name)
+        else:
+            hourtime_row_mapper = get_hourtime_row_mapper(era5_step_1,
+                                                          tgt_name)
+        north, west, south, east = area
 
-    count = 0
+        count = 0
 
-    grbidx = pygrib.index(era5_file_path, 'dataTime')
-    indices_of_rows_to_delete = set()
+        grbidx = pygrib.index(era5_file_path, 'dataTime')
+        indices_of_rows_to_delete = set()
 
-    # For every hour, update corresponding rows with grbs
-    for hourtime in range(0, 2400, 100):
-        if not len(hourtime_row_mapper[hourtime]):
-            continue
-        grb_time = datetime.time(int(hourtime/100), 0, 0)
+        # For every hour, update corresponding rows with grbs
+        for hourtime in range(0, 2400, 100):
+            if not len(hourtime_row_mapper[hourtime]):
+                continue
+            grb_time = datetime.time(int(hourtime/100), 0, 0)
 
-        selected_grbs = grbidx.select(dataTime=hourtime)
+            selected_grbs = grbidx.select(dataTime=hourtime)
 
-        for grb in selected_grbs:
-            # Generate name which is the same with table column
-            name = process_grib_message_name(grb.name)
-            grb_spa_resolu = grb.jDirectionIncrementInDegrees
-            # data() method of pygrib is time-consuming
-            # So apply it to global area then update all
-            # smap part with grb of specific hourtime,
-            # which using data() method as less as possible
-            data, lats, lons = grb.data(south, north, west, east)
-            data = np.flip(data, 0)
-            lats = np.flip(lats, 0)
-            lons = np.flip(lons, 0)
+            for grb in selected_grbs:
+                # Generate name which is the same with table column
+                name = process_grib_message_name(grb.name)
+                grb_spa_resolu = grb.jDirectionIncrementInDegrees
+                # data() method of pygrib is time-consuming
+                # So apply it to global area then update all
+                # smap part with grb of specific hourtime,
+                # which using data() method as less as possible
+                data, lats, lons = grb.data(south, north, west, east)
+                data = np.flip(data, 0)
+                lats = np.flip(lats, 0)
+                lons = np.flip(lons, 0)
 
-            masked_data = False
-            # MUST check masked array like this, because if an array
-            # is numpy.ma.core.MaskedArray, it is numpy.ndarray too.
-            # So only directly check whether an array is instance
-            # of numpy.ma.core.MaskedArray is safe.
-            if isinstance(data, np.ma.core.MaskedArray):
-                masked_data = True
+                masked_data = False
+                # MUST check masked array like this, because if an array
+                # is numpy.ma.core.MaskedArray, it is numpy.ndarray too.
+                # So only directly check whether an array is instance
+                # of numpy.ma.core.MaskedArray is safe.
+                if isinstance(data, np.ma.core.MaskedArray):
+                    masked_data = True
 
-            # Update all rows which matching this hourtime
-            for row_idx in hourtime_row_mapper[hourtime]:
-                count += 1
-                # print((f"""\r{name}: {count}/{total}"""), end='')
+                # Update all rows which matching this hourtime
+                for row_idx in hourtime_row_mapper[hourtime]:
+                    count += 1
+                    # print((f"""\r{name}: {count}/{total}"""), end='')
 
-                # Skip this turn if pressure level of grb does not
-                # equal to the pressure level of point of
-                # era5_step_1
-                if pres_lvls[row_idx] != grb.level:
-                    continue
+                    # Skip this turn if pressure level of grb does not
+                    # equal to the pressure level of point of
+                    # era5_step_1
+                    if pres_lvls[row_idx] != grb.level:
+                        continue
 
-                row = era5_step_1[row_idx]
+                    row = era5_step_1[row_idx]
 
-                era5_datetime = datetime.datetime.combine(
-                    tc_dt.date(), grb_time)
-                if row.era5_datetime != era5_datetime:
-                    the_class.logger.error((f"""datetime not same """
-                                            f"""in two steps of """
-                                            f"""extracting ERA5"""))
+                    era5_datetime = datetime.datetime.combine(
+                        tc_dt.date(), grb_time)
+                    if row.era5_datetime != era5_datetime:
+                        the_class.logger.error((f"""datetime not same """
+                                                f"""in two steps of """
+                                                f"""extracting ERA5"""))
 
-                if tgt_from_rss:
-                    tgt_datetime = getattr(row,
-                                           f'{rss_tgt_name}_datetime')
-                else:
-                    tgt_datetime = getattr(row, f'{tgt_name}_datetime')
+                    if tgt_from_rss:
+                        tgt_datetime = getattr(row,
+                                               f'{rss_tgt_name}_datetime')
+                    else:
+                        tgt_datetime = getattr(row, f'{tgt_name}_datetime')
 
-                tgt_minute = (tgt_datetime.hour * 60
-                              + tgt_datetime.minute)
-                grb_minute = int(hourtime/100) * 60
-                tgt_era5_diff_mins = tgt_minute - grb_minute
+                    tgt_minute = (tgt_datetime.hour * 60
+                                  + tgt_datetime.minute)
+                    grb_minute = int(hourtime/100) * 60
+                    tgt_era5_diff_mins = tgt_minute - grb_minute
 
-                if tgt_from_rss:
-                    existing_diff_mins = getattr(
-                        row, f'{rss_tgt_name}_era5_diff_mins')
-                else:
-                    existing_diff_mins = getattr(
-                        row, f'{tgt_name}_era5_diff_mins')
+                    if tgt_from_rss:
+                        existing_diff_mins = getattr(
+                            row, f'{rss_tgt_name}_era5_diff_mins')
+                    else:
+                        existing_diff_mins = getattr(
+                            row, f'{tgt_name}_era5_diff_mins')
 
-                if existing_diff_mins != tgt_era5_diff_mins:
-                    the_class.logger.error((
-                        f"""diff_mins not same in two steps of """
-                        f"""extracting ERA5"""))
+                    if existing_diff_mins != tgt_era5_diff_mins:
+                        the_class.logger.error((
+                            f"""diff_mins not same in two steps of """
+                            f"""extracting ERA5"""))
 
-                try:
                     if tgt_from_rss:
                         latlons, latlon_indices = \
                                 get_era5_corners_of_rss_cell(
@@ -4474,63 +4758,57 @@ def add_era5_pressure_levels(the_class, era5_file_path, tc_dt,
                         latlons, latlon_indices = \
                                 get_era5_corners_of_cell(
                                     row.lat, row.lon, lats, lons)
-                except Exception as msg:
-                    breakpoint()
-                    exit(msg)
-                lat1, lat2, lon1, lon2 = latlons
-                lat1_idx, lat2_idx, lon1_idx, lon2_idx = \
-                    latlon_indices
+                    lat1, lat2, lon1, lon2 = latlons
+                    lat1_idx, lat2_idx, lon1_idx, lon2_idx = \
+                        latlon_indices
 
-                skip_row = False
-                # Check out whether there is masked cell in square
-                if masked_data:
-                    for tmp_lat_idx in [lat1_idx, lat2_idx]:
-                        for tmp_lon_idx in [lon1_idx, lon2_idx]:
-                            if data.mask[tmp_lat_idx][tmp_lon_idx]:
-                                skip_row = True
-                                indices_of_rows_to_delete.add(
-                                    row_idx)
-                if skip_row:
-                    continue
-
-                square_data = data[lat1_idx:lat2_idx+1,
-                                   lon1_idx:lon2_idx+1]
-                square_lats = lats[lat1_idx:lat2_idx+1,
-                                   lon1_idx:lon2_idx+1]
-                square_lons = lons[lat1_idx:lat2_idx+1,
-                                   lon1_idx:lon2_idx+1]
-
-                if tgt_from_rss and grb_spa_resolu == 0.25:
-                    value = float(square_data.mean())
-                else:
-                    value = value_of_pt_in_era5_square(
-                        square_data, square_lats, square_lons,
-                        row.lat, row.lon)
-                    if value is None:
-                        # the_class.logger.warning((
-                        #     f"""[{name}] Not a square consists of """
-                        #     f"""four ERA5 grid points"""))
-                        breakpoint()
+                    skip_row = False
+                    # Check out whether there is masked cell in square
+                    if masked_data:
+                        for tmp_lat_idx in [lat1_idx, lat2_idx]:
+                            for tmp_lon_idx in [lon1_idx, lon2_idx]:
+                                if data.mask[tmp_lat_idx][tmp_lon_idx]:
+                                    skip_row = True
+                                    indices_of_rows_to_delete.add(
+                                        row_idx)
+                    if skip_row:
                         continue
 
-                setattr(row, name, value)
+                    square_data = data[lat1_idx:lat2_idx+1,
+                                       lon1_idx:lon2_idx+1]
+                    square_lats = lats[lat1_idx:lat2_idx+1,
+                                       lon1_idx:lon2_idx+1]
+                    square_lons = lons[lat1_idx:lat2_idx+1,
+                                       lon1_idx:lon2_idx+1]
 
-                # if (tc_dt == datetime.datetime(2015, 5, 7, 23, 0, 0)
-                #     and (name == 'relative_humidity')
-                #     and row.x == -11 and row.y == -8):
-                #     breakpoint()
+                    if tgt_from_rss and grb_spa_resolu == 0.25:
+                        value = float(square_data.mean())
+                    else:
+                        value = value_of_pt_in_era5_square(
+                            square_data, square_lats, square_lons,
+                            row.lat, row.lon)
+                        if value is None:
+                            # the_class.logger.warning((
+                            #     f"""[{name}] Not a square consists of """
+                            #     f"""four ERA5 grid points"""))
+                            breakpoint()
+                            continue
 
-            delete_last_lines()
-            # print(f'{name}: Done')
+                    setattr(row, name, value)
 
-    grbidx.close()
+                delete_last_lines()
 
-    # Move rows of era5_step_1 which should not deleted to a new
-    # list to accomplish filtering rows with masked data
-    result = []
-    for idx, row in enumerate(era5_step_1):
-        if idx not in indices_of_rows_to_delete:
-            result.append(row)
+        grbidx.close()
+
+        # Move rows of era5_step_1 which should not deleted to a new
+        # list to accomplish filtering rows with masked data
+        result = []
+        for idx, row in enumerate(era5_step_1):
+            if idx not in indices_of_rows_to_delete:
+                result.append(row)
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
 
     return result
 
@@ -4769,7 +5047,7 @@ def jointplot_kernel_dist_of_imbalance_windspd(dir, y_test,
 def scatter_plot_pred(dir, y_test, y_pred, statistic=False,
                       x_label='', y_label='',
                       palette_start=0,
-                      range_min=0, figsize=(8, 8),
+                      range_min=0,
                       fontsize=20, dpi=600):
     try:
         df_list = []
@@ -4844,6 +5122,10 @@ def scatter_plot_pred(dir, y_test, y_pred, statistic=False,
             top = bottom + height
 
             y_pred_names = list(y_pred.keys())
+            y_test_max = y_test.max()
+            xticks = [x * 10 for x in range(int(y_test_max/10)+2)]
+            yticks = [x * 10 for x in range(int(
+                df['y_pred'].max()/10)+2)]
 
             for i, ax in enumerate(axs):
                 sns.set_style("ticks")
@@ -4851,14 +5133,18 @@ def scatter_plot_pred(dir, y_test, y_pred, statistic=False,
                 ax_df = df_dict[y_pred_names[i]]
 
                 sns.scatterplot(x='y_test', y='y_pred',
-                                data=ax_df, ax=ax,
-                                c=pt_color)
+                                data=ax_df, ax=ax, c=pt_color,
+                                edgecolors='face')
+                ax.set_xticks(xticks)
+                ax.set_yticks(yticks)
 
                 sns.kdeplot(data=ax_df['y_test'], data2=ax_df['y_pred'],
-                            ax=ax, n_levles=5, shade=True,
-                            shade_lowest=False, cmap=plt.cm.rainbow)
+                            ax=ax, n_levles=4, shade=True,
+                            shade_lowest=False, cmap=plt.cm.rainbow,
+                            alpha=0.5)
 
-                ax.plot([0, 70], [0, 70], 'k--', linewidth=1.0)
+                ax.plot([0, y_test_max], [0, y_test_max],
+                        'k--', linewidth=1.0)
 
                 ax.set_xlabel(x_label, fontsize=fontsize)
                 ax.set_ylabel(y_label, fontsize=fontsize)
@@ -4868,6 +5154,8 @@ def scatter_plot_pred(dir, y_test, y_pred, statistic=False,
                 x_left, x_right = ax.get_xlim()
                 offset = x_right - (int(y_test.max()/10)+1)*10
                 ax.set_xlim(range_min - offset, x_right)
+
+                ax.set_ylim(0, max(y_test_max, df['y_pred'].max()))
 
                 df_part = df.loc[df['name'] == list(y_pred.keys())[i]]
                 mean_bias = df_part["y_bias"].mean()
@@ -4896,13 +5184,15 @@ def scatter_plot_pred(dir, y_test, y_pred, statistic=False,
                 ax.add_patch(p)
 
                 if statistic:
-                    for idx, (key, val) in enumerate(statistic_str.items()):
-                        ax.text(right, bottom+0.1*idx, val, fontsize=7,
+                    for idx, (key, val) in enumerate(
+                            statistic_str.items()):
+                        ax.text(right, bottom+0.1*idx, val,
+                                fontsize=fontssize,
                                 horizontalalignment='right',
                                 # verticalalignment='bottom',
                                 transform=ax.transAxes)
                 ax.text(0.1, 0.9, f'{string.ascii_lowercase[i]})',
-                        fontsize=10, transform=ax.transAxes,
+                        fontsize=fontsize, transform=ax.transAxes,
                         fontweight='bold', va='bottom', ha='right')
         sns.despine(top=False, bottom=False, left=False, right=False)
 
@@ -6242,8 +6532,14 @@ def like_high_pred(pred, clf_num, pred_length, res):
     return res
 
 
-def grid_rmse_and_bias(fig_dir, vx, vy, tgt, base, fontsize=13):
+def grid_rmse_and_bias(spatial_grid, fig_dir, vx, vy,
+                       tgt, base, fontsize=13):
     try:
+        vx.reset_index(inplace=True, drop=True)
+        vy.reset_index(inplace=True, drop=True)
+        tgt.reset_index(inplace=True, drop=True)
+        base.reset_index(inplace=True, drop=True)
+
         masked_value = -999
         length = dict()
         mins = dict()
@@ -6285,7 +6581,10 @@ def grid_rmse_and_bias(fig_dir, vx, vy, tgt, base, fontsize=13):
 
         x_grid = np.zeros(shape=grid_shape, dtype=float)
         y_grid = np.zeros(shape=grid_shape, dtype=float)
-        spa_resolu = 0.25
+        if spatial_grid:
+            spa_resolu = 0.25
+        else:
+            spa_resolu = 1
 
         for y_idx in range(length['y']):
             for x_idx in range(length['x']):
@@ -6303,15 +6602,19 @@ def grid_rmse_and_bias(fig_dir, vx, vy, tgt, base, fontsize=13):
                         - np.array(base_grid[y_idx][x_idx]))
                 statistic_grid['bias'][y_idx][x_idx] = diff.mean()
 
-        # max_idx = statistic_grid.argmax()
-        # print(f'Remove max outlier: {task} = {statistic_grid.max()}')
-        # statistic_grid[int(max_idx / grid_shape[1])][
-        #     max_idx % grid_shape[1]] = masked_value
+        for name in ['rmse', 'bias']:
+            max_idx = statistic_grid[name].argmax()
+            print((f"""Remove max outlier: {name} = """
+                   f"""{statistic_grid[name].max()}"""))
+            statistic_grid[name][int(max_idx / grid_shape[1])][
+                max_idx % grid_shape[1]] = masked_value
 
         statistic_grid['rmse'] = np.ma.masked_values(
             statistic_grid['rmse'], masked_value)
         statistic_grid['bias'] = np.ma.masked_values(
             statistic_grid['bias'], masked_value)
+
+        breakpoint()
 
         subplots_row, subplots_col, fig_size = \
             get_subplots_row_col_and_fig_size(2)
@@ -6336,10 +6639,11 @@ def grid_rmse_and_bias(fig_dir, vx, vy, tgt, base, fontsize=13):
                              vmin=floor_sta_min, vmax=ceil_sta_max)
             cf.set_clim([floor_sta_min, ceil_sta_max])
 
-            cr = ax.contour(x_grid, y_grid, val,
-                            levels=contour_levels_num,
-                            colors=('k',))
-            ax.clabel(cr, fmt='%d', colors='k')
+            if spatial_grid:
+                cr = ax.contour(x_grid, y_grid, val,
+                                levels=contour_levels_num,
+                                colors=('k',))
+                ax.clabel(cr, fmt='%d', colors='k')
 
             divider = make_axes_locatable(ax)
             cax = divider.append_axes('bottom', size='5%', pad=0.3)
@@ -6349,8 +6653,11 @@ def grid_rmse_and_bias(fig_dir, vx, vy, tgt, base, fontsize=13):
             clb.ax.tick_params(labelsize=fontsize)
             clb.set_label('(m/s)', size=fontsize)
 
-            ax.xaxis.set_major_formatter(StrMethodFormatter(u"{x:.1f}°"))
-            ax.yaxis.set_major_formatter(StrMethodFormatter(u"{x:.1f}°"))
+            if spatial_grid:
+                ax.xaxis.set_major_formatter(
+                    StrMethodFormatter(u"{x:.1f}°"))
+                ax.yaxis.set_major_formatter(
+                    StrMethodFormatter(u"{x:.1f}°"))
 
             ax.set_title(titles[idx], size=1.5*fontsize)
             ax.tick_params(axis="x", labelsize=fontsize)

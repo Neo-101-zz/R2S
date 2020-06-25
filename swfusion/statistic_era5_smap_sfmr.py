@@ -157,10 +157,16 @@ class Statisticer(object):
         bias = dict()
         sfmr_dt = dict()
         sfmr_dt_name = 'sfmr_datetime'
+
         center_border_range = 1
+        dis_minutes_threshold = 20
         cbr = center_border_range
+        dmt = dis_minutes_threshold
+
         not_center_clause = (f"""and not (x > -{cbr} and x < {cbr} """
-                             f"""and y > -{cbr} and y < {cbr})""")
+                             f"""and y > -{cbr} and y < {cbr}) """)
+        tight_time_clause = (f"""and dis_minutes > -{dmt} """
+                             f"""and dis_minutes < {dmt} """)
 
         for src in self.sources:
             table_name = utils.gen_validation_tablename(self, 'sfmr',
@@ -172,7 +178,7 @@ class Statisticer(object):
                 (f"""SELECT * FROM {table_name} """
                  f"""where sfmr_datetime > "{self.period_str[0]}" """
                  f"""and sfmr_datetime < "{self.period_str[1]}" """
-                 f"""{not_center_clause}"""),
+                 f"""{not_center_clause} {tight_time_clause}"""),
                 self.engine)
 
             bias[src] = df
@@ -213,7 +219,11 @@ class Statisticer(object):
         bias_list = [bias[src] for src in self.sources]
         bias_list = self.unify_df_colnames(bias_list)
 
-        validation = bias['smap_prediction']
+        tmp = bias['smap_prediction']
+        threshold = 15
+        # validation = tmp[tmp['sfmr_windspd'] > threshold]
+        validation = tmp.loc[(tmp['dis_minutes'] > -threshold)
+                             & (tmp['dis_minutes'] < threshold)]
         self.dig_into_validation(validation)
 
         self.show_simple_statistic(bias_list)
@@ -244,9 +254,12 @@ class Statisticer(object):
     def dig_into_validation(self, df):
         fig_dir = self.CONFIG['result']['dirs']['fig'][
             'validation_by_sfmr']
-        utils.grid_rmse_and_bias(fig_dir, df['x'], df['y'],
-                                df['tgt_windspd'],
-                                df['sfmr_windspd'])
+        utils.grid_rmse_and_bias(False,
+                                 fig_dir,
+                                 df['dis_minutes'],
+                                 df['dis_kms'],
+                                 df['tgt_windspd'],
+                                 df['sfmr_windspd'])
 
     def unify_df_colnames(self, bias_list):
         for i in range(len(bias_list)):

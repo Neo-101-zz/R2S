@@ -753,6 +753,7 @@ regression:
         evaluation: '../regression/tc/decision_tree/evaluation/'
   target:
     smap_era5: 'smap_windspd'
+    sfmr_era5: 'sfmr_windspd'
     ascat:
       - 'u_wind'
       - 'v_wind'
