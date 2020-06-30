@@ -8,6 +8,9 @@ compare_and_validate_targets:
   - 'smap'
   - 'smap_prediction'
   - 'era5'
+dist2coast:
+  table_name:
+    na_sfmr: 'dist2coast_na_sfmr'
 network:
   retry_times: 20
 logging:

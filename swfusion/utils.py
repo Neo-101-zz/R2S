@@ -40,6 +40,9 @@ import string
 from matplotlib.colors import LinearSegmentedColormap
 import webcolors
 from matplotlib.ticker import EngFormatter, StrMethodFormatter
+from scipy.stats import gaussian_kde
+import matplotlib.gridspec as gridspec
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from amsr2_daily import AMSR2daily
 from ascat_daily import ASCATDaily
@@ -1284,27 +1287,32 @@ def get_class_by_tablename(engine, table_fullname):
     :param table_fullname: String with fullname of table.
     :return: Class reference or None.
     """
-    class Template(object):
-        pass
+    try:
+        class Template(object):
+            pass
 
+        if engine.dialect.has_table(engine, table_fullname):
+            metadata = MetaData(bind=engine, reflect=True)
+            t = metadata.tables[table_fullname]
+            mapper(Template, t)
+            return Template
+        else:
+            logger.error(f'No such table: {table_fullname}')
+            sys.exit(1)
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+
+def drop_table_by_name(engine, session, table_fullname):
     if engine.dialect.has_table(engine, table_fullname):
         metadata = MetaData(bind=engine, reflect=True)
         t = metadata.tables[table_fullname]
-        mapper(Template, t)
-        return Template
+        t.drop(checkfirst=True)
+        session.commit()
     else:
-        logger.error(f'No such table: {table_fullname}')
-        sys.exit(1)
-
-
-def drop_table_by_name(engine, table_fullname):
-    if engine.dialect.has_table(engine, table_fullname):
-        metadata = MetaData(bind=engine, reflect=True)
-        t = metadata.tables[table_fullname]
-        t.drop()
-    else:
-        logger.error(f'No such table: {table_fullname}')
-        sys.exit(1)
+        logger.warning(f'No such table: {table_fullname}')
+        # sys.exit(1)
 
 
 def add_column(engine, table_name, column):
@@ -1380,6 +1388,8 @@ def setup_database(the_class, Base):
     Base.metadata.create_all(the_class.engine)
     the_class.Session = sessionmaker(bind=the_class.engine)
     the_class.session = the_class.Session()
+    the_class.sql_metadata = MetaData(bind=the_class.engine,
+                                      reflect=True)
 
 
 def convert_10(wspd, height):
@@ -1841,6 +1851,10 @@ def load_grid_lonlat_xy(the_class):
     grid_pickles = the_class.CONFIG['grid']['pickle']
 
     for key in grid_pickles.keys():
+        # if (hasattr(the_class, f'grid_{key}')
+        #     and getattr(the_class, f'gird_{key}') is not None):
+        #     continue
+
         with open(grid_pickles[key], 'rb') as f:
             var = pickle.load(f)
 
@@ -3026,172 +3040,184 @@ def sfmr_nc_time_converter(time_str):
 
 
 def get_sfmr_track_and_windspd(nc_file_path, data_indices):
-    dataset = netCDF4.Dataset(nc_file_path)
-    # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which
-    # faster than 1 m/s, so must disable auto mask
-    dataset.set_auto_mask(False)
-    vars = dataset.variables
+    try:
+        dataset = netCDF4.Dataset(nc_file_path)
+        # VERY VERY IMPORTANT: netCDF4 auto mask all windspd which
+        # faster than 1 m/s, so must disable auto mask
+        dataset.set_auto_mask(False)
+        vars = dataset.variables
 
-    track_lonlats = []
-    track_pts = []
-    avg_pts = []
+        track_lonlats = []
+        track_pts = []
+        avg_pts = []
 
-    # Get track
-    for idx in data_indices:
-        pt = SFMRPoint(datetime.datetime.combine(
-            sfmr_nc_converter('DATE', vars['DATE'][idx]),
-            sfmr_nc_converter('TIME', vars['TIME'][idx])),
-            (vars['LON'][idx] + 360) % 360, vars['LAT'][idx],
-            vars['ATEMP'][idx], vars['SALN'][idx], vars['SST'][idx],
-            vars['SRR'][idx], vars['SWS'][idx])
-        track_pts.append(pt)
-        track_lonlats.append((pt.lon, pt.lat))
-
-    earliest_dt_of_track = track_pts[0].date_time
-
-    square_edge = 0.25
-    half_square_edge = square_edge / 2
-    # Split track with `square_edge` * `square_edge` degree squares
-    # around SFMR points
-    # For each point along track, there are two possibilities:
-    # 1. center of square
-    # 2. not center of square
-
-    # First find all centers of square:
-    # [index of center 0, index of center 1, ...]
-    # each element is the index of center points in `track_pts`
-    square_center_indices = []
-    for idx, pt in enumerate(track_pts):
-        # Set start terminal along track as first square center
-        if not idx:
-            one_avg_pt = SFMRPoint()
-            one_avg_pt.lon = pt.lon
-            one_avg_pt.lat = pt.lat
-            avg_pts.append(one_avg_pt)
-            square_center_indices.append(idx)
-        # Then search for next square center
-        # If the difference between longitude or latitude is not smaller
-        # than square edge, we encounter the center point of next square
-        if (abs(pt.lon - avg_pts[-1].lon) >= square_edge
-                or abs(pt.lat - avg_pts[-1].lat) >= square_edge):
-            # Record the new square center
-            one_avg_pt = SFMRPoint()
-            one_avg_pt.lon = pt.lon
-            one_avg_pt.lat = pt.lat
-            avg_pts.append(one_avg_pt)
-            square_center_indices.append(idx)
-
-    # There may be some points left near the end terminal of track.
-    # from which cannot select the square center using method above.
-    # But they are out of the range of last square.
-    # So we need to set the end terminal of track to be the last square
-    # center.
-    end_is_center = False
-    for idx, pt in enumerate(track_pts):
-        if idx <= square_center_indices[-1]:
-            continue
-        if (abs(pt.lon - avg_pts[-1].lon) >= half_square_edge
-                or abs(pt.lat - avg_pts[-1].lat) >= half_square_edge):
-            # Make sure of the necessity of setting the end terminal as
-            # the last square center
-            end_is_center = True
-            break
-
-    if end_is_center:
-        one_avg_pt = SFMRPoint()
-        one_avg_pt.lon = track_pts[-1].lon
-        one_avg_pt.lat = track_pts[-1].lat
-        avg_pts.append(one_avg_pt)
-        square_center_indices.append(len(track_pts) - 1)
-
-    # Save result of spliting into a list of list:
-    # [[square_0_pt_0, square_0_pt_1, ...], [square_1_pt_0,
-    # square_1_pt_1, ...], ...]
-    square_groups = []
-    for center in square_center_indices:
-        square_groups.append([])
-
-    for idx, pt in enumerate(track_pts):
-        try:
-            min_dis = 999
-            idx_of_nearest_center_idx = None
-
-            for index_of_center_indices in range(
-                    len(square_center_indices)):
-                center_index = square_center_indices[
-                    index_of_center_indices]
-                tmp_center = track_pts[center_index]
-                lon_diff = abs(pt.lon - tmp_center.lon)
-                lat_diff = abs(pt.lat - tmp_center.lat)
-
-                if (lon_diff <= half_square_edge
-                        and lat_diff <= half_square_edge):
-                    # This point along track is in the square
-                    dis = math.sqrt(math.pow(lon_diff, 2)
-                                    + math.pow(lat_diff, 2))
-                    if dis < min_dis:
-                        min_dis = dis
-                        idx_of_nearest_center_idx = \
-                            index_of_center_indices
-
-            if idx_of_nearest_center_idx is not None:
-                square_groups[idx_of_nearest_center_idx].append(idx)
-            else:
+        # Get track
+        for idx in data_indices:
+            lon = (vars['LON'][idx] + 360) % 360
+            lat = vars['LAT'][idx]
+            track_lonlats.append((lon, lat))
+            # Filter out SFMR points that is not valid after recording
+            # the track
+            if int(vars['FLAG'][idx]):
                 continue
-        except Exception as msg:
+            pt = SFMRPoint(datetime.datetime.combine(
+                sfmr_nc_converter('DATE', vars['DATE'][idx]),
+                sfmr_nc_converter('TIME', vars['TIME'][idx])),
+                lon, lat, vars['ATEMP'][idx], vars['SALN'][idx],
+                vars['SST'][idx], vars['SRR'][idx], vars['SWS'][idx])
+            track_pts.append(pt)
+
+        if not len(track_pts):
+            return None, None
+
+        earliest_dt_of_track = track_pts[0].date_time
+
+        square_edge = 0.25
+        half_square_edge = square_edge / 2
+        # Split track with `square_edge` * `square_edge` degree squares
+        # around SFMR points
+        # For each point along track, there are two possibilities:
+        # 1. center of square
+        # 2. not center of square
+
+        # First find all centers of square:
+        # [index of center 0, index of center 1, ...]
+        # each element is the index of center points in `track_pts`
+        square_center_indices = []
+        for idx, pt in enumerate(track_pts):
+            # Set start terminal along track as first square center
+            if not idx:
+                one_avg_pt = SFMRPoint()
+                one_avg_pt.lon = pt.lon
+                one_avg_pt.lat = pt.lat
+                avg_pts.append(one_avg_pt)
+                square_center_indices.append(idx)
+            # Then search for next square center
+            # If the difference between longitude or latitude is not smaller
+            # than square edge, we encounter the center point of next square
+            if (abs(pt.lon - avg_pts[-1].lon) >= square_edge
+                    or abs(pt.lat - avg_pts[-1].lat) >= square_edge):
+                # Record the new square center
+                one_avg_pt = SFMRPoint()
+                one_avg_pt.lon = pt.lon
+                one_avg_pt.lat = pt.lat
+                avg_pts.append(one_avg_pt)
+                square_center_indices.append(idx)
+
+        # There may be some points left near the end terminal of track.
+        # from which cannot select the square center using method above.
+        # But they are out of the range of last square.
+        # So we need to set the end terminal of track to be the last square
+        # center.
+        end_is_center = False
+        for idx, pt in enumerate(track_pts):
+            if idx <= square_center_indices[-1]:
+                continue
+            if (abs(pt.lon - avg_pts[-1].lon) >= half_square_edge
+                    or abs(pt.lat - avg_pts[-1].lat) >= half_square_edge):
+                # Make sure of the necessity of setting the end terminal as
+                # the last square center
+                end_is_center = True
+                break
+
+        if end_is_center:
+            one_avg_pt = SFMRPoint()
+            one_avg_pt.lon = track_pts[-1].lon
+            one_avg_pt.lat = track_pts[-1].lat
+            avg_pts.append(one_avg_pt)
+            square_center_indices.append(len(track_pts) - 1)
+
+        # Save result of spliting into a list of list:
+        # [[square_0_pt_0, square_0_pt_1, ...], [square_1_pt_0,
+        # square_1_pt_1, ...], ...]
+        square_groups = []
+        for center in square_center_indices:
+            square_groups.append([])
+
+        for idx, pt in enumerate(track_pts):
+            try:
+                min_dis = 999
+                idx_of_nearest_center_idx = None
+
+                for index_of_center_indices in range(
+                        len(square_center_indices)):
+                    center_index = square_center_indices[
+                        index_of_center_indices]
+                    tmp_center = track_pts[center_index]
+                    lon_diff = abs(pt.lon - tmp_center.lon)
+                    lat_diff = abs(pt.lat - tmp_center.lat)
+
+                    if (lon_diff <= half_square_edge
+                            and lat_diff <= half_square_edge):
+                        # This point along track is in the square
+                        dis = math.sqrt(math.pow(lon_diff, 2)
+                                        + math.pow(lat_diff, 2))
+                        if dis < min_dis:
+                            min_dis = dis
+                            idx_of_nearest_center_idx = \
+                                index_of_center_indices
+
+                if idx_of_nearest_center_idx is not None:
+                    square_groups[idx_of_nearest_center_idx].append(idx)
+                else:
+                    continue
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
+
+        if len(square_groups) != len(square_center_indices):
+            logger.error(f"""Number of groups does not equal to """
+                         f"""number of centers""")
             breakpoint()
-            exit(msg)
 
-    if len(square_groups) != len(square_center_indices):
-        logger.error(f"""Number of groups does not equal to """
-                     f"""number of centers""")
-        breakpoint()
+        to_delete_empty_groups_indices = []
+        # Average wind speed in square to the center point
+        for index_of_center_indices in range(len(square_center_indices)):
+            try:
+                group_size = len(square_groups[index_of_center_indices])
+                if not group_size:
+                    to_delete_empty_groups_indices.append(
+                        index_of_center_indices)
+                    continue
 
-    to_delete_empty_groups_indices = []
-    # Average wind speed in square to the center point
-    for index_of_center_indices in range(len(square_center_indices)):
-        try:
-            group_size = len(square_groups[index_of_center_indices])
-            if not group_size:
-                to_delete_empty_groups_indices.append(
-                    index_of_center_indices)
-                continue
-
-            # Calculated the average datetime of each group
-            seconds_shift_sum = 0
-            for pt_index in square_groups[index_of_center_indices]:
-                temporal_shift = (track_pts[pt_index].date_time
-                                  - earliest_dt_of_track)
-                seconds_shift_sum += (temporal_shift.days * 24 * 3600
-                                      + temporal_shift.seconds)
-            avg_seconds_shift = seconds_shift_sum / group_size
-            avg_pts[index_of_center_indices].date_time = \
-                earliest_dt_of_track + datetime.timedelta(
-                    seconds=avg_seconds_shift)
-
-            # Calculated the average of other variables of each group
-            for attr in ['air_temp', 'salinity', 'sst', 'rain_rate',
-                         'windspd']:
-                sum = 0
+                # Calculated the average datetime of each group
+                seconds_shift_sum = 0
                 for pt_index in square_groups[index_of_center_indices]:
-                    # Masked wind is smaller than 0
-                    value = getattr(track_pts[pt_index], attr)
-                    if value > 0:
-                        sum += value
-                setattr(avg_pts[index_of_center_indices], attr,
-                        sum / group_size)
-        except Exception as msg:
-            breakpoint()
-            exit(msg)
+                    temporal_shift = (track_pts[pt_index].date_time
+                                      - earliest_dt_of_track)
+                    seconds_shift_sum += (temporal_shift.days * 24 * 3600
+                                          + temporal_shift.seconds)
+                avg_seconds_shift = seconds_shift_sum / group_size
+                avg_pts[index_of_center_indices].date_time = \
+                    earliest_dt_of_track + datetime.timedelta(
+                        seconds=avg_seconds_shift)
 
-    if len(to_delete_empty_groups_indices):
-        new_avg_pts = []
-        for i in range(len(avg_pts)):
-            if i not in to_delete_empty_groups_indices:
-                new_avg_pts.append(avg_pts[i])
+                # Calculated the average of other variables of each group
+                for attr in ['air_temp', 'salinity', 'sst', 'rain_rate',
+                             'windspd']:
+                    sum = 0
+                    for pt_index in square_groups[index_of_center_indices]:
+                        # Masked wind is smaller than 0
+                        value = getattr(track_pts[pt_index], attr)
+                        if value > 0:
+                            sum += value
+                    setattr(avg_pts[index_of_center_indices], attr,
+                            sum / group_size)
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
 
-        del avg_pts
-        avg_pts = new_avg_pts
+        if len(to_delete_empty_groups_indices):
+            new_avg_pts = []
+            for i in range(len(avg_pts)):
+                if i not in to_delete_empty_groups_indices:
+                    new_avg_pts.append(avg_pts[i])
+
+            del avg_pts
+            avg_pts = new_avg_pts
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
 
     return track_lonlats, avg_pts
 
@@ -3484,6 +3510,13 @@ def interp_satel_era5_diff_mins_matrix(diff_mins):
 def validate_smap_prediction_with_sfmr(the_class, tc, sfmr_pts,
                                        tgt_name):
     Validation = create_sfmr_validation_table(the_class, tgt_name)
+    dist2coast_table_name = the_class.CONFIG['dist2coast'][
+        'table_name']['na_sfmr']
+    Dist2Coast = get_class_by_tablename(
+        the_class.engine, dist2coast_table_name)
+    dist2coast_lons = [round(x * 0.04 - 179.98, 2) for x in range(9000)]
+    dist2coast_lats = [round(y * 0.04 - 89.98, 2) for y in range(4500)]
+
     # Traverse each SFMR point
     num_sfmr_tracks = len(sfmr_pts)
     grid_edge = the_class.CONFIG['spatial_resolution'][tgt_name]
@@ -3529,6 +3562,27 @@ def validate_smap_prediction_with_sfmr(the_class, tc, sfmr_pts,
                                 - row.sfmr_windspd)
             row.tc_sid_sfmr_datetime = (f"""{row.tc_sid}_"""
                                         f"""{row.sfmr_datetime}""")
+
+            lookup_lon, lookup_lon_idx = \
+                get_nearest_element_and_index(
+                    dist2coast_lons, longitude_converter(
+                        row.sfmr_lon, '360', '-180'))
+            lookup_lat, lookup_lat_idx = \
+                get_nearest_element_and_index(
+                    dist2coast_lats, row.sfmr_lat)
+
+            dist_query = the_class.session.query(Dist2Coast).filter(
+                Dist2Coast.lon > lookup_lon - 0.01,
+                Dist2Coast.lon < lookup_lon + 0.01,
+                Dist2Coast.lat > lookup_lat - 0.01,
+                Dist2Coast.lat < lookup_lat + 0.01,
+            )
+            if dist_query.count() != 1:
+                the_class.logger.error('Dist not found')
+                breakpoint()
+                exit(1)
+            row.dist2coast = dist_query[0].dist2coast
+
             validation_list.append(row)
 
     # Write into database
@@ -3539,8 +3593,8 @@ def validate_smap_prediction_with_sfmr(the_class, tc, sfmr_pts,
             Validation, ['tc_sid_sfmr_datetime'], the_class.session,
             check_self=True)
 
-    # Remove SFMR points which nearest SMAP prediction grid point
-    # is masked
+    # Remove SFMR points whose neighbouring SMAP prediction grid points
+    # has at least one masked
     new_sfmr_pts = []
     for t in range(num_sfmr_tracks):
         new_sfmr_pts.append([])
@@ -3594,14 +3648,25 @@ def smap_pred_at_sfmr_point(the_class, tc, sfmr_pt):
         breakpoint()
         exit(msg)
 
-    # Check whether the gird point of SMAP prediction
-    # which is closest to SFMR point is masked or not
+    # Check whether the gird points of SMAP prediction
+    # which around SFMR point are masked or not
+    windspd_shape = windspd.shape
     sfmr_pt_x = int((sfmr_pt.lon - precise_tc.lon) /
                     grid_edge) + region_half_edge_grid_num
     sfmr_pt_y = int((sfmr_pt.lat - precise_tc.lat) 
                     / grid_edge) + region_half_edge_grid_num
-    if windspd[sfmr_pt_y][sfmr_pt_x] is MASKED:
-        return 'void', None
+    for y_offset in [-1, 0, 1]:
+        tmp_y = sfmr_pt_y + y_offset
+        if tmp_y < 0 or tmp_y >= windspd_shape[0]:
+            continue
+
+        for x_offset in [-1, 0, 1]:
+            tmp_x = sfmr_pt_x + x_offset
+            if tmp_x < 0 or tmp_x >= windspd_shape[1]:
+                continue
+
+            if windspd[tmp_y][tmp_x] is MASKED:
+                return 'void', None
 
     # Interploate the SMAP prediction right at the SFMR point's location
     func_windspd = interpolate.interp2d(lons, lats, windspd)
@@ -4264,12 +4329,15 @@ def average_sfmr_along_track(the_class, tc, sfmr_brief_info,
         try:
             result = get_sfmr_track_and_windspd(file_path, data_indices)
             if result[0] is None:
-                return False, None, None, None, None, None
+                continue
             all_tracks.append(result[0])
             all_pts.append(result[1])
         except Exception as msg:
             breakpoint()
             exit(msg)
+
+    if not len(all_pts):
+        return False, None, None
 
     # For our verification, we do not use SFMR observations whose
     # wind speed is below 15 m/s, as the singal-to-noise ration in
@@ -4932,6 +5000,8 @@ def create_sfmr_validation_table(the_class, tgt_name, tag=None):
     cols.append(Column('dis_kms', Float, nullable=False))
     cols.append(Column('windspd_bias', Float, nullable=False))
 
+    cols.append(Column('dist2coast', Float, nullable=False))
+
     cols.append(Column('tc_sid_sfmr_datetime', String(70),
                        nullable=False, unique=True))
 
@@ -5072,6 +5142,13 @@ def scatter_plot_pred(dir, y_test, y_pred, statistic=False,
 
         subplots_row, subplots_col, figsize = \
             get_subplots_row_col_and_fig_size(plots_num)
+        if subplots_row == 1:
+            if subplots_col == 1:
+                figsize = (7, 7.25)
+            elif subplots_col == 2:
+                figsize = (14, 7.25)
+            elif subplots_col == 3:
+                figsize = (21, 7.25)
         fig, axs = plt.subplots(subplots_row, subplots_col,
                                 figsize=figsize, sharey=True)
         if plots_num == 1:
@@ -5116,46 +5193,95 @@ def scatter_plot_pred(dir, y_test, y_pred, statistic=False,
             # axs = g.axes[0]
 
             # build a rectangle in axes coords
-            left, width = .02, .96
-            bottom, height = .02, .96
-            right = left + width
-            top = bottom + height
-
+            # left, width = .02, .96
+            # bottom, height = .02, .96
             y_pred_names = list(y_pred.keys())
             y_test_max = y_test.max()
-            xticks = [x * 10 for x in range(int(y_test_max/10)+2)]
+            y_pred_max = df['y_pred'].max()
+            x_y_range_max = max(y_test_max, y_pred_max)
+            xticks = [x * 10 for x in range(int(x_y_range_max/10)+2)]
             yticks = [x * 10 for x in range(int(
-                df['y_pred'].max()/10)+2)]
+                x_y_range_max/10)+2)]
 
-            for i, ax in enumerate(axs):
+            y_pred_min_larger_than_45 = 999
+            for i, (k, v) in enumerate(df_dict.items()):
+                tmp = v[v['y_test'] > 45]
+                y_pred_min_larger_than_45 = min(
+                    y_pred_min_larger_than_45, tmp['y_pred'].min())
+
+            margin = 1
+            left, right = 45, y_test_max + margin
+            bottom = y_pred_min_larger_than_45 - margin
+            top = y_pred_max + margin
+            width = right - left
+            height = top - bottom
+
+            for i, ax in enumerate(axs_list):
                 sns.set_style("ticks")
                 pt_color = palette[i]
                 ax_df = df_dict[y_pred_names[i]]
+                ax.set_aspect('equal')
 
-                sns.scatterplot(x='y_test', y='y_pred',
-                                data=ax_df, ax=ax, c=pt_color,
-                                edgecolors='face')
+                x = ax_df['y_test']
+                y = ax_df['y_pred']
+
+                # Calculate the point density
+                xy = np.vstack([x,y])
+                z = gaussian_kde(xy)(xy)
+
+                # Sort the points by density, so that
+                # the densest points are plotted last
+                idx = z.argsort()
+                x2, y2, z = x[idx], y[idx], z[idx]
+
+                norm = plt.Normalize()
+                colors = plt.cm.jet(norm(z))
+
+                sc = ax.scatter(x2, y2, c=norm(z), s=50,
+                                cmap=plt.cm.jet,
+                                edgecolor='')
+
+                divider = make_axes_locatable(ax)
+                # cax = divider.append_axes('bottom', size='5%', pad=0.3)
+                cax = ax.inset_axes(bounds=[0.45, 0.05, 0.5, 0.05])
+
+                bounds = [0.2 * x for x in range(6)]
+                clb = fig.colorbar(sc, cax=cax, ticks=bounds,
+                                   orientation='horizontal',
+                                   format='%.3f')
+                clb.ax.tick_params(labelsize=fontsize*0.618)
+                clb.ax.set_title('Density', size=fontsize)
+                clb.ax.set_xticklabels(
+                    [f'{z.max() * x:.3f}' for x in bounds],
+                    fontsize=fontsize*0.618)
+
                 ax.set_xticks(xticks)
                 ax.set_yticks(yticks)
 
-                sns.kdeplot(data=ax_df['y_test'], data2=ax_df['y_pred'],
-                            ax=ax, n_levles=4, shade=True,
-                            shade_lowest=False, cmap=plt.cm.rainbow,
-                            alpha=0.5)
-
                 ax.plot([0, y_test_max], [0, y_test_max],
-                        'k--', linewidth=1.0)
+                        linestyle='-', color='gray',
+                        linewidth=2.0)
 
                 ax.set_xlabel(x_label, fontsize=fontsize)
                 ax.set_ylabel(y_label, fontsize=fontsize)
+                ax.yaxis.set_tick_params(labelleft=True)
                 ax.tick_params(labelsize=fontsize)
-                ax.set_title(list(y_pred.keys())[i])
+                ax.set_title(list(y_pred.keys())[i], fontsize=fontsize)
 
-                x_left, x_right = ax.get_xlim()
-                offset = x_right - (int(y_test.max()/10)+1)*10
-                ax.set_xlim(range_min - offset, x_right)
+                # x_left, x_right = ax.get_xlim()
+                # offset = x_right - (int(y_test.max()/10)+1)*10
+                # ax.set_xlim(range_min - offset, x_right)
+                offset = 3
+                ax.set_xlim(0 - offset,
+                            10 * (int(x_y_range_max / 10) + 1) + offset)
+                ax.set_ylim(0 - offset,
+                            10 * (int(x_y_range_max / 10) + 1) + offset)
 
-                ax.set_ylim(0, max(y_test_max, df['y_pred'].max()))
+                p = mpatches.Rectangle(
+                    (left, bottom), width, height,
+                    fill=False, clip_on=False, color='red'
+                    )
+                ax.add_patch(p)
 
                 df_part = df.loc[df['name'] == list(y_pred.keys())[i]]
                 mean_bias = df_part["y_bias"].mean()
@@ -5169,25 +5295,26 @@ def scatter_plot_pred(dir, y_test, y_pred, statistic=False,
                 linear_fit = (
                     f"""y={slope:.3f}x{interpect:+.3f}""")
                 statistic_str = {
-                    'linear_fit': f'linear fit: {linear_fit}',
+                    'count': f'Count: {len(y_test)}',
+                    'linear_fit': f'Linear fit: {linear_fit}',
                     'mean_bias': f'Mean Bias: {mean_bias:.2f} m/s',
                     'RMSE': f'RMSE: {rmse:.2f} m/s',
                     'determ_coeff': f'R\u00b2: {determ_coeff:.3f}',
                 }
 
-                # axes coordinates: (0, 0) is bottom left
-                # and (1, 1) is upper right
-                p = mpatches.Rectangle(
-                    (left, bottom), width, height,
-                    fill=False, transform=ax.transAxes, clip_on=False
-                    )
-                ax.add_patch(p)
-
                 if statistic:
+                    # axes coordinates: (0, 0) is bottom left
+                    # and (1, 1) is upper right
+                    p = mpatches.Rectangle(
+                        (left, bottom), width, height,
+                        fill=False, transform=ax.transAxes, clip_on=False
+                        )
+                    ax.add_patch(p)
+
                     for idx, (key, val) in enumerate(
                             statistic_str.items()):
                         ax.text(right, bottom+0.1*idx, val,
-                                fontsize=fontssize,
+                                fontsize=fontsize,
                                 horizontalalignment='right',
                                 # verticalalignment='bottom',
                                 transform=ax.transAxes)
@@ -6613,8 +6740,6 @@ def grid_rmse_and_bias(spatial_grid, fig_dir, vx, vy,
             statistic_grid['rmse'], masked_value)
         statistic_grid['bias'] = np.ma.masked_values(
             statistic_grid['bias'], masked_value)
-
-        breakpoint()
 
         subplots_row, subplots_col, fig_size = \
             get_subplots_row_col_and_fig_size(2)

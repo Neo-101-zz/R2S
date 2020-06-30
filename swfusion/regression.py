@@ -448,13 +448,13 @@ class Regression(object):
         os.makedirs(out_dir, exist_ok=True)
 
         utils.box_plot_windspd(out_dir, y_test, y_test_pred,
-                               x_label=('actual SMAP wind speed '
+                               x_label=('Actual SMAP wind speed '
                                         'range (m/s)'),
-                               y_label='bias of wind speed (m/s)')
+                               y_label='Bias of wind speed (m/s)')
         utils.scatter_plot_pred(out_dir, y_test, y_test_pred,
                                 statistic=False,
-                                x_label='actual SMAP wind speed (m/s)',
-                                y_label='simulated SMAP wind speed (m/s)')
+                                x_label='Actual SMAP wind speed (m/s)',
+                                y_label='Simulated SMAP wind speed (m/s)')
         utils.statistic_of_bias(y_test, y_test_pred)
 
     def lgb_best_regressor(self, dpi=600):

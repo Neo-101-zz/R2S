@@ -137,12 +137,13 @@ class TCComparer(object):
 
         self.pres_lvls = self.CONFIG['era5']['pres_lvls']
 
-        self.grid_lons = None
-        self.grid_lats = None
-        self.grid_x = None
-        self.grid_y = None
+        # self.grid_lons = None
+        # self.grid_lats = None
+        # self.grid_x = None
+        # self.grid_y = None
         # Load 4 variables above
-        utils.load_grid_lonlat_xy(self)
+        if not hasattr(self, 'grid_lons') or self.grid_lons is None:
+            utils.load_grid_lonlat_xy(self)
 
         self.zorders = self.CONFIG['plot']['zorders']['compare']
 
@@ -1025,7 +1026,7 @@ class TCComparer(object):
                                               smap_lats, col_names,
                                               area):
         try:
-            suffix = f'_{tc.sid}_{tc.date_time.strftime("%Y%m%d%H")}'
+            suffix = f'_{tc.sid}_{tc.date_time.strftime("%Y%m%d%H%M%S")}'
             SMAPERA5 = utils.create_smap_era5_table(self, tc.date_time,
                                                     suffix)
             # Need set the temporal shift from era5 as same as original
@@ -1096,6 +1097,8 @@ class TCComparer(object):
 
             df = pd.read_sql(f'SELECT * FROM {table_name}', self.engine)
 
+            # Compare generated ERA5 data with that matched with SMAP wind
+            """
             refer_table_name = f'tc_smap_era5_{self.basin}'
             ReferTable = utils.get_class_by_tablename(
                 self.engine, refer_table_name)
@@ -1159,17 +1162,23 @@ class TCComparer(object):
                                     diff / avg)
                 utils.show_diff_count(self, diff_count,
                                       diff_percent_sum)
+            """
             # drop table
-            utils.drop_table_by_name(self.engine, table_name)
+            utils.drop_table_by_name(self.engine, self.session,
+                                     table_name)
 
             # Get original lon and lat.  It is possible that lon and lat
             # are not in `col_names`.  So we should extract them
             # specifically.
             env_lons = []
             env_lats = []
+            # XXX
             for i in range(len(df)):
                 env_lons.append(df['lon'][i])
                 env_lats.append(df['lat'][i])
+            # for i in range(len(env_data)):
+            #     env_lons.append(env_data[i].lon)
+            #     env_lats.append(env_data[i].lat)
 
             smap_windspd_xyz_matrix_dict = {
                 'lon': env_lons,
