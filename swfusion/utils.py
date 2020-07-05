@@ -3047,6 +3047,11 @@ def get_sfmr_track_and_windspd(nc_file_path, data_indices):
         dataset.set_auto_mask(False)
         vars = dataset.variables
 
+        for var_name in ['LON', 'LAT', 'FLAG', 'DATE', 'TIME', 'ATEMP',
+                         'SALN', 'SST', 'SRR', 'SWS']:
+            if var_name not in vars.keys():
+                return None, None
+
         track_lonlats = []
         track_pts = []
         avg_pts = []
@@ -5171,30 +5176,12 @@ def scatter_plot_pred(dir, y_test, y_pred, statistic=False,
             sys.exit(1)
         else:
             palette=sns.color_palette("Set2")
-            # g = sns.FacetGrid(df, col='name', hue='name', aspect=1,
-            #                   palette=sns.color_palette("Set2"))
-            # g = (g.map(sns.scatterplot, "y_test", "y_pred",
-            #            size=30, linewidth=0.3, edgecolor='w')
-            #      .set_titles('{col_name}')
-            #      .set(# xlim=(range_min, (int(y_test.max()/10)+1)*10),
-            #           xticks=[x * 10 for x in range(8)],
-            #           yticks=[y * 10 for y in range(8)]))
+            # build a rectangle in axes coords for statistics
+            sta_left, sta_width = .02, .96
+            sta_bottom, sta_height = .02, .96
+            sta_top = sta_bottom + sta_height
+            sta_right = sta_left + sta_width
 
-            # g = sns.lmplot(x="y_test", y="y_pred", hue="name", col="name",
-            #                height=4,
-            #                palette=palette[palette_start:],
-            #                scatter_kws=dict(
-            #                    s=30, linewidths=0.3, edgecolors='w'),
-            #                line_kws=dict(
-            #                    color=(1.0, 0.8509803921568627,
-            #                           0.1843137254901961)),
-            #                data=df, aspect=1)
-            # g.set_axis_labels(x_label, y_label)
-            # axs = g.axes[0]
-
-            # build a rectangle in axes coords
-            # left, width = .02, .96
-            # bottom, height = .02, .96
             y_pred_names = list(y_pred.keys())
             y_test_max = y_test.max()
             y_pred_max = df['y_pred'].max()
@@ -5204,15 +5191,18 @@ def scatter_plot_pred(dir, y_test, y_pred, statistic=False,
                 x_y_range_max/10)+2)]
 
             y_pred_min_larger_than_45 = 999
+            y_pred_max_larger_than_45 = 0
             for i, (k, v) in enumerate(df_dict.items()):
                 tmp = v[v['y_test'] > 45]
                 y_pred_min_larger_than_45 = min(
                     y_pred_min_larger_than_45, tmp['y_pred'].min())
+                y_pred_max_larger_than_45 = max(
+                    y_pred_max_larger_than_45, tmp['y_pred'].max())
 
             margin = 1
             left, right = 45, y_test_max + margin
             bottom = y_pred_min_larger_than_45 - margin
-            top = y_pred_max + margin
+            top = y_pred_max_larger_than_45 + margin
             width = right - left
             height = top - bottom
 
@@ -5238,8 +5228,12 @@ def scatter_plot_pred(dir, y_test, y_pred, statistic=False,
                 colors = plt.cm.jet(norm(z))
 
                 sc = ax.scatter(x2, y2, c=norm(z), s=50,
-                                cmap=plt.cm.jet,
+                                # cmap=plt.cm.jet,
+                                cmap=windspd_colormap(),
                                 edgecolor='')
+
+                if len(axs_list) == 1:
+                    ax.grid(True)
 
                 divider = make_axes_locatable(ax)
                 # cax = divider.append_axes('bottom', size='5%', pad=0.3)
@@ -5266,7 +5260,9 @@ def scatter_plot_pred(dir, y_test, y_pred, statistic=False,
                 ax.set_ylabel(y_label, fontsize=fontsize)
                 ax.yaxis.set_tick_params(labelleft=True)
                 ax.tick_params(labelsize=fontsize)
-                ax.set_title(list(y_pred.keys())[i], fontsize=fontsize)
+                if len(axs_list) > 1:
+                    ax.set_title(list(y_pred.keys())[i],
+                                 fontsize=fontsize)
 
                 # x_left, x_right = ax.get_xlim()
                 # offset = x_right - (int(y_test.max()/10)+1)*10
@@ -5295,32 +5291,35 @@ def scatter_plot_pred(dir, y_test, y_pred, statistic=False,
                 linear_fit = (
                     f"""y={slope:.3f}x{interpect:+.3f}""")
                 statistic_str = {
-                    'count': f'Count: {len(y_test)}',
+                    'count': f'N = {len(y_test)}',
                     'linear_fit': f'Linear fit: {linear_fit}',
-                    'mean_bias': f'Mean Bias: {mean_bias:.2f} m/s',
-                    'RMSE': f'RMSE: {rmse:.2f} m/s',
-                    'determ_coeff': f'R\u00b2: {determ_coeff:.3f}',
+                    'mean_bias': f'\u03BC = {mean_bias:.3f}',
+                    'RMSE': f'RMSE = {rmse:.3f}',
+                    # 'std_dev': f'\u03B4 = {np.std(df_part["y_pred"]):.3f}',
+                    # 'determ_coeff': f'R\u00b2: {determ_coeff:.3f}',
                 }
 
                 if statistic:
                     # axes coordinates: (0, 0) is bottom left
                     # and (1, 1) is upper right
                     p = mpatches.Rectangle(
-                        (left, bottom), width, height,
+                        (sta_left, sta_bottom), sta_width, sta_height,
                         fill=False, transform=ax.transAxes, clip_on=False
                         )
                     ax.add_patch(p)
 
                     for idx, (key, val) in enumerate(
                             statistic_str.items()):
-                        ax.text(right, bottom+0.1*idx, val,
-                                fontsize=fontsize,
-                                horizontalalignment='right',
+                        ax.text(sta_left, sta_top-0.05*idx-0.01, val,
+                                fontsize=15,
+                                horizontalalignment='left',
                                 # verticalalignment='bottom',
                                 transform=ax.transAxes)
-                ax.text(0.1, 0.9, f'{string.ascii_lowercase[i]})',
-                        fontsize=fontsize, transform=ax.transAxes,
-                        fontweight='bold', va='bottom', ha='right')
+                if len(axs_list) > 1:
+                    ax.text(0.1, 0.9, f'{string.ascii_lowercase[i]})',
+                            fontsize=fontsize, transform=ax.transAxes,
+                            fontweight='bold', va='bottom', ha='right')
+
         sns.despine(top=False, bottom=False, left=False, right=False)
 
         plt.tight_layout()
@@ -6684,12 +6683,15 @@ def grid_rmse_and_bias(spatial_grid, fig_dir, vx, vy,
         array_length = len(tgt)
 
         statistic_grid = {
-            'rmse': np.full(shape=grid_shape,
+            'Count': np.full(shape=grid_shape,
+                            fill_value=masked_value,
+                            dtype=int),
+            'Mean bias': np.full(shape=grid_shape,
                             fill_value=masked_value,
                             dtype=float),
-            'bias': np.full(shape=grid_shape,
+            'RMSE': np.full(shape=grid_shape,
                             fill_value=masked_value,
-                            dtype=float)
+                            dtype=float),
         }
         tgt_grid = np.empty(shape=grid_shape, dtype=object)
         base_grid = np.empty(shape=grid_shape, dtype=object)
@@ -6722,53 +6724,66 @@ def grid_rmse_and_bias(spatial_grid, fig_dir, vx, vy,
                 if tgt_grid[y_idx][x_idx] is None:
                     continue
 
-                statistic_grid['rmse'][y_idx][x_idx] = math.sqrt(
-                    mean_squared_error(base_grid[y_idx][x_idx],
-                                       tgt_grid[y_idx][x_idx]))
+                statistic_grid['Count'][y_idx][x_idx] = len(
+                    base_grid[y_idx][x_idx])
+
                 diff = (np.array(tgt_grid[y_idx][x_idx])
                         - np.array(base_grid[y_idx][x_idx]))
-                statistic_grid['bias'][y_idx][x_idx] = diff.mean()
+                statistic_grid['Mean bias'][y_idx][x_idx] = diff.mean()
 
-        for name in ['rmse', 'bias']:
-            max_idx = statistic_grid[name].argmax()
-            print((f"""Remove max outlier: {name} = """
-                   f"""{statistic_grid[name].max()}"""))
-            statistic_grid[name][int(max_idx / grid_shape[1])][
-                max_idx % grid_shape[1]] = masked_value
+                statistic_grid['RMSE'][y_idx][x_idx] = math.sqrt(
+                    mean_squared_error(base_grid[y_idx][x_idx],
+                                       tgt_grid[y_idx][x_idx]))
 
-        statistic_grid['rmse'] = np.ma.masked_values(
-            statistic_grid['rmse'], masked_value)
-        statistic_grid['bias'] = np.ma.masked_values(
-            statistic_grid['bias'], masked_value)
+        # for name in ['rmse', 'bias']:
+        #     max_idx = statistic_grid[name].argmax()
+        #     print((f"""Remove max outlier: {name} = """
+        #            f"""{statistic_grid[name].max()}"""))
+        #     statistic_grid[name][int(max_idx / grid_shape[1])][
+        #         max_idx % grid_shape[1]] = masked_value
+
+        for idx, (key, val) in enumerate(statistic_grid.items()):
+            statistic_grid[key] = np.ma.masked_values(val, masked_value)
+
+        # statistic_grid['rmse'] = np.ma.masked_values(
+        #     statistic_grid['rmse'], masked_value)
+        # statistic_grid['bias'] = np.ma.masked_values(
+        #     statistic_grid['bias'], masked_value)
 
         subplots_row, subplots_col, fig_size = \
-            get_subplots_row_col_and_fig_size(2)
+            get_subplots_row_col_and_fig_size(3)
 
         fig, axs = plt.subplots(subplots_row, subplots_col,
-                                figsize=fig_size, sharey=False)
+                                figsize=(21, 7.25), sharey=False)
 
-        titles = ['RMSE', 'Mean Bias']
         for idx, (key, val) in enumerate(statistic_grid.items()):
             ax = axs[idx]
 
             ceil_sta_max = math.ceil(val.max())
             floor_sta_min = math.floor(val.min())
             contour_range_width = int(ceil_sta_max - floor_sta_min)
-            contour_levels_num = int(contour_range_width / 2)
-            bounds = [x + floor_sta_min for x in range(
-                contour_range_width + 1)]
+            if key != 'Count':
+                contour_color = 'k'
+                contour_levels_num = int(contour_range_width / 2)
+                bounds = [x + floor_sta_min for x in range(
+                    contour_range_width + 1)]
+            else:
+                contour_color = 'k'
+                contour_levels_num = int(contour_range_width / 100)
+                bounds = [x for x in range(0, ceil_sta_max, 50)]
 
             cf = ax.contourf(x_grid, y_grid, val,
                              levels=50,
-                             cmap=plt.cm.viridis,
+                             # cmap=plt.cm.jet,
+                             cmap=windspd_colormap(),
                              vmin=floor_sta_min, vmax=ceil_sta_max)
             cf.set_clim([floor_sta_min, ceil_sta_max])
 
             if spatial_grid:
                 cr = ax.contour(x_grid, y_grid, val,
                                 levels=contour_levels_num,
-                                colors=('k',))
-                ax.clabel(cr, fmt='%d', colors='k')
+                                colors=(contour_color,))
+                ax.clabel(cr, fmt='%d', colors=contour_color)
 
             divider = make_axes_locatable(ax)
             cax = divider.append_axes('bottom', size='5%', pad=0.3)
@@ -6784,12 +6799,13 @@ def grid_rmse_and_bias(spatial_grid, fig_dir, vx, vy,
                 ax.yaxis.set_major_formatter(
                     StrMethodFormatter(u"{x:.1f}°"))
 
-            ax.set_title(titles[idx], size=1.5*fontsize)
+            ax.set_title(key, size=1.5*fontsize)
             ax.tick_params(axis="x", labelsize=fontsize)
             ax.tick_params(axis="y", labelsize=fontsize)
 
             ax.text(0.065, 0.98,
                     f'{string.ascii_lowercase[idx]})',
+                    color='white',
                     transform=ax.transAxes, fontsize=20,
                     fontweight='bold', va='top', ha='right')
 
@@ -6802,11 +6818,137 @@ def grid_rmse_and_bias(spatial_grid, fig_dir, vx, vy,
             ax.set_aspect('equal')
             ax.grid(True)
 
-        fig.tight_layout()
+        plt.tight_layout()
 
         fig_name = 'RMSE_mean_bias_2d.png'
         plt.savefig(f'{fig_dir}{fig_name}', dpi=600)
         plt.clf()
+
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+
+def preprocess_csv_to_draw(the_class, csv_path):
+    try:
+        df = pd.read_csv(csv_path)
+
+        windspd_range_col_name = df.columns[0]
+        count_df_col_names = [windspd_range_col_name] + [
+            x for x in df.columns if x.endswith('_count')]
+        error_df_col_names = [x for x in df.columns
+                              if not x.endswith('_count')]
+
+        count_df = df[count_df_col_names]
+        error_df = df[error_df_col_names]
+
+        new_count_df_col_names = dict()
+        for name in count_df.columns:
+            new_count_df_col_names[name] = name.split('_')[0]
+
+        new_error_df_col_names = dict()
+        for name in error_df.columns:
+            new_error_df_col_names[name] = name.split('_')[0]
+
+        count_df.rename(columns=new_count_df_col_names, inplace=True)
+        error_df.rename(columns=new_error_df_col_names, inplace=True)
+
+        years_str_list = count_df.columns[1:]
+        years_int_list = [int(y) for y in years_str_list]
+
+        count_df = trans_and_slim_df(count_df)
+        error_df = trans_and_slim_df(error_df)
+
+        return count_df, error_df
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+
+def trans_and_slim_df(df):
+    try:
+        years_str_list = df.columns[1:]
+        years_int_list = [int(y) for y in years_str_list]
+        df_ori = copy.copy(df)
+        df = df.T
+
+        df_list = []
+        for idx, val in enumerate(df.columns):
+            windspd_range_name = df[val][0]
+            tmp_df = pd.concat(
+                [
+                    pd.DataFrame(pd.Series(years_int_list),
+                                 columns=['year'], dtype=int),
+                    pd.Series(df[val][1:].reset_index(drop=True),
+                              name='value', dtype=float),
+                    pd.Series([str(windspd_range_name)]*len(
+                        years_int_list), name='windspd_range')
+                ],
+                axis=1)
+
+            df_list.append(tmp_df)
+
+        result = pd.concat(df_list, ignore_index=True, axis=0)
+
+        return result
+
+    except Exception as msg:
+        breakpoint()
+        exit(msg)
+
+
+def yearly_count_and_error_plot(fig_dir, the_class, mean_bias_csv_path,
+                                rmse_csv_path, x_label='',
+                                y_label='', fontsize=15,
+                                dpi=600):
+    try:
+        count_df, mean_bias_df = preprocess_csv_to_draw(the_class,
+                                                   mean_bias_csv_path)
+        count_df, rmse_df = preprocess_csv_to_draw(the_class,
+                                                   rmse_csv_path)
+
+        xticks = count_df['year'].unique()
+
+        fig, axs = plt.subplots(3, 1,
+                                figsize=(14, 7), sharex=False)
+
+        df_dict = {
+            'Count': count_df,
+            'Mean bias (m/s)': mean_bias_df,
+            'RMSE (m/s)': rmse_df,
+        }
+        for idx, (key, val) in enumerate(df_dict.items()):
+            ax = axs[idx]
+            sns.lineplot(x='year', y='value', hue='windspd_range',
+                         style='windspd_range',
+                         data=val, ax=ax,
+                         markers=True, dashes=False)
+                         #palette=sns.color_palette("Set2")
+            ax.set_xticks(xticks)
+            ax.set_xlabel(x_label, fontsize=fontsize)
+            ax.set_ylabel(key, fontsize=fontsize)
+            ax.legend_.remove()
+            if not idx:
+
+                windspd_ranges_str = count_df['windspd_range'].unique()
+                title='Wind speed range (m/s)'
+                # Extracting handles and labels
+                h, l = ax.get_legend_handles_labels()
+                h = h[1:]
+                l = l[1:]
+                ph = [ax.plot([],marker="", ls="")[0]] # Canvas
+                handles = ph + h
+                labels = [title] + list(windspd_ranges_str)
+
+                lgd = ax.legend(handles, labels,
+                                bbox_to_anchor=(0.22, 1.15),
+                                loc='upper left',
+                                frameon=False,
+                                ncol=len(count_df[
+                                    'windspd_range'].unique())+1)
+        plt.tight_layout()
+        plt.savefig(f'{fig_dir}yearly_count_mean_bias_and_rmse.png',
+                    dpi=dpi)
 
     except Exception as msg:
         breakpoint()

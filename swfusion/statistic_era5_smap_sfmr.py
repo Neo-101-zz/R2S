@@ -236,7 +236,6 @@ class Statisticer(object):
         for src in self.sources:
             table_name = utils.gen_validation_tablename(self, 'sfmr',
                                                         src)
-            table_name += '_invalid'
             if src == 'smap_prediction' and 'smap' in self.sources:
                 table_name = ('smap_prediction_validation_by_sfmr'
                              '_na_aligned_with_smap')
@@ -297,13 +296,20 @@ class Statisticer(object):
         validation = tmp[tmp['sfmr_windspd'] > threshold]
         # validation = tmp.loc[(tmp['dis_minutes'] > -threshold)
         #                      & (tmp['dis_minutes'] < threshold)]
-        self.dig_into_validation(validation)
+        fig_dir = self.CONFIG['result']['dirs']['fig'][
+            'validation_by_sfmr']
+        self.dig_into_validation(fig_dir, validation)
 
-        self.export_statistic_csv(bias_list, 'rmse')
-        self.export_statistic_csv(bias_list, 'mae')
-        self.export_statistic_csv(bias_list, 'mean_bias')
-        # self.show_simple_statistic(bias_list)
-        # self.show_detailed_statistic_splitted_by_windspd(bias_list)
+        csv_paths = dict()
+        csv_paths['rmse'] = self.export_statistic_csv(bias_list, 'rmse')
+        csv_paths['mae'] = self.export_statistic_csv(bias_list, 'mae')
+        csv_paths['mean_bias'] = self.export_statistic_csv(bias_list,
+                                                           'mean_bias')
+        utils.yearly_count_and_error_plot(fig_dir, self,
+                                          csv_paths['mean_bias'],
+                                          csv_paths['rmse'])
+        self.show_detailed_statistic_splitted_by_windspd(bias_list)
+        self.show_simple_statistic(bias_list)
         # self.show_detailed_statistic_splitted_by_datetime(bias_list)
 
         # Pre-process bias list
@@ -319,8 +325,8 @@ class Statisticer(object):
         os.makedirs(out_dir, exist_ok=True)
         utils.scatter_plot_pred(out_dir, sfmr_windspd, pred_windspd,
                                 statistic=True,
-                                x_label='resampled SFMR wind speed (m/s)',
-                                y_label='wind speed (m/s)',
+                                x_label='Resampled SFMR wind speed (m/s)',
+                                y_label='Simulated SMAP wind speed (m/s)',
                                 palette_start=2,
                                 range_min=15)
         # self.plot_scatter_regression(bias_list)
@@ -328,7 +334,7 @@ class Statisticer(object):
         #     'validation_by_sfmr']
         # utils.box_plot_windspd(val_dir
 
-    def dig_into_validation(self, df):
+    def dig_into_validation(self, fig_dir, df):
         """
         df['dis2coast_range'] = ''
         sorted_order = []
@@ -353,8 +359,6 @@ class Statisticer(object):
         plt.show()
         breakpoint()
         """
-        fig_dir = self.CONFIG['result']['dirs']['fig'][
-            'validation_by_sfmr']
         utils.grid_rmse_and_bias(True,
                                  fig_dir,
                                  df['x'],
@@ -483,7 +487,9 @@ class Statisticer(object):
                 exit(1)
 
             df = bias_list[0]
-            year_split = [2015 + x for x in range(5)]
+            earilest_year = self.period[0].year
+            years_num = self.period[1].year - self.period[0].year
+            year_split = [earilest_year + x for x in range(years_num)]
             windspd_split = [15, 25, 35, 45]
 
             csv_rows = []
@@ -516,6 +522,9 @@ class Statisticer(object):
                     windspd_bias = tmp_df['windspd_bias']
 
                     one_csv_row[f'{x_v}_count'] = len(tmp_df)
+                    if not len(tmp_df):
+                        one_csv_row[f'{x_v}_{metric}'] = None
+                        continue
 
                     if metric == 'rmse':
                         truth = tmp_df['sfmr_windspd']
@@ -544,8 +553,11 @@ class Statisticer(object):
             out_dir = self.CONFIG['result']['dirs']['fig'][
                 'validation_by_sfmr']
             name = f'sta_{metric}_{year_split[0]}_{year_split[-1]}.csv'
+            csv_path = f'{out_dir}{name}'
 
-            csv_df.to_csv(f'{out_dir}{name}')
+            csv_df.to_csv(csv_path)
+
+            return csv_path
 
         except Exception as msg:
             breakpoint()
