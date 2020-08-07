@@ -5323,7 +5323,7 @@ def scatter_plot_pred(dir, y_test, y_pred, statistic=False,
         sns.despine(top=False, bottom=False, left=False, right=False)
 
         plt.tight_layout()
-        plt.savefig((f'{dir}scatterplot.png'), dpi=dpi)
+        plt.savefig((f'{dir}scatterplot.eps'), dpi=dpi)
         plt.close()
     except Exception as msg:
         breakpoint()
@@ -5399,7 +5399,7 @@ def box_plot_windspd(dir, y_test, y_pred, x_label='', y_label='',
         ax.legend(fontsize=fontsize)
 
         plt.tight_layout()
-        plt.savefig((f'{dir}bias_box_plot.png'), dpi=dpi)
+        plt.savefig((f'{dir}bias_box_plot.eps'), dpi=dpi)
         plt.close()
     except Exception as msg:
         breakpoint()
@@ -6820,7 +6820,7 @@ def grid_rmse_and_bias(spatial_grid, fig_dir, vx, vy,
 
         plt.tight_layout()
 
-        fig_name = 'RMSE_mean_bias_2d.png'
+        fig_name = 'RMSE_mean_bias_2d.eps'
         plt.savefig(f'{fig_dir}{fig_name}', dpi=600)
         plt.clf()
 

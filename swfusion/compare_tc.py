@@ -549,7 +549,7 @@ class TCComparer(object):
                         self, fig, ax, interped_tc.date_time,
                         sfmr_tracks, sfmr_pts, max_windspd)
                 if text_subplots_serial_number:
-                   ax.text(0.1, 0.95,
+                    ax.text(0.1, 0.95,
                             f'{string.ascii_lowercase[index]})',
                             transform=ax.transAxes, fontsize=20,
                             fontweight='bold', va='top', ha='right')
@@ -575,7 +575,7 @@ class TCComparer(object):
                 fig_dir = f"""{fig_dir}_{src}/"""
 
         os.makedirs(fig_dir, exist_ok=True)
-        fig_name = f'{dt_str}_{interped_tc.name}.png'
+        fig_name = f'{dt_str}_{interped_tc.name}.eps'
         plt.savefig(f'{fig_dir}{fig_name}', dpi=600)
         plt.clf()
 

@@ -328,7 +328,8 @@ class Statisticer(object):
                                 x_label='Resampled SFMR wind speed (m/s)',
                                 y_label='Simulated SMAP wind speed (m/s)',
                                 palette_start=2,
-                                range_min=15)
+                                range_min=15,
+                                fontsize=15)
         # self.plot_scatter_regression(bias_list)
         # val_dir = self.CONFIG['results']['dirs']['fig'][
         #     'validation_by_sfmr']
