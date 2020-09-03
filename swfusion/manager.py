@@ -45,6 +45,7 @@ gnuOptions = ['period=', 'region=', 'basin=', 'match_smap', 'reg=',
               'sta_ibtracs', 'sta_era5_smap=', 'smart_compare',
               'merra2', 'match_sfmr', 'combine', 'tag=',
               'classify=', 'smogn_target=', 'draw_sfmr=',
+              'max_windspd=', 'force_align_smap=',
               'interval=', 'simulate=']
 
 def work_flow():
@@ -88,6 +89,8 @@ def work_flow():
     tag = None
     do_compare = False
     draw_sfmr = False
+    max_windspd = None
+    force_align_smap = False
     do_sfmr = False
     sfmr_instructions = None
     do_ibtracs = False
@@ -149,6 +152,18 @@ def work_flow():
                 draw_sfmr = False
             else:
                 logger.error('draw_sfmr must be "True" or "False"')
+                sys.exit(1)
+        elif current_argument in ('--max_windspd'):
+            head = current_value.split(',')[0]
+            max_windspd = float(head)
+        elif current_argument in ('--force_align_smap'):
+            head = current_value.split(',')[0]
+            if head == 'True':
+                force_align_smap = True
+            elif head == 'False':
+                force_align_smap = False
+            else:
+                logger.error('force_align_smap must be "True" or "False"')
                 sys.exit(1)
         elif current_argument in ('-s', '--sfmr'):
             do_sfmr = True
@@ -252,7 +267,8 @@ def work_flow():
             #     exit()
             compare_tc.TCComparer(CONFIG, period, region, basin,
                                   passwd, False, compare_instructions,
-                                  draw_sfmr)
+                                  draw_sfmr, max_windspd,
+                                  force_align_smap)
                                   # tag)
         # ccmp_ = ccmp.CCMPManager(CONFIG, period, region, passwd,
         #                          work_mode='fetch_and_compare')

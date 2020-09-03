@@ -32,7 +32,8 @@ Base = declarative_base()
 class TCComparer(object):
 
     def __init__(self, CONFIG, period, region, basin, passwd,
-                 save_disk, compare_instructions, draw_sfmr, work=True):
+                 save_disk, compare_instructions, draw_sfmr,
+                 max_windspd, force_align_smap, work=True):
         self.CONFIG = CONFIG
         self.period = period
         self.region = region
@@ -43,6 +44,8 @@ class TCComparer(object):
         self.compare_instructions = list(set(compare_instructions))
         self.basin = basin
         self.draw_sfmr = draw_sfmr
+        self.max_windspd = max_windspd
+        self.force_align_smap = force_align_smap
 
         self.logger = logging.getLogger(__name__)
         utils.setup_database(self, Base)
@@ -205,10 +208,186 @@ class TCComparer(object):
                            f"""IBTrACS record of TC {tc.name} """
                            f"""on {tc.date_time}"""))
             else:
-                success, need_exit = \
-                    self.compare_betweem_two_tc_records(tc, next_tc)
+                if len(self.sources) > 1:
+                    success, need_exit = \
+                        self.compare_between_two_tc_records(tc, next_tc)
+                else:
+                    if idx < total - 1:
+                        next_tc = tc_query[idx + 1]
+                        if tc.sid == next_tc.sid:
+                            success = self.draw_one_source(tc, next_tc)
 
         print('Done')
+
+    def draw_one_source(self, tc, next_tc):
+        # Skip interpolating between two TC records if the begin and
+        # termianl of interval is not at the hour
+        if (next_tc.date_time.minute or next_tc.date_time.second
+                or tc.date_time.minute or tc.date_time.second):
+            return False
+        # Temporal shift
+        delta = next_tc.date_time - tc.date_time
+        # Skip interpolating between two TC records if two neighbouring
+        # records of TC are far away in time
+        if delta.days:
+            return False
+        hours = int(delta.seconds / 3600)
+        # Time interval between two TCs are less than one hour
+        if not hours:
+            return False
+
+        for h in range(hours):
+            interped_tc = utils.interp_tc(self, h, tc, next_tc)
+            success = self.draw_windspd_around_interped_tc(interped_tc)
+
+            if success:
+                print((f"""[Draw] {self.sources_str} """
+                       f"""of TC {interped_tc.name} """
+                       f"""on {interped_tc.date_time}"""))
+            else:
+                print((f"""[Not draw] {self.sources_str} """
+                       f"""of TC {interped_tc.name} """
+                       f"""on {interped_tc.date_time}"""))
+
+        return True
+
+    def draw_windspd_around_interped_tc(self, interped_tc):
+        subplots_row, subplots_col, fig_size = \
+            utils.get_subplots_row_col_and_fig_size(1)
+        if subplots_row * subplots_col > 1:
+            text_subplots_serial_number = True
+        else:
+            text_subplots_serial_number = False
+
+        fig, axs = plt.subplots(subplots_row, subplots_col,
+                                figsize=fig_size, sharey=True)
+        axs_list = [axs]
+
+        success, smap_lons, smap_lats = \
+            self.get_smap_lonlat(interped_tc)
+        if not success:
+            print('Testpoint 1')
+            return False
+        del success
+        # North, South, West, East
+        draw_region = [min(smap_lats), max(smap_lats),
+                       min(smap_lons), max(smap_lons)]
+
+        lons = dict()
+        lats = dict()
+        windspd = dict()
+        mesh = dict()
+        diff_mins = dict()
+
+        max_windspd = -1
+        min_windspd = 999
+        for src in self.sources:
+            try:
+                # Get lons, lats, windspd
+                success, lons[src], lats[src], windspd[src], \
+                        mesh[src], diff_mins[src] = \
+                        self.get_sources_xyz_matrix(
+                            src, interped_tc, smap_lons,
+                            smap_lats)
+                if not success:
+                    print('Testpoint 3')
+                    return False
+                if ((src == 'smap_prediction'
+                     and 'smap' in self.sources)
+                    or src == 'smap'):
+                    # Not all points of area has this feature
+                    # Make sure it is interpolated properly
+                    diff_mins[src] = utils.\
+                            interp_satel_era5_diff_mins_matrix(
+                                diff_mins[src])
+                if (self.force_align_smap
+                    and (src == 'smap_prediction'
+                         and 'smap' not in self.sources)):
+                    success, lons['smap'], lats['smap'], windspd['smap'], \
+                            mesh['smap'], diff_mins['smap'] = \
+                            self.get_sources_xyz_matrix(
+                                'smap', interped_tc, smap_lons,
+                                smap_lats)
+                    diff_mins['smap'] = utils.\
+                            interp_satel_era5_diff_mins_matrix(
+                                diff_mins['smap'])
+                # Get max windspd
+                if windspd[src].max() > max_windspd:
+                    max_windspd = windspd[src].max()
+                if windspd[src].min() > min_windspd:
+                    min_windspd = windspd[src].min()
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
+
+        index = 0
+        tc_dt = interped_tc.date_time
+        if (('smap_prediction' in self.sources
+             and 'smap' in self.sources)
+                or 'smap' in self.sources
+            or (self.force_align_smap
+                and (src == 'smap_prediction'
+                     and 'smap' not in self.sources))):
+            accurate_dt = tc_dt + datetime.timedelta(
+                seconds=60*diff_mins['smap'].mean())
+        else:
+            accurate_dt = tc_dt
+        subplot_title_suffix = {
+            'smap': f'{accurate_dt.strftime("%H%M UTC %d %b %Y")} ',
+            'era5': f'{tc_dt.strftime("%H%M UTC %d %b %Y")} ',
+        }
+        subplot_title_suffix['smap_prediction'] = subplot_title_suffix[
+            'smap']
+
+        if self.max_windspd is not None:
+            max_windspd = self.max_windspd
+        # Draw windspd
+        for src in self.sources:
+            try:
+                ax = axs_list[index]
+
+                fontsize = 20
+                utils.draw_windspd(self, fig, ax, interped_tc.date_time,
+                                   lons[src], lats[src], windspd[src],
+                                   max_windspd, mesh[src],
+                                   draw_contour=False,
+                                   custom=True, region=draw_region)
+                # #XXX: Temporary use
+                # index = 0
+                # ax.text(0.1, 0.95,
+                #         f'{string.ascii_lowercase[index]})',
+                #         transform=ax.transAxes, fontsize=20,
+                #         fontweight='bold', va='top', ha='right')
+                if text_subplots_serial_number:
+                    ax.text(0.1, 0.95,
+                            f'{string.ascii_lowercase[index]})',
+                            transform=ax.transAxes, fontsize=20,
+                            fontweight='bold', va='top', ha='right')
+                # ax.set_title((f"""{self.sources_titles[src]} """
+                #               f"""{subplot_title_suffix[src]} """
+                #               f"""{interped_tc.name} """),
+                #              size=20)
+                ax.set_title((f"""{interped_tc.name} """
+                              f"""{subplot_title_suffix[src]} """
+                              ),
+                             size=20)
+                index += 1
+            except Exception as msg:
+                breakpoint()
+                exit(msg)
+
+        fig.tight_layout(pad=0.1)
+
+        dt_str = interped_tc.date_time.strftime('%Y_%m%d_%H%M')
+        fig_dir = self.CONFIG['result']['dirs']['fig']['root']
+        fig_dir = f"""{fig_dir}draw_{src}/"""
+
+        os.makedirs(fig_dir, exist_ok=True)
+        fig_name = f'{dt_str}_{interped_tc.name}.eps'
+        plt.savefig(f'{fig_dir}{fig_name}', dpi=600)
+        plt.clf()
+
+        return True
 
     def compare_with_ibtracs(self, tc):
         # Get max windspd from sources except IBTrACS
@@ -401,7 +580,7 @@ class TCComparer(object):
 
     def compare_with_sfmr_around_interped_tc(
         self, sfmr_brief_info, one_hour_info_pt_idx, interped_tc):
-        # Reference function `compare_betweem_two_tc_records`
+        # Reference function `compare_between_two_tc_records`
         # Because we need to overlay
         # SFMR tracks and averaged SFMR wind speed
         # onto other sources' wind speed map, the inputted subplots
@@ -436,6 +615,7 @@ class TCComparer(object):
         success, smap_lons, smap_lats = \
             self.get_smap_lonlat(interped_tc)
         if not success:
+            print('Testpoint 1')
             return False
         del success
         # North, South, West, East
@@ -457,6 +637,7 @@ class TCComparer(object):
                             self, interped_tc, sfmr_brief_info,
                             one_hour_info_pt_idx)
                 if not success:
+                    print('Testpoint 2')
                     return False
                 for single_track_pts in sfmr_pts:
                     for pt in single_track_pts:
@@ -471,15 +652,28 @@ class TCComparer(object):
                                 src, interped_tc, smap_lons,
                                 smap_lats)
                     if not success:
+                        print('Testpoint 3')
                         return False
                     if ((src == 'smap_prediction'
                          and 'smap' in self.sources)
                         or src == 'smap'):
+                        # or self.force_align_smap):
                         # Not all points of area has this feature
                         # Make sure it is interpolated properly
                         diff_mins[src] = utils.\
                                 interp_satel_era5_diff_mins_matrix(
                                     diff_mins[src])
+                    if (self.force_align_smap
+                        and (src == 'smap_prediction'
+                             and 'smap' not in self.sources)):
+                        success, lons['smap'], lats['smap'], windspd['smap'], \
+                                mesh['smap'], diff_mins['smap'] = \
+                                self.get_sources_xyz_matrix(
+                                    'smap', interped_tc, smap_lons,
+                                    smap_lats)
+                        diff_mins['smap'] = utils.\
+                                interp_satel_era5_diff_mins_matrix(
+                                    diff_mins['smap'])
                     # Get max windspd
                     if windspd[src].max() > max_windspd:
                         max_windspd = windspd[src].max()
@@ -513,13 +707,17 @@ class TCComparer(object):
                 sfmr_pts_null = False
                 break
         if sfmr_pts_null:
+            print('Testpoint 4')
             return False
 
         index = 0
         tc_dt = interped_tc.date_time
         if (('smap_prediction' in self.sources
              and 'smap' in self.sources)
-                or 'smap' in self.sources):
+                or 'smap' in self.sources
+            or (self.force_align_smap
+                and (src == 'smap_prediction'
+                     and 'smap' not in self.sources))):
             accurate_dt = tc_dt + datetime.timedelta(
                 seconds=60*diff_mins['smap'].mean())
         else:
@@ -531,6 +729,8 @@ class TCComparer(object):
         subplot_title_suffix['smap_prediction'] = subplot_title_suffix[
             'smap']
 
+        if self.max_windspd is not None:
+            max_windspd = self.max_windspd
         # Draw windspd
         for src in self.sources:
             try:
@@ -544,6 +744,12 @@ class TCComparer(object):
                                    max_windspd, mesh[src],
                                    draw_contour=False,
                                    custom=True, region=draw_region)
+                # #XXX: Temporary use
+                # index = 3
+                # ax.text(0.1, 0.95,
+                #         f'{string.ascii_lowercase[index]})',
+                #         transform=ax.transAxes, fontsize=20,
+                #         fontweight='bold', va='top', ha='right')
                 if self.draw_sfmr:
                     utils.draw_sfmr_windspd_and_track(
                         self, fig, ax, interped_tc.date_time,
@@ -553,10 +759,14 @@ class TCComparer(object):
                             f'{string.ascii_lowercase[index]})',
                             transform=ax.transAxes, fontsize=20,
                             fontweight='bold', va='top', ha='right')
-                ax.set_title((f"""{self.sources_titles[src]} """
+                # ax.set_title((f"""{self.sources_titles[src]} """
+                #               f"""{subplot_title_suffix[src]} """
+                #               f"""{interped_tc.name} """),
+                #              size=20)
+                ax.set_title((f"""{interped_tc.name} """
                               f"""{subplot_title_suffix[src]} """
-                              f"""{interped_tc.name} """),
-                             size=15)
+                              ),
+                             size=20)
                 index += 1
             except Exception as msg:
                 breakpoint()
@@ -842,7 +1052,7 @@ class TCComparer(object):
 
         return interped_tc
 
-    def compare_betweem_two_tc_records(self, tc, next_tc):
+    def compare_between_two_tc_records(self, tc, next_tc):
         # Temporal shift
         delta = next_tc.date_time - tc.date_time
         # Skip interpolating between two TC recors if two neighbouring
@@ -1031,7 +1241,7 @@ class TCComparer(object):
                                                     suffix)
             # Need set the temporal shift from era5 as same as original
             # SMAP
-            if 'smap' in self.sources:
+            if 'smap' in self.sources or self.force_align_smap:
                 satel_manager = satel_scs.SCSSatelManager(
                     self.CONFIG, self.period, self.region,
                     self.db_root_passwd, save_disk=self.save_disk,
@@ -1287,7 +1497,7 @@ class TCComparer(object):
                        min(smap_lons), max(smap_lons)]
         # Need set the temporal shift from era5 as same as original
         # SMAP
-        if 'smap' in self.sources:
+        if 'smap' in self.sources or self.force_align_smap:
             smap_lons, smap_lats, diff_mins = \
                     utils.get_xyz_matrix_of_smap_windspd_or_diff_mins(
                         'diff_mins', file_path, tc.date_time,

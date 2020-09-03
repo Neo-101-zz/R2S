@@ -3639,7 +3639,8 @@ def smap_pred_at_sfmr_point(the_class, tc, sfmr_pt):
                                       the_class.region, the_class.basin,
                                       the_class.db_root_passwd, False,
                                       ['sfmr', 'smap_prediction'],
-                                      draw_sfmr=False,
+                                      draw_sfmr=False, max_windspd=None,
+                                      force_align_smap=False,
                                       work=False)
     try:
         # Get lons, lats, windspd
