@@ -6,6 +6,9 @@
 !README.md
 !*.py
 !*.yml
+!flowchart.png
+!smap_gaps.png
+!r2s_simulation.png
 
 # Even if they are in subdirectories
 !*/
