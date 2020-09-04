@@ -7,7 +7,6 @@
 !*.md
 !*.py
 !*.yml
-!*.yaml
 
 # Ignore all directories except these:
 !/r2s/*

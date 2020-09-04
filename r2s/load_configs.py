@@ -4,7 +4,7 @@ import logging.config
 import logging
 import coloredlogs
 
-def setup_logging(default_path='../config/logging.yaml', default_level=logging.INFO, env_key='LOG_CFG'):
+def setup_logging(default_path='../config/logging.yml', default_level=logging.INFO, env_key='LOG_CFG'):
     """
     | **@author:** Prathyush SP
     | Logging Setup
@@ -33,9 +33,9 @@ def setup_logging(default_path='../config/logging.yaml', default_level=logging.I
         print('Failed to load configuration file. Using default configs')
 
 def load_config():
-    """ Load config data from config.yaml """
+    """ Load config data from config.yml """
 
-    with open("../config/config.yaml", 'r') as stream:
+    with open("../config/config.yml", 'r') as stream:
         try:
             return yaml.safe_load(stream)
         except yaml.YAMLError as exc:

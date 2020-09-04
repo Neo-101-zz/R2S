@@ -48,6 +48,7 @@ gnuOptions = ['period=', 'region=', 'basin=', 'match_smap', 'reg=',
               'max_windspd=', 'force_align_smap=',
               'interval=', 'simulate=']
 
+
 def work_flow():
     """The work flow of blending several TC OSW.
     """
@@ -57,7 +58,7 @@ def work_flow():
     try:
         CONFIG = load_configs.load_config()
     except Exception as msg:
-        logger.exception('Exception occurred when loading config.')
+        logger.exception(f'Exception occurred when loading confi: {msg}')
     os.makedirs(CONFIG['logging']['dir'], exist_ok=True)
 
     # read commandline arguments, first
