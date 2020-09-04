@@ -3,13 +3,13 @@
 
 # Except these:
 !.gitignore
-!*.md
-!*.py
-!*.yml
+!*README.md
+# !*.py
+# !*.yml
 
 # # Ignore all directories except these:
-# !/r2s/*
-# !/config/*
+!/r2s/*.py
+!/config/*.yml
 
 # Even if they are in subdirectories
-!*/
+# !*/
