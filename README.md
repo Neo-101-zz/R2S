@@ -44,10 +44,10 @@ python manager.py --period=2015-04-01-00-00-00,2020-01-01-00-00-00 --basin=na --
 
 Gaps in SMAP's observation of hurricane Florence's wind speed:
 
-<img alt="smap_gaps" src=https://github.com/Neo-101/R2S/raw/master/smap_gaps.png height=350>
+<img alt="smap_gaps" src=https://github.com/Neo-101/R2S/raw/master/smap_gaps.png height=300>
 
 
 Simulation produced by R2S, which fills the gaps and improve the temporal resolution:
 
-<img alt="r2s_simulation" src=https://github.com/Neo-101/R2S/raw/master/r2s_simulation.png height=800>
+<img alt="r2s_simulation" src=https://github.com/Neo-101/R2S/raw/master/r2s_simulation.png height=600>
 The solid black lines are the tracks of the aircraft, and the circles along the solid black lines indicate the resampled high-precision wind speed observed by instruments on aircraft.
