@@ -12,4 +12,4 @@
 !/config/*.yml
 
 # Even if they are in subdirectories
-# !*/
+!*/
