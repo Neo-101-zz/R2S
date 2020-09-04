@@ -2,16 +2,14 @@
 *
 
 # Except these:
-
 !.gitignore
 !*.md
 !*.py
 !*.yml
 
-# Ignore all directories except these:
-!/r2s/*
-!/config/*
+# # Ignore all directories except these:
+# !/r2s/*
+# !/config/*
 
 # Even if they are in subdirectories
-
 !*/
