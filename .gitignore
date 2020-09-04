@@ -1,13 +1,11 @@
 # Ignore everything
 *
-.DS_Store
-*.pyc
 
 # Except these:
 !.gitignore
-!*.md
+!README.md
 !*.py
 !*.yml
 
 # Even if they are in subdirectories
-!*/
+# !*/
