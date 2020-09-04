@@ -9,8 +9,9 @@
 !*.yml
 !*.yaml
 
-# Ignore directories
-/test/*
+# Ignore all directories except these:
+!/r2s/*
+!/config/*
 
 # Even if they are in subdirectories
 
