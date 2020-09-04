@@ -11,7 +11,7 @@ R2S is a framework for simulating satellite observations with reanalysis data.
 
 This is the flowchart of training the simulator:
 
-<img alt="flowchart" src=https://github.com/Neo-101/R2S/raw/master/flowchart.png =250x>
+<img alt="flowchart" src=https://github.com/Neo-101/R2S/raw/master/flowchart.png height=300 align=left>
 
 ### Dependencies
 
